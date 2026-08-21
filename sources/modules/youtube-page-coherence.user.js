@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         YouTube Page Coherence Guard
 // @namespace    Citizen.youtube.page-coherence
-// @version      1.4
+// @version      1.6
 // @description  Detects incomplete YouTube queue navigation, hides stale identity content and comments, preserves native actions, and rechecks restored foreground pages.
 // @author       Citizen
 // @license      GNU GPLv3
@@ -20,6 +20,7 @@
 
   const CONFIG = Object.freeze({
     checkDelaysMs: [600, 1600, 3200],
+    staleRecoveryDelaysMs: [2000, 5000, 10000],
     mismatchesBeforeWarning: 2,
     eventHistoryLimit: 20,
   });
@@ -29,8 +30,14 @@
   const EVENTS_ATTRIBUTE = "data-yt-master-events";
   const LEGACY_NOTICE_ID = "yt-master-page-coherence-notice";
   const COMMENTS_STALE_ATTRIBUTE = "data-iow-stale-video";
-  const COMMENT_VIDEO_LINK_SELECTOR =
+  const COMMENT_PERMALINK_LINK_SELECTOR =
     'a[href*="/watch?"][href*="lc="], a[href*="youtube.com/watch?"][href*="lc="]';
+  const COMMENT_RENDERER_SELECTOR = [
+    "ytd-comment-thread-renderer",
+    "ytd-comment-renderer",
+    "ytd-comment-view-model",
+    "yt-comment-view-model",
+  ].join(",");
   const QUEUE_ITEM_SELECTOR = [
     "ytd-playlist-panel-video-renderer[selected]",
     'ytd-playlist-panel-video-renderer[aria-selected="true"]',
@@ -47,8 +54,12 @@
 
   const navigationEvents = [];
   const checkTimers = new Map();
+  const staleRecoveryTimers = new Set();
   let consecutiveMismatchChecks = 0;
   let stalePageData = false;
+  let navigationGeneration = 0;
+  let navigationVideoId = "";
+  let staleRecoveryKey = "";
 
   const isWatchPath = () =>
     location.pathname === "/watch" || location.pathname.startsWith("/live/");
@@ -76,8 +87,55 @@
     }
   };
 
+  const isRenderedWatchFlexy = (flexy) => {
+    if (
+      !flexy?.isConnected ||
+      flexy.hidden ||
+      flexy.getAttribute("aria-hidden") === "true"
+    ) {
+      return false;
+    }
+
+    try {
+      const style = getComputedStyle(flexy);
+      if (
+        style.display === "none" ||
+        style.visibility === "hidden" ||
+        style.visibility === "collapse"
+      ) {
+        return false;
+      }
+    } catch {
+      return false;
+    }
+
+    return (
+      typeof flexy.getClientRects !== "function" ||
+      flexy.getClientRects().length > 0
+    );
+  };
+
+  const getActiveWatchFlexy = () => {
+    const playerFlexy = document
+      .querySelector("#movie_player")
+      ?.closest?.("ytd-watch-flexy");
+    if (playerFlexy?.isConnected) return playerFlexy;
+
+    const placeholderFlexy = document
+      .querySelector("#ytsmp-player-placeholder")
+      ?.closest?.("ytd-watch-flexy");
+    if (placeholderFlexy?.isConnected) return placeholderFlexy;
+
+    const flexies = Array.from(document.querySelectorAll("ytd-watch-flexy"));
+    return (
+      flexies.find(isRenderedWatchFlexy) ||
+      flexies.find((flexy) => flexy.isConnected) ||
+      null
+    );
+  };
+
   const getFlexyVideoId = () => {
-    const flexy = document.querySelector("ytd-watch-flexy");
+    const flexy = getActiveWatchFlexy();
     return (
       flexy?.data?.playerResponse?.videoDetails?.videoId ||
       flexy?.getAttribute("video-id") ||
@@ -181,7 +239,15 @@
 
     return [
       ...new Set(
-        Array.from(comments.querySelectorAll(COMMENT_VIDEO_LINK_SELECTOR))
+        Array.from(comments.querySelectorAll(COMMENT_PERMALINK_LINK_SELECTOR))
+          .filter((link) => {
+            const publishedTime = link.matches?.("#published-time-text")
+              ? link
+              : link.closest?.("#published-time-text");
+            return Boolean(
+              publishedTime && link.closest?.(COMMENT_RENDERER_SELECTOR),
+            );
+          })
           .map((link) =>
             getVideoIdFromUrl(link.href || link.getAttribute("href")),
           )
@@ -210,8 +276,9 @@
         urlVideoId &&
         playerVideoId &&
         flexyVideoId &&
-        urlVideoId === playerVideoId &&
-        flexyVideoId !== playerVideoId,
+        (urlVideoId !== playerVideoId ||
+          urlVideoId !== flexyVideoId ||
+          playerVideoId !== flexyVideoId),
     );
     const confirmedCoherent = Boolean(
       !watchPath ||
@@ -271,6 +338,39 @@
     removeLegacyNotice();
   };
 
+  const clearStaleRecoveryChecks = () => {
+    staleRecoveryTimers.forEach((timerId) => clearTimeout(timerId));
+    staleRecoveryTimers.clear();
+  };
+
+  const scheduleStaleRecoveryChecks = (snapshot) => {
+    if (!isWatchPath() || !snapshot.urlVideoId) return;
+
+    const generation = navigationGeneration;
+    const videoId = snapshot.urlVideoId;
+    const recoveryKey = `${generation}:${videoId}`;
+    if (staleRecoveryKey === recoveryKey) return;
+
+    clearStaleRecoveryChecks();
+    staleRecoveryKey = recoveryKey;
+
+    CONFIG.staleRecoveryDelaysMs.forEach((delay) => {
+      const timerId = setTimeout(() => {
+        staleRecoveryTimers.delete(timerId);
+        if (
+          generation !== navigationGeneration ||
+          !isWatchPath() ||
+          getVideoIdFromUrl(location.href) !== videoId
+        ) {
+          return;
+        }
+
+        runCoherenceCheck();
+      }, delay);
+      staleRecoveryTimers.add(timerId);
+    });
+  };
+
   const runCoherenceCheck = () => {
     const snapshot = buildSnapshot();
 
@@ -282,7 +382,10 @@
     } else if (snapshot.confirmedCoherent || !isWatchPath()) {
       consecutiveMismatchChecks = 0;
       setStalePageData(false);
+      clearStaleRecoveryChecks();
     }
+
+    if (stalePageData) scheduleStaleRecoveryChecks(snapshot);
 
     snapshot.stalePageData = stalePageData;
     snapshot.mismatchChecks = consecutiveMismatchChecks;
@@ -294,17 +397,50 @@
     checkTimers.clear();
   };
 
+  const beginNavigationGeneration = (videoId = "") => {
+    navigationGeneration += 1;
+    navigationVideoId = videoId;
+    staleRecoveryKey = "";
+    consecutiveMismatchChecks = 0;
+    clearScheduledChecks();
+    clearStaleRecoveryChecks();
+  };
+
+  const alignNavigationGenerationToCurrentUrl = () => {
+    const currentVideoId = getVideoIdFromUrl(location.href);
+    if (!navigationVideoId) {
+      navigationVideoId = currentVideoId;
+      return false;
+    }
+    if (currentVideoId === navigationVideoId) return false;
+
+    beginNavigationGeneration(currentVideoId);
+    return true;
+  };
+
   const scheduleChecks = () => {
     if (!isWatchPath()) {
+      clearStaleRecoveryChecks();
       runCoherenceCheck();
       return;
     }
+
+    const generation = navigationGeneration;
+    const videoId = getVideoIdFromUrl(location.href);
 
     CONFIG.checkDelaysMs.forEach((delay) => {
       if (checkTimers.has(delay)) return;
 
       const timerId = setTimeout(() => {
-        checkTimers.delete(delay);
+        if (checkTimers.get(delay) === timerId) {
+          checkTimers.delete(delay);
+        }
+        if (
+          generation !== navigationGeneration ||
+          getVideoIdFromUrl(location.href) !== videoId
+        ) {
+          return;
+        }
         runCoherenceCheck();
       }, delay);
       checkTimers.set(delay, timerId);
@@ -330,14 +466,23 @@
   };
 
   const handleNavigateStart = () => {
-    clearScheduledChecks();
-    consecutiveMismatchChecks = 0;
-    setStalePageData(false);
+    beginNavigationGeneration();
     recordNavigationEvent("yt-navigate-start");
   };
 
   const handleNavigationUpdate = (event) => {
+    alignNavigationGenerationToCurrentUrl();
     recordNavigationEvent(event.type);
+    scheduleChecks();
+  };
+
+  const handlePageHide = () => {
+    beginNavigationGeneration();
+  };
+
+  const handlePageShow = () => {
+    beginNavigationGeneration(getVideoIdFromUrl(location.href));
+    recordNavigationEvent("pageshow");
     scheduleChecks();
   };
 
@@ -369,11 +514,15 @@
   window.addEventListener("yt-navigate-start", handleNavigateStart, true);
   window.addEventListener("yt-navigate-finish", handleNavigationUpdate, true);
   window.addEventListener("yt-page-data-updated", handleNavigationUpdate, true);
-  window.addEventListener("pageshow", handleNavigationUpdate, true);
+  window.addEventListener("pagehide", handlePageHide, true);
+  window.addEventListener("pageshow", handlePageShow, true);
   document.addEventListener(
     "visibilitychange",
     () => {
-      if (document.visibilityState === "visible") scheduleChecks();
+      if (document.visibilityState !== "visible") return;
+
+      alignNavigationGenerationToCurrentUrl();
+      scheduleChecks();
     },
     true,
   );
@@ -388,6 +537,7 @@
         player?.querySelector("video");
       if (event.target !== activeVideo) return;
 
+      alignNavigationGenerationToCurrentUrl();
       recordNavigationEvent("loadedmetadata");
       scheduleChecks();
     },
@@ -395,6 +545,7 @@
   );
 
   removeLegacyNotice();
+  navigationVideoId = getVideoIdFromUrl(location.href);
   publishState();
   scheduleChecks();
 })();

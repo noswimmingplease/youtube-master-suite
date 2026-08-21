@@ -3,33 +3,33 @@
   "modules": {
     "commentCleaner": {
       "path": "sources/modules/youtube-comment-cleaner.user.js",
-      "version": "1.15",
-      "sha256": "a52286950538034d0d259213d57fa20290cffdff69cd65f0b7d1a842c965dbd5"
+      "version": "1.17",
+      "sha256": "f32f607dc87a86fe02a34398e08756ca0be70c6f42ec434f29b0027995b2a4cd"
     },
     "feedUiCleaner": {
       "path": "sources/modules/youtube-feed-ui-cleaner.user.js",
-      "version": "2.5",
-      "sha256": "f97994fbd0cc055ea0dba30ba8c9a57e79f547af358d5257021372c59a0fcc69"
+      "version": "2.6",
+      "sha256": "823488025109eb45178ab11dba7a9527012391c904fe7694043bffc0d74b4cc5"
     },
     "miniplayerButtonRestorer": {
       "path": "sources/modules/youtube-miniplayer-button-restorer.user.js",
-      "version": "1.4",
-      "sha256": "4cdb1ab40ccf08d695797e83cf7253f170fbec4606bed8b5e06270960c0cdc8b"
+      "version": "1.6",
+      "sha256": "1c8fddd9d2a8d77c646c8b94986cfcd0654467208ac0710d2bfed18febc1c6aa"
     },
     "pageCoherence": {
       "path": "sources/modules/youtube-page-coherence.user.js",
-      "version": "1.4",
-      "sha256": "4d10b8a0753e61415cbbd08ad9f3b73eab930550f7dd014bfdd588d017156409"
+      "version": "1.6",
+      "sha256": "4bf12fb1f3971bc96b32df5bd79bc4db510c2f3cec0f47836d18c02b1e5349bb"
     },
     "playerPreferencesLite": {
       "path": "sources/modules/youtube-player-preferences-lite.user.js",
-      "version": "1.42",
-      "sha256": "d9fc90c0d2cdd29c511809841266d99865a0edc4dbc8a438ed0ad2ca314fb468"
+      "version": "1.44",
+      "sha256": "8b524d5561a081a20ff0798c9e676922364742287b35118513775999e8d2cdec"
     },
     "scrollMiniplayer": {
       "path": "sources/modules/youtube-scroll-miniplayer.user.js",
-      "version": "5.19",
-      "sha256": "e3ff0832a76a144288d6d35b33e60fc0d4a102c220e003b89c02dc1f3064eb30"
+      "version": "5.20",
+      "sha256": "1c403e99c5878192778a60d410b049a1ea3194a2450c5a667d5bf22c6d4eebdb"
     },
     "watchLayoutCleaner": {
       "path": "sources/modules/youtube-watch-layout-cleaner.user.js",

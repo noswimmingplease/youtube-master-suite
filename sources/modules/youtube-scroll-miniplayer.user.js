@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         YouTube Scroll Miniplayer
 // @namespace    Citizen.youtube.scroll-miniplayer
-// @version      5.19
+// @version      5.20
 // @description  Floats the active YouTube player with compact queue context, YouTube-style controls, and synchronised corner selection across open windows.
 // @author       Citizen
 // @homepageURL  https://github.com/Ci303/youtube-scroll-miniplayer
@@ -139,9 +139,9 @@
   const PLAYER_RESTORE_RETRY_DELAYS_MS = [50, 250, 1000, 3000, 8000, 15000];
   const PLAYER_ORPHAN_FINALISE_GRACE_MS = 20000;
 
-  let scrollScheduled = false;
-  let routeScheduled = false;
-  let queueInfoScheduled = false;
+  let scrollSyncFrame = 0;
+  let routeSyncFrame = 0;
+  let queueInfoSyncFrame = 0;
   let fadeOutTimer = 0;
   let navigationStartUrl = "";
   let navigationStartPlayerVideoId = "";
@@ -215,8 +215,51 @@
     );
   }
 
+  function isRenderedWatchRoot(root) {
+    if (
+      !root?.isConnected ||
+      root.hidden ||
+      root.getAttribute("aria-hidden") === "true"
+    ) {
+      return false;
+    }
+
+    try {
+      const style = getComputedStyle(root);
+      if (
+        style.display === "none" ||
+        style.visibility === "hidden" ||
+        style.visibility === "collapse"
+      ) {
+        return false;
+      }
+    } catch {
+      return false;
+    }
+
+    return (
+      typeof root.getClientRects !== "function" ||
+      root.getClientRects().length > 0
+    );
+  }
+
   function getWatchRoot() {
-    return document.querySelector(WATCH_ROOT_SELECTOR);
+    const playerRoot = document
+      .querySelector(`#${MOVIE_PLAYER_ID}`)
+      ?.closest?.(WATCH_ROOT_SELECTOR);
+    if (playerRoot?.isConnected) return playerRoot;
+
+    const placeholderRoot = document
+      .querySelector(`#${PLACEHOLDER_ID}`)
+      ?.closest?.(WATCH_ROOT_SELECTOR);
+    if (placeholderRoot?.isConnected) return placeholderRoot;
+
+    const roots = Array.from(document.querySelectorAll(WATCH_ROOT_SELECTOR));
+    return (
+      roots.find(isRenderedWatchRoot) ||
+      roots.find((root) => root.isConnected) ||
+      null
+    );
   }
 
   function getTriggerAnchor() {
@@ -959,6 +1002,30 @@
     return !currentSource;
   }
 
+  function finaliseOffRouteOrphanIfSafe(candidate = floatedPlayer) {
+    if (
+      !candidate ||
+      floatedPlayer !== candidate ||
+      navigationInProgress ||
+      isEligiblePath() ||
+      isBodyFloating()
+    ) {
+      return false;
+    }
+
+    if (isPlayerAdoptedByConnectedHost(candidate)) {
+      finishPlayerRestore();
+      return true;
+    }
+
+    if (restorePlayer(false)) return true;
+    if (!canDiscardOffRouteOrphan(candidate)) return false;
+
+    candidate.remove();
+    finishPlayerRestore();
+    return true;
+  }
+
   const playerAdoptionObserver = new MutationObserver(() => {
     if (!floatedPlayer) {
       stopPlayerAdoptionObservation();
@@ -1024,27 +1091,15 @@
         return;
       }
 
-      if (isPlayerAdoptedByConnectedHost(candidate)) {
-        finishPlayerRestore();
-        return;
-      }
-
-      if (restorePlayer(false)) return;
-      if (
-        floatedPlayer === candidate &&
-        canDiscardOffRouteOrphan(candidate)
-      ) {
-        candidate.remove();
-        finishPlayerRestore();
-        return;
-      }
+      if (finaliseOffRouteOrphanIfSafe(candidate)) return;
 
       const recoveryHost = ensurePlayerRecoveryHost();
       if (recoveryHost && candidate.parentElement !== recoveryHost) {
         recoveryHost.appendChild(candidate);
       }
+      // Keep the still-playing player available for native adoption, but stop
+      // polling. Media lifecycle and route events will retry finalisation.
       startPlayerAdoptionObservation();
-      scheduleOffRouteOrphanFinalisation();
     }, PLAYER_ORPHAN_FINALISE_GRACE_MS);
   }
 
@@ -1487,7 +1542,7 @@
   }
 
   function syncCompactQueueInfo() {
-    queueInfoScheduled = false;
+    queueInfoSyncFrame = 0;
     if (!isBodyActive()) {
       removeCompactQueueInfo();
       return;
@@ -1526,10 +1581,9 @@
   }
 
   function scheduleCompactQueueInfoSync() {
-    if (queueInfoScheduled) return;
+    if (queueInfoSyncFrame) return;
 
-    queueInfoScheduled = true;
-    requestAnimationFrame(syncCompactQueueInfo);
+    queueInfoSyncFrame = requestAnimationFrame(syncCompactQueueInfo);
   }
 
   function dispatchResize() {
@@ -1643,7 +1697,7 @@
   }
 
   function syncScrollState() {
-    scrollScheduled = false;
+    scrollSyncFrame = 0;
 
     if (!shouldFloatFromScroll() || !canFloatPlayer()) {
       suppressedUntilVisible = false;
@@ -1657,14 +1711,13 @@
   }
 
   function scheduleScrollSync() {
-    if (navigationInProgress || !isEligiblePath() || scrollScheduled) return;
+    if (navigationInProgress || !isEligiblePath() || scrollSyncFrame) return;
 
-    scrollScheduled = true;
-    requestAnimationFrame(syncScrollState);
+    scrollSyncFrame = requestAnimationFrame(syncScrollState);
   }
 
   function syncRouteState() {
-    routeScheduled = false;
+    routeSyncFrame = 0;
     reconcileTrackedPlayer();
 
     if (navigationInProgress) {
@@ -1692,10 +1745,18 @@
   }
 
   function scheduleRouteSync() {
-    if (routeScheduled) return;
+    if (routeSyncFrame) return;
 
-    routeScheduled = true;
-    requestAnimationFrame(syncRouteState);
+    routeSyncFrame = requestAnimationFrame(syncRouteState);
+  }
+
+  function cancelScheduledAnimationFrames() {
+    if (scrollSyncFrame) cancelAnimationFrame(scrollSyncFrame);
+    if (routeSyncFrame) cancelAnimationFrame(routeSyncFrame);
+    if (queueInfoSyncFrame) cancelAnimationFrame(queueInfoSyncFrame);
+    scrollSyncFrame = 0;
+    routeSyncFrame = 0;
+    queueInfoSyncFrame = 0;
   }
 
   function getMutationElement(node) {
@@ -1917,7 +1978,22 @@
   document.addEventListener("ended", (event) => {
     if (event.target === getPlayerVideo()) {
       // Do not reparent YouTube's player during its ended-event dispatch.
-      setTimeout(() => setActive(false), 0);
+      setTimeout(() => {
+        setActive(false);
+        finaliseOffRouteOrphanIfSafe();
+      }, 0);
+    }
+  }, true);
+
+  document.addEventListener("error", (event) => {
+    if (event.target === getPlayerVideo()) {
+      setTimeout(() => finaliseOffRouteOrphanIfSafe(), 0);
+    }
+  }, true);
+
+  document.addEventListener("emptied", (event) => {
+    if (event.target === getPlayerVideo()) {
+      setTimeout(() => finaliseOffRouteOrphanIfSafe(), 0);
     }
   }, true);
 
@@ -1946,6 +2022,7 @@
     }
     scheduleRouteSync();
   }, true);
+  window.addEventListener("pagehide", cancelScheduledAnimationFrames, true);
   window.addEventListener("pageshow", () => {
     // A BFCache restore may not emit a matching YouTube navigation finish.
     finishNavigationLock();

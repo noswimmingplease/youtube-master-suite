@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         YouTube Player Preferences Lite
 // @namespace    Citizen.youtube.player-preferences-lite
-// @version      1.42
+// @version      1.44
 // @description  Applies small YouTube player preferences without touching Enhancer-style miniplayer, queue, autoplay, or background playback controls.
 // @author       Citizen
 // @homepageURL  https://github.com/Ci303/youtube-player-preferences-lite
@@ -43,6 +43,7 @@
     hideInfoCards: true,
     hideEndScreenRecommendationGrid: true,
     showAutoplayUpNextCard: true,
+    useReadableYellowCaptions: true,
     enableTheaterMode: true,
     enableHighestQuality: false,
     highestQualityRetryDelays: [0, 300, 1000, 2500, 5000, 10000],
@@ -377,14 +378,14 @@
   ];
   const PLAYER_LAYOUT_REFRESH_DELAYS_MS = [0, 100, 500, 1200];
 
-  let scheduled = false;
+  let applyFrame = 0;
   const pendingApplyRoots = new Set();
   let legacyActionHiddenCleared = false;
   let theaterModeUserDisabled = false;
   let highestQualityVideoKey = "";
   let highestQualityRetryTimers = [];
   let theaterModeAttemptKey = "";
-  let playerLayoutRefreshScheduled = false;
+  let playerLayoutRefreshFrame = 0;
   const playerLayoutRefreshAttemptTimers = new Map();
   let liveChatCollapseAttemptTimers = [];
   let liveChatCollapsePendingTimer = 0;
@@ -1965,6 +1966,28 @@
     `;
   }
 
+  function buildCaptionCss() {
+    if (!CONFIG.useReadableYellowCaptions) {
+      return "";
+    }
+
+    // YouTube uses the same caption-segment class for the watch player and
+    // inline hover previews. Change only glyph colour and shadow so native
+    // sizing, positioning, typeface, background and opacity remain intact.
+    return `
+        .html5-video-player .ytp-caption-segment,
+        ytd-video-preview .ytp-caption-segment {
+          color: #ffe36e !important;
+          text-shadow:
+            -1px -1px 2px #000,
+            1px -1px 2px #000,
+            -1px 1px 2px #000,
+            1px 1px 2px #000,
+            0 2px 4px #000 !important;
+        }
+      `;
+  }
+
   function buildShortsCss() {
     if (!CONFIG.hideShorts) {
       return "";
@@ -2305,6 +2328,7 @@
   function buildCss() {
     return [
       buildVolumeOverlayCss(),
+      buildCaptionCss(),
       buildShortsCss(),
       buildFeedCleanupCss(),
       buildWatchCleanupCss(),
@@ -2336,18 +2360,60 @@
     }
   }
 
+  function isRenderedWatchFlexy(flexy) {
+    if (
+      !flexy?.isConnected ||
+      flexy.hidden ||
+      flexy.getAttribute("aria-hidden") === "true"
+    ) {
+      return false;
+    }
+
+    try {
+      const style = getComputedStyle(flexy);
+      if (
+        style.display === "none" ||
+        style.visibility === "hidden" ||
+        style.visibility === "collapse"
+      ) {
+        return false;
+      }
+    } catch {
+      return false;
+    }
+
+    return (
+      typeof flexy.getClientRects !== "function" ||
+      flexy.getClientRects().length > 0
+    );
+  }
+
   function getWatchFlexy() {
-    return document.querySelector("ytd-watch-flexy");
+    const playerFlexy = document
+      .querySelector("#movie_player")
+      ?.closest?.("ytd-watch-flexy");
+    if (playerFlexy?.isConnected) return playerFlexy;
+
+    const placeholderFlexy = document
+      .querySelector("#ytsmp-player-placeholder")
+      ?.closest?.("ytd-watch-flexy");
+    if (placeholderFlexy?.isConnected) return placeholderFlexy;
+
+    const flexies = Array.from(document.querySelectorAll("ytd-watch-flexy"));
+    return (
+      flexies.find(isRenderedWatchFlexy) ||
+      flexies.find((flexy) => flexy.isConnected) ||
+      null
+    );
   }
 
   function requestPlayerLayoutRefresh() {
-    if (!isWatchPath() || playerLayoutRefreshScheduled) {
+    if (!isWatchPath() || playerLayoutRefreshFrame) {
       return;
     }
 
-    playerLayoutRefreshScheduled = true;
-    requestAnimationFrame(() => {
-      playerLayoutRefreshScheduled = false;
+    playerLayoutRefreshFrame = requestAnimationFrame(() => {
+      playerLayoutRefreshFrame = 0;
       if (isWatchPath()) {
         window.dispatchEvent(new Event("resize"));
       }
@@ -2844,6 +2910,7 @@
   function handleNavigateStart() {
     clearLiveChatCollapseAttempts();
     clearPlayerLayoutRefreshAttempts();
+    cancelScheduledAnimationWork();
     rightButtonHeldOnPlayer = false;
     clearContextMenuSuppression();
   }
@@ -2918,13 +2985,12 @@
 
   function scheduleApply(root = document) {
     addPendingApplyRoot(root);
-    if (scheduled) {
+    if (applyFrame) {
       return;
     }
 
-    scheduled = true;
-    requestAnimationFrame(() => {
-      scheduled = false;
+    applyFrame = requestAnimationFrame(() => {
+      applyFrame = 0;
       const roots = Array.from(pendingApplyRoots);
       pendingApplyRoots.clear();
 
@@ -2943,6 +3009,14 @@
         }
       });
     });
+  }
+
+  function cancelScheduledAnimationWork() {
+    if (applyFrame) cancelAnimationFrame(applyFrame);
+    if (playerLayoutRefreshFrame) cancelAnimationFrame(playerLayoutRefreshFrame);
+    applyFrame = 0;
+    playerLayoutRefreshFrame = 0;
+    pendingApplyRoots.clear();
   }
 
   function addMutationRoot(roots, root) {
@@ -3159,9 +3233,21 @@
   );
 
   window.addEventListener(
+    "pagehide",
+    () => {
+      cancelScheduledAnimationWork();
+      clearLiveChatCollapseAttempts();
+      clearPlayerLayoutRefreshAttempts();
+    },
+    true,
+  );
+
+  window.addEventListener(
     "pageshow",
     () => {
       ensureStyles();
+      configureDynamicMutationObserver();
+      scheduleApply(document);
       scheduleLiveChatCollapseAttempts();
       schedulePlayerLayoutRefreshAttempts();
     },
