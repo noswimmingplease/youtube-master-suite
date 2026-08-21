@@ -61,10 +61,11 @@ deliberately avoids concatenating independent userscripts unchanged.
 - Top-level `ENABLED_MODULES` switches allow one module to be isolated during
   debugging without rebuilding the individual scripts.
 
-The source manifest embedded near the top of the generated userscript records
-each canonical path, input version and SHA-256 hash. The build fails when a
-module differs from its lock or when a guarded integration point changes,
-preventing an unreviewed source edit from being silently included.
+Canonical paths, input versions and SHA-256 hashes remain in
+`sources.lock.json` instead of being repeated in the installed userscript. The
+build fails when a module differs from its lock or when a guarded integration
+point changes, preventing an unreviewed source edit from being silently
+included while keeping the Tampermonkey source concise.
 
 ## Installation
 

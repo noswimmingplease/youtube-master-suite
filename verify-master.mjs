@@ -359,12 +359,6 @@ for (const [moduleId, lockedSource] of lockedModules) {
     lockedSource.sha256,
     `${moduleId}: canonical source differs from the source lock`,
   );
-  assert(
-    userscript.includes(
-      `${lockedSource.path} | sha256:${lockedSource.sha256}`,
-    ),
-    `${moduleId}: canonical source manifest entry is missing`,
-  );
   assert.match(
     userscript,
     new RegExp(
@@ -385,7 +379,7 @@ assert(
 );
 assert(
   !userscript.includes("SponsorBlock Queue Width (folded"),
-  "The generated source manifest must only list canonical modules",
+  "The generated userscript must not mention the vestigial module",
 );
 assert(
   userscript.includes("sidebarWidthPx: 374"),
