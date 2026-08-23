@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         YouTube Comment Cleaner
 // @namespace    Citizen.youtube.comment-cleaner
-// @version      1.18
+// @version      1.19
 // @description  Cleans YouTube comments, prevents stale comments across SPA navigation, preserves replies, compacts spacing, and colours commenter/uploader names.
 // @author       Citizen
 // @license      GNU GPLv3
@@ -103,6 +103,7 @@
     "yt-comment-view-model",
   ].join(",");
   const COMMENTS_VIDEO_GUARD_CHECK_DELAYS_MS = [600, 1600, 3200, 6400];
+  const COMMENTS_VIDEO_GUARD_FAIL_OPEN_DELAY_MS = 8000;
 
   const COMMENT_MUTATION_SURFACE_SELECTOR = [
     "ytd-comments",
@@ -134,6 +135,7 @@
   let commentsVideoGuardSourceVideoId = "";
   let commentsVideoGuardDestinationVideoId = "";
   let commentsVideoGuardTrackedVideoId = "";
+  let commentsVideoGuardFailOpenVideoId = "";
   let preNavigationCommentNodes = new Set();
   const pendingStaleCommentContainers = new Set();
   const commentsVideoGuardRecoveryTimers = new Map();
@@ -378,6 +380,7 @@
     commentsVideoGuardSourceVideoId = "";
     commentsVideoGuardDestinationVideoId = "";
     commentsVideoGuardTrackedVideoId = getCurrentVideoId();
+    commentsVideoGuardFailOpenVideoId = "";
     preNavigationCommentNodes = new Set();
     cancelCommentsVideoGuardRecovery();
     return true;
@@ -413,6 +416,26 @@
     commentsVideoGuardPending = true;
   };
 
+  const releaseCommentsVideoGuardAfterTimeout = (destinationVideoId) => {
+    if (!destinationVideoId || getCurrentVideoId() !== destinationVideoId) {
+      return false;
+    }
+
+    commentsVideoGuardPending = false;
+    commentsVideoGuardSawFreshContainer = false;
+    commentsVideoGuardSourceVideoId = "";
+    commentsVideoGuardDestinationVideoId = "";
+    commentsVideoGuardTrackedVideoId = destinationVideoId;
+    commentsVideoGuardFailOpenVideoId = destinationVideoId;
+    preNavigationCommentNodes = new Set();
+    pendingStaleCommentContainers.clear();
+    getCommentContainers(document).forEach((comments) =>
+      comments.removeAttribute(STALE_COMMENTS_ATTRIBUTE),
+    );
+    cancelCommentsVideoGuardRecovery();
+    return true;
+  };
+
   const resetCommentsVideoGuard = (
     trackedVideoId = getCurrentVideoId(),
   ) => {
@@ -423,6 +446,7 @@
     commentsVideoGuardSourceVideoId = "";
     commentsVideoGuardDestinationVideoId = "";
     commentsVideoGuardTrackedVideoId = trackedVideoId;
+    commentsVideoGuardFailOpenVideoId = "";
     preNavigationCommentNodes = new Set();
     pendingStaleCommentContainers.clear();
     getCommentContainers(document).forEach((comments) =>
@@ -464,7 +488,10 @@
     }
 
     const generation = commentsVideoGuardGeneration;
-    COMMENTS_VIDEO_GUARD_CHECK_DELAYS_MS.forEach((delay) => {
+    [
+      ...COMMENTS_VIDEO_GUARD_CHECK_DELAYS_MS,
+      COMMENTS_VIDEO_GUARD_FAIL_OPEN_DELAY_MS,
+    ].forEach((delay) => {
       if (commentsVideoGuardScheduledDelays.has(delay)) return;
 
       commentsVideoGuardScheduledDelays.add(delay);
@@ -476,6 +503,11 @@
           !isWatchPath() ||
           getCurrentVideoId() !== destinationVideoId
         ) {
+          return;
+        }
+
+        if (delay === COMMENTS_VIDEO_GUARD_FAIL_OPEN_DELAY_MS) {
+          releaseCommentsVideoGuardAfterTimeout(destinationVideoId);
           return;
         }
 
@@ -495,6 +527,7 @@
     commentsVideoGuardSawFreshContainer = false;
     commentsVideoGuardSourceVideoId = sourceVideoId;
     commentsVideoGuardDestinationVideoId = destinationVideoId;
+    commentsVideoGuardFailOpenVideoId = "";
     preNavigationCommentNodes = new Set();
     pendingStaleCommentContainers.clear();
     getCommentContainers(document).forEach((comments) => {
@@ -547,6 +580,13 @@
     }
 
     alignCommentsVideoGuardToCurrentUrl();
+
+    if (commentsVideoGuardFailOpenVideoId === currentVideoId) {
+      getCommentContainers(document).forEach((comments) =>
+        comments.removeAttribute(STALE_COMMENTS_ATTRIBUTE),
+      );
+      return;
+    }
 
     getCommentContainers(root).forEach((comments) => {
       const commentsVideoIds = getCommentsVideoIds(comments);

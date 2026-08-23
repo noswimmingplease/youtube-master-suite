@@ -580,6 +580,7 @@ assert.deepEqual(
 );
 for (const commentGuardRequirement of [
   "const COMMENTS_VIDEO_GUARD_CHECK_DELAYS_MS = [600, 1600, 3200, 6400]",
+  "const COMMENTS_VIDEO_GUARD_FAIL_OPEN_DELAY_MS = 8000;",
   "let preNavigationCommentNodes = new Set();",
   "const pendingStaleCommentContainers = new Set();",
   "const destinationVideoIdentityIsCoherent = (destinationVideoId) => {",
@@ -588,6 +589,11 @@ for (const commentGuardRequirement of [
   "preNavigationCommentNodesAreDetached(comments)",
   "preNavigationCommentNodesMatchDestination(",
   "commentsVideoGuardTrackedVideoId = getCurrentVideoId();",
+  "const releaseCommentsVideoGuardAfterTimeout = (destinationVideoId) => {",
+  "commentsVideoGuardFailOpenVideoId = destinationVideoId;",
+  "if (delay === COMMENTS_VIDEO_GUARD_FAIL_OPEN_DELAY_MS) {",
+  "releaseCommentsVideoGuardAfterTimeout(destinationVideoId);",
+  "if (commentsVideoGuardFailOpenVideoId === currentVideoId) {",
   'document.querySelectorAll(\'[id="movie_player"]\')',
   "urlVideoId === playerVideoId",
   "if (attributeVideoId === urlVideoId) return attributeVideoId;",
