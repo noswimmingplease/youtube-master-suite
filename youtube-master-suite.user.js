@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         YouTube Master Suite
 // @namespace    Citizen.youtube.master-suite
-// @version      0.1.38
+// @version      0.1.39
 // @description  Consolidates Citizen YouTube userscripts with shared SPA event, mutation-observer, and stylesheet infrastructure.
 // @author       Citizen
 // @license      GNU GPLv3
@@ -18,7 +18,7 @@
 (() => {
   "use strict";
 
-  const MASTER_VERSION = "0.1.38";
+  const MASTER_VERSION = "0.1.39";
   const EXPECTED_MODULE_COUNT = 7;
   const HEALTH_ATTRIBUTE = "data-yt-master-suite";
   const ENABLED_MODULES = Object.freeze({
@@ -1082,7 +1082,7 @@
 
   suite.registerModule(
     "commentCleaner",
-    "Comment Cleaner v1.18",
+    "Comment Cleaner v1.19",
     "document-idle",
     () => {
       const MutationObserver = suite.SharedMutationObserver;
@@ -1175,6 +1175,7 @@
           "yt-comment-view-model",
         ].join(",");
         const COMMENTS_VIDEO_GUARD_CHECK_DELAYS_MS = [600, 1600, 3200, 6400];
+        const COMMENTS_VIDEO_GUARD_FAIL_OPEN_DELAY_MS = 8000;
 
         const COMMENT_MUTATION_SURFACE_SELECTOR = [
           "ytd-comments",
@@ -1206,6 +1207,7 @@
         let commentsVideoGuardSourceVideoId = "";
         let commentsVideoGuardDestinationVideoId = "";
         let commentsVideoGuardTrackedVideoId = "";
+        let commentsVideoGuardFailOpenVideoId = "";
         let preNavigationCommentNodes = new Set();
         const pendingStaleCommentContainers = new Set();
         const commentsVideoGuardRecoveryTimers = new Map();
@@ -1450,6 +1452,7 @@
           commentsVideoGuardSourceVideoId = "";
           commentsVideoGuardDestinationVideoId = "";
           commentsVideoGuardTrackedVideoId = getCurrentVideoId();
+          commentsVideoGuardFailOpenVideoId = "";
           preNavigationCommentNodes = new Set();
           cancelCommentsVideoGuardRecovery();
           return true;
@@ -1485,6 +1488,26 @@
           commentsVideoGuardPending = true;
         };
 
+        const releaseCommentsVideoGuardAfterTimeout = (destinationVideoId) => {
+          if (!destinationVideoId || getCurrentVideoId() !== destinationVideoId) {
+            return false;
+          }
+
+          commentsVideoGuardPending = false;
+          commentsVideoGuardSawFreshContainer = false;
+          commentsVideoGuardSourceVideoId = "";
+          commentsVideoGuardDestinationVideoId = "";
+          commentsVideoGuardTrackedVideoId = destinationVideoId;
+          commentsVideoGuardFailOpenVideoId = destinationVideoId;
+          preNavigationCommentNodes = new Set();
+          pendingStaleCommentContainers.clear();
+          getCommentContainers(document).forEach((comments) =>
+            comments.removeAttribute(STALE_COMMENTS_ATTRIBUTE),
+          );
+          cancelCommentsVideoGuardRecovery();
+          return true;
+        };
+
         const resetCommentsVideoGuard = (
           trackedVideoId = getCurrentVideoId(),
         ) => {
@@ -1495,6 +1518,7 @@
           commentsVideoGuardSourceVideoId = "";
           commentsVideoGuardDestinationVideoId = "";
           commentsVideoGuardTrackedVideoId = trackedVideoId;
+          commentsVideoGuardFailOpenVideoId = "";
           preNavigationCommentNodes = new Set();
           pendingStaleCommentContainers.clear();
           getCommentContainers(document).forEach((comments) =>
@@ -1536,7 +1560,10 @@
           }
 
           const generation = commentsVideoGuardGeneration;
-          COMMENTS_VIDEO_GUARD_CHECK_DELAYS_MS.forEach((delay) => {
+          [
+            ...COMMENTS_VIDEO_GUARD_CHECK_DELAYS_MS,
+            COMMENTS_VIDEO_GUARD_FAIL_OPEN_DELAY_MS,
+          ].forEach((delay) => {
             if (commentsVideoGuardScheduledDelays.has(delay)) return;
 
             commentsVideoGuardScheduledDelays.add(delay);
@@ -1548,6 +1575,11 @@
                 !isWatchPath() ||
                 getCurrentVideoId() !== destinationVideoId
               ) {
+                return;
+              }
+
+              if (delay === COMMENTS_VIDEO_GUARD_FAIL_OPEN_DELAY_MS) {
+                releaseCommentsVideoGuardAfterTimeout(destinationVideoId);
                 return;
               }
 
@@ -1567,6 +1599,7 @@
           commentsVideoGuardSawFreshContainer = false;
           commentsVideoGuardSourceVideoId = sourceVideoId;
           commentsVideoGuardDestinationVideoId = destinationVideoId;
+          commentsVideoGuardFailOpenVideoId = "";
           preNavigationCommentNodes = new Set();
           pendingStaleCommentContainers.clear();
           getCommentContainers(document).forEach((comments) => {
@@ -1619,6 +1652,13 @@
           }
 
           alignCommentsVideoGuardToCurrentUrl();
+
+          if (commentsVideoGuardFailOpenVideoId === currentVideoId) {
+            getCommentContainers(document).forEach((comments) =>
+              comments.removeAttribute(STALE_COMMENTS_ATTRIBUTE),
+            );
+            return;
+          }
 
           getCommentContainers(root).forEach((comments) => {
             const commentsVideoIds = getCommentsVideoIds(comments);

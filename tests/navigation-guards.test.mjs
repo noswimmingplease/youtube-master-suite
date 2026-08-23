@@ -1097,6 +1097,78 @@ test("Comment Cleaner keeps reused no-permalink nodes stale until old renderers 
   );
 });
 
+test("Comment Cleaner fails open after a bounded wait for coherent recycled comments", () => {
+  const { harness, watch } = initialiseCommentCleanerWatch();
+  const reused = createCommentsContainer();
+  harness.document.body.appendChild(reused.comments);
+  harness.dispatchWindow("yt-navigate-start");
+
+  setWatchUrl(harness, VIDEO_B);
+  watch.setIdentity(VIDEO_B);
+  watch.setFlexyIdentity(VIDEO_B);
+  harness.dispatchWindow("yt-navigate-finish");
+  harness.clock.tick(6_500);
+  assert.equal(
+    reused.comments.getAttribute("data-iow-stale-video"),
+    "1",
+    "the ordinary recovery window must still protect ambiguous recycled nodes",
+  );
+
+  harness.clock.tick(1_600);
+  assert.equal(
+    reused.comments.hasAttribute("data-iow-stale-video"),
+    false,
+    "a coherent destination must not remain blank after the hard timeout",
+  );
+
+  harness.emitMutations([
+    {
+      type: "childList",
+      target: reused.comments,
+      addedNodes: [],
+      removedNodes: [],
+    },
+  ]);
+  assert.equal(
+    reused.comments.hasAttribute("data-iow-stale-video"),
+    false,
+    "later mutations must not re-latch a destination released by the hard timeout",
+  );
+});
+
+test("Comment Cleaner never hides a coherent page indefinitely for an old permalink", () => {
+  const { harness, watch } = initialiseCommentCleanerWatch();
+  const reused = createCommentsContainer({ permalinkVideoId: VIDEO_A });
+  harness.document.body.appendChild(reused.comments);
+  harness.dispatchWindow("yt-navigate-start");
+
+  setWatchUrl(harness, VIDEO_B);
+  watch.setIdentity(VIDEO_B);
+  watch.setFlexyIdentity(VIDEO_B);
+  harness.dispatchWindow("yt-navigate-finish");
+  harness.clock.tick(8_100);
+  assert.equal(
+    reused.comments.hasAttribute("data-iow-stale-video"),
+    false,
+    "availability must win after the bounded stale-content protection window",
+  );
+
+  harness.emitMutations([
+    {
+      type: "attributes",
+      attributeName: "href",
+      target: reused.comments.querySelector('a[href*="lc="]'),
+      addedNodes: [],
+      removedNodes: [],
+    },
+  ]);
+  assert.equal(
+    reused.comments.hasAttribute("data-iow-stale-video"),
+    false,
+    "a released destination must stay available until the next navigation",
+  );
+});
+
 test("Comment Cleaner reconciles multiple comment containers independently", () => {
   const { harness, watch } = initialiseCommentCleanerWatch();
   const first = createCommentsContainer();
