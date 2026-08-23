@@ -538,7 +538,7 @@ for (const staleCommentRequirement of [
   'const COMMENT_PERMALINK_LINK_SELECTOR =',
   'link.closest?.("#published-time-text")',
   "markCurrentCommentsStale();",
-  'attributeFilter: ["href"]',
+  'attributeFilter: ["href", "video-id"]',
 ]) {
   assert(
     userscript.includes(staleCommentRequirement),
@@ -588,6 +588,10 @@ for (const commentGuardRequirement of [
   "preNavigationCommentNodesAreDetached(comments)",
   "preNavigationCommentNodesMatchDestination(",
   "commentsVideoGuardTrackedVideoId = getCurrentVideoId();",
+  'document.querySelectorAll(\'[id="movie_player"]\')',
+  "urlVideoId === playerVideoId",
+  "if (attributeVideoId === urlVideoId) return attributeVideoId;",
+  'attributeFilter: ["href", "video-id"]',
   'window.addEventListener("pagehide", () => resetCommentsVideoGuard(""), true);',
 ]) {
   assert(
@@ -1040,6 +1044,11 @@ for (const coherenceRecoveryRequirement of [
   "staleRecoveryDelaysMs: [2000, 5000, 10000]",
   "const getActiveWatchFlexy = () => {",
   '"#ytsmp-player-placeholder"',
+  'document.querySelectorAll(\'[id="movie_player"]\')',
+  "const getFlexyVideoIdentity = (flexy, urlVideoId, playerVideoId) => {",
+  'source = "video-id-attribute-confirmed-by-url-player";',
+  "const flexyIdentityObserver = new MutationObserver((mutations) => {",
+  'attributeFilter: ["video-id"]',
   "const beginNavigationGeneration = (videoId = \"\") => {",
   "if (stalePageData) scheduleStaleRecoveryChecks(snapshot);",
   "window.addEventListener(\"pagehide\", handlePageHide, true);",
@@ -1061,7 +1070,7 @@ assert.match(
 );
 assert.match(
   pageCoherenceSource,
-  /"loadedmetadata",\s+\(event\) => \{\s+if \(!isWatchPath\(\)\) return;[\s\S]{0,320}?player\?\.querySelector\("video\.html5-main-video"\)[\s\S]{0,180}?if \(event\.target !== activeVideo\) return;/,
+  /"loadedmetadata",\s+\(event\) => \{\s+if \(!isWatchPath\(\)\) return;[\s\S]{0,180}?const player = getActivePlayer\(\);[\s\S]{0,220}?player\?\.querySelector\("video\.html5-main-video"\)[\s\S]{0,180}?if \(event\.target !== activeVideo\) return;/,
   "Page Coherence must ignore metadata events outside the active watch player",
 );
 

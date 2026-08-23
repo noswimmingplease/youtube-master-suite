@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         YouTube Master Suite
 // @namespace    Citizen.youtube.master-suite
-// @version      0.1.37
+// @version      0.1.38
 // @description  Consolidates Citizen YouTube userscripts with shared SPA event, mutation-observer, and stylesheet infrastructure.
 // @author       Citizen
 // @license      GNU GPLv3
@@ -18,7 +18,7 @@
 (() => {
   "use strict";
 
-  const MASTER_VERSION = "0.1.37";
+  const MASTER_VERSION = "0.1.38";
   const EXPECTED_MODULE_COUNT = 7;
   const HEALTH_ATTRIBUTE = "data-yt-master-suite";
   const ENABLED_MODULES = Object.freeze({
@@ -1082,7 +1082,7 @@
 
   suite.registerModule(
     "commentCleaner",
-    "Comment Cleaner v1.17",
+    "Comment Cleaner v1.18",
     "document-idle",
     () => {
       const MutationObserver = suite.SharedMutationObserver;
@@ -1262,40 +1262,17 @@
           return "";
         };
 
-        const getPlayerVideoId = () => {
-          try {
-            return (
-              document.getElementById("movie_player")?.getVideoData?.()?.video_id ||
-              ""
-            );
-          } catch {
-            return "";
-          }
-        };
-
-        const getFlexyVideoId = (flexy) => {
-          try {
-            return (
-              flexy?.data?.playerResponse?.videoDetails?.videoId ||
-              flexy?.getAttribute("video-id") ||
-              ""
-            );
-          } catch {
-            return "";
-          }
-        };
-
-        const isRenderedWatchFlexy = (flexy) => {
+        const isRenderedElement = (element) => {
           if (
-            !flexy?.isConnected ||
-            flexy.hidden ||
-            flexy.getAttribute("aria-hidden") === "true"
+            !element?.isConnected ||
+            element.hidden ||
+            element.getAttribute("aria-hidden") === "true"
           ) {
             return false;
           }
 
           try {
-            const style = getComputedStyle(flexy);
+            const style = getComputedStyle(element);
             if (
               style.display === "none" ||
               style.visibility === "hidden" ||
@@ -1308,25 +1285,81 @@
           }
 
           return (
-            typeof flexy.getClientRects !== "function" ||
-            flexy.getClientRects().length > 0
+            typeof element.getClientRects !== "function" ||
+            element.getClientRects().length > 0
           );
         };
 
+        const readPlayerVideoId = (player) => {
+          try {
+            return player?.getVideoData?.()?.video_id || "";
+          } catch {
+            return "";
+          }
+        };
+
+        const getActivePlayer = () => {
+          const players = Array.from(
+            document.querySelectorAll('[id="movie_player"]'),
+          );
+          const renderedPlayers = players.filter(isRenderedElement);
+          const currentVideoId = getCurrentVideoId();
+
+          return (
+            renderedPlayers.find(
+              (player) => readPlayerVideoId(player) === currentVideoId,
+            ) ||
+            renderedPlayers[0] ||
+            players.find(
+              (player) =>
+                player.isConnected && readPlayerVideoId(player) === currentVideoId,
+            ) ||
+            players.find((player) => player.isConnected) ||
+            null
+          );
+        };
+
+        const getPlayerVideoId = () => readPlayerVideoId(getActivePlayer());
+
+        const getFlexyVideoId = (flexy, urlVideoId = "", playerVideoId = "") => {
+          try {
+            const dataVideoId =
+              flexy?.data?.playerResponse?.videoDetails?.videoId || "";
+            const attributeVideoId = flexy?.getAttribute("video-id") || "";
+
+            if (
+              dataVideoId &&
+              attributeVideoId &&
+              dataVideoId !== attributeVideoId &&
+              urlVideoId &&
+              urlVideoId === playerVideoId
+            ) {
+              if (attributeVideoId === urlVideoId) return attributeVideoId;
+              if (dataVideoId === urlVideoId) return dataVideoId;
+            }
+
+            return dataVideoId || attributeVideoId;
+          } catch {
+            return "";
+          }
+        };
+
+        const isRenderedWatchFlexy = (flexy) => isRenderedElement(flexy);
+
         const getActiveWatchFlexy = () => {
-          const playerFlexy = document
-            .getElementById("movie_player")
-            ?.closest("ytd-watch-flexy");
-          if (playerFlexy?.isConnected) return playerFlexy;
+          const playerFlexy = getActivePlayer()?.closest("ytd-watch-flexy");
+          if (isRenderedWatchFlexy(playerFlexy)) return playerFlexy;
 
           const placeholderFlexy = document
             .getElementById(SCROLL_PLAYER_PLACEHOLDER_ID)
             ?.closest("ytd-watch-flexy");
-          if (placeholderFlexy?.isConnected) return placeholderFlexy;
+          if (isRenderedWatchFlexy(placeholderFlexy)) return placeholderFlexy;
 
           const flexies = Array.from(document.querySelectorAll("ytd-watch-flexy"));
           return (
             flexies.find(isRenderedWatchFlexy) ||
+            (playerFlexy?.isConnected ? playerFlexy : null) ||
+            (placeholderFlexy?.isConnected ? placeholderFlexy : null) ||
             flexies.find((flexy) => flexy.isConnected) ||
             null
           );
@@ -1335,7 +1368,11 @@
         const destinationVideoIdentityIsCoherent = (destinationVideoId) => {
           const currentVideoId = getCurrentVideoId();
           const playerVideoId = getPlayerVideoId();
-          const flexyVideoId = getFlexyVideoId(getActiveWatchFlexy());
+          const flexyVideoId = getFlexyVideoId(
+            getActiveWatchFlexy(),
+            currentVideoId,
+            playerVideoId,
+          );
           return Boolean(
             destinationVideoId &&
               currentVideoId === destinationVideoId &&
@@ -2018,6 +2055,16 @@
 
           for (const mutation of mutations) {
             if (mutation.type === "attributes") {
+              if (
+                mutation.attributeName === "video-id" &&
+                mutation.target === getActiveWatchFlexy()
+              ) {
+                bindCommentsVideoGuardDestination();
+                syncCommentsVideoGuard();
+                scheduleCommentsVideoGuardRecovery();
+                continue;
+              }
+
               collectCommentsVideoGuardRoots(
                 commentsVideoGuardRoots,
                 mutation.target,
@@ -2058,7 +2105,7 @@
           if (observing || !isWatchPath()) return;
 
           observer.observe(document.documentElement, {
-            attributeFilter: ["href"],
+            attributeFilter: ["href", "video-id"],
             attributes: true,
             childList: true,
             subtree: true,
@@ -3231,7 +3278,7 @@
 
   suite.registerModule(
     "pageCoherence",
-    "Page Coherence Guard v1.6",
+    "Page Coherence Guard v1.7",
     "document-idle",
     () => {
       const MutationObserver = suite.SharedMutationObserver;
@@ -3299,26 +3346,17 @@
           }
         };
 
-        const getPlayerData = () => {
-          const player = document.querySelector("#movie_player");
-          try {
-            return player?.getVideoData?.() || {};
-          } catch {
-            return {};
-          }
-        };
-
-        const isRenderedWatchFlexy = (flexy) => {
+        const isRenderedElement = (element) => {
           if (
-            !flexy?.isConnected ||
-            flexy.hidden ||
-            flexy.getAttribute("aria-hidden") === "true"
+            !element?.isConnected ||
+            element.hidden ||
+            element.getAttribute("aria-hidden") === "true"
           ) {
             return false;
           }
 
           try {
-            const style = getComputedStyle(flexy);
+            const style = getComputedStyle(element);
             if (
               style.display === "none" ||
               style.visibility === "hidden" ||
@@ -3331,37 +3369,88 @@
           }
 
           return (
-            typeof flexy.getClientRects !== "function" ||
-            flexy.getClientRects().length > 0
+            typeof element.getClientRects !== "function" ||
+            element.getClientRects().length > 0
           );
         };
 
+        const readPlayerData = (player) => {
+          try {
+            return player?.getVideoData?.() || {};
+          } catch {
+            return {};
+          }
+        };
+
+        const getActivePlayer = () => {
+          const players = Array.from(
+            document.querySelectorAll('[id="movie_player"]'),
+          );
+          const renderedPlayers = players.filter(isRenderedElement);
+          const urlVideoId = getVideoIdFromUrl(location.href);
+
+          return (
+            renderedPlayers.find(
+              (player) => readPlayerData(player).video_id === urlVideoId,
+            ) ||
+            renderedPlayers[0] ||
+            players.find(
+              (player) =>
+                player.isConnected &&
+                readPlayerData(player).video_id === urlVideoId,
+            ) ||
+            players.find((player) => player.isConnected) ||
+            null
+          );
+        };
+
+        const getPlayerData = () => readPlayerData(getActivePlayer());
+
+        const isRenderedWatchFlexy = (flexy) => isRenderedElement(flexy);
+
         const getActiveWatchFlexy = () => {
-          const playerFlexy = document
-            .querySelector("#movie_player")
-            ?.closest?.("ytd-watch-flexy");
-          if (playerFlexy?.isConnected) return playerFlexy;
+          const playerFlexy = getActivePlayer()?.closest?.("ytd-watch-flexy");
+          if (isRenderedWatchFlexy(playerFlexy)) return playerFlexy;
 
           const placeholderFlexy = document
             .querySelector("#ytsmp-player-placeholder")
             ?.closest?.("ytd-watch-flexy");
-          if (placeholderFlexy?.isConnected) return placeholderFlexy;
+          if (isRenderedWatchFlexy(placeholderFlexy)) return placeholderFlexy;
 
           const flexies = Array.from(document.querySelectorAll("ytd-watch-flexy"));
           return (
             flexies.find(isRenderedWatchFlexy) ||
+            (playerFlexy?.isConnected ? playerFlexy : null) ||
+            (placeholderFlexy?.isConnected ? placeholderFlexy : null) ||
             flexies.find((flexy) => flexy.isConnected) ||
             null
           );
         };
 
-        const getFlexyVideoId = () => {
-          const flexy = getActiveWatchFlexy();
-          return (
-            flexy?.data?.playerResponse?.videoDetails?.videoId ||
-            flexy?.getAttribute("video-id") ||
-            ""
-          );
+        const getFlexyVideoIdentity = (flexy, urlVideoId, playerVideoId) => {
+          const dataVideoId =
+            flexy?.data?.playerResponse?.videoDetails?.videoId || "";
+          const attributeVideoId = flexy?.getAttribute("video-id") || "";
+          let videoId = dataVideoId || attributeVideoId;
+          let source = dataVideoId ? "player-response" : "video-id-attribute";
+
+          if (
+            dataVideoId &&
+            attributeVideoId &&
+            dataVideoId !== attributeVideoId &&
+            urlVideoId &&
+            urlVideoId === playerVideoId
+          ) {
+            if (attributeVideoId === urlVideoId) {
+              videoId = attributeVideoId;
+              source = "video-id-attribute-confirmed-by-url-player";
+            } else if (dataVideoId === urlVideoId) {
+              videoId = dataVideoId;
+              source = "player-response-confirmed-by-url-player";
+            }
+          }
+
+          return { videoId, dataVideoId, attributeVideoId, source };
         };
 
         const getQueueState = () => {
@@ -3483,7 +3572,13 @@
           const comments = document.querySelector("ytd-comments");
           const urlVideoId = getVideoIdFromUrl(location.href);
           const playerVideoId = playerData.video_id || "";
-          const flexyVideoId = getFlexyVideoId();
+          const activeFlexy = getActiveWatchFlexy();
+          const flexyIdentity = getFlexyVideoIdentity(
+            activeFlexy,
+            urlVideoId,
+            playerVideoId,
+          );
+          const flexyVideoId = flexyIdentity.videoId;
           const watchPath = isWatchPath();
           const identity = getIdentityState({
             watchPath,
@@ -3520,6 +3615,9 @@
               document.querySelector(METADATA_TITLE_SELECTOR)?.textContent?.trim() ||
               "",
             flexyVideoId,
+            flexyDataVideoId: flexyIdentity.dataVideoId,
+            flexyAttributeVideoId: flexyIdentity.attributeVideoId,
+            flexyIdentitySource: flexyIdentity.source,
             queueVideoId: queue.videoId,
             queueTitle: queue.title,
             identityStatus: identity.status,
@@ -3752,7 +3850,7 @@
           (event) => {
             if (!isWatchPath()) return;
 
-            const player = document.querySelector("#movie_player");
+            const player = getActivePlayer();
             const activeVideo =
               player?.querySelector("video.html5-main-video") ||
               player?.querySelector("video");
@@ -3764,6 +3862,29 @@
           },
           true,
         );
+
+        const flexyIdentityObserver = new MutationObserver((mutations) => {
+          if (!isWatchPath()) return;
+
+          const activeFlexy = getActiveWatchFlexy();
+          if (
+            !mutations.some(
+              (mutation) =>
+                mutation.type === "attributes" && mutation.target === activeFlexy,
+            )
+          ) {
+            return;
+          }
+
+          alignNavigationGenerationToCurrentUrl();
+          runCoherenceCheck();
+          scheduleChecks();
+        });
+        flexyIdentityObserver.observe(document.documentElement, {
+          attributeFilter: ["video-id"],
+          attributes: true,
+          subtree: true,
+        });
 
         removeLegacyNotice();
         navigationVideoId = getVideoIdFromUrl(location.href);

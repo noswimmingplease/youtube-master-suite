@@ -841,6 +841,106 @@ test("Page Coherence selects the player-owned or placeholder-owned active flexy"
   assert.equal(staleFlexy.isConnected, true);
 });
 
+test("Page Coherence ignores a retained ended-video playerResponse once live identities agree", () => {
+  const harness = createHarness(
+    PAGE_COHERENCE_SOURCE,
+    `https://www.youtube.com/watch?v=${VIDEO_A}`,
+  );
+  const watch = createWatchDom(harness, VIDEO_A);
+
+  harness.dispatchWindow("yt-navigate-start");
+  setWatchUrl(harness, VIDEO_B);
+  watch.setIdentity(VIDEO_B);
+  watch.flexy.setAttribute("video-id", VIDEO_B);
+  // YouTube can retain the ended video's Polymer playerResponse after the
+  // live watch attribute and active player have moved to the clicked video.
+  watch.flexy.data = {
+    playerResponse: { videoDetails: { videoId: VIDEO_A } },
+  };
+  harness.dispatchWindow("yt-navigate-finish");
+  harness.clock.tick(3_300);
+
+  const state = readJsonAttribute(
+    harness.document.documentElement,
+    "data-yt-master-state",
+  );
+  assert.equal(state.urlVideoId, VIDEO_B);
+  assert.equal(state.playerVideoId, VIDEO_B);
+  assert.equal(
+    state.flexyVideoId,
+    VIDEO_B,
+    "the current live attribute must win when URL and active player confirm it",
+  );
+  assert.equal(
+    harness.document.documentElement.hasAttribute("data-yt-master-page-stale"),
+    false,
+    "a retained ended-video data object must not leave current metadata hidden",
+  );
+});
+
+test("Page Coherence rechecks a late live video-id change after its timer budget", () => {
+  const harness = createHarness(
+    PAGE_COHERENCE_SOURCE,
+    `https://www.youtube.com/watch?v=${VIDEO_A}`,
+  );
+  const watch = createWatchDom(harness, VIDEO_A);
+
+  harness.dispatchWindow("yt-navigate-start");
+  setWatchUrl(harness, VIDEO_B);
+  watch.setIdentity(VIDEO_B);
+  harness.dispatchWindow("yt-navigate-finish");
+  harness.clock.tick(20_000);
+  assert.equal(
+    harness.document.documentElement.hasAttribute("data-yt-master-page-stale"),
+    true,
+  );
+  assert.equal(harness.clock.pendingCount, 0);
+
+  watch.flexy.setAttribute("video-id", VIDEO_B);
+  harness.emitMutations([
+    {
+      type: "attributes",
+      attributeName: "video-id",
+      target: watch.flexy,
+      addedNodes: [],
+      removedNodes: [],
+    },
+  ]);
+
+  assert.equal(
+    harness.document.documentElement.hasAttribute("data-yt-master-page-stale"),
+    false,
+    "a late current identity signal must release an otherwise permanent blank page",
+  );
+});
+
+test("Page Coherence ignores a retained hidden player when a current player exists", () => {
+  const harness = createHarness(
+    PAGE_COHERENCE_SOURCE,
+    `https://www.youtube.com/watch?v=${VIDEO_B}`,
+  );
+  const ended = createWatchDom(harness, VIDEO_A);
+  ended.flexy.hidden = true;
+  createWatchDom(harness, VIDEO_B);
+
+  harness.dispatchWindow("pageshow");
+  harness.clock.tick(1_700);
+
+  const state = readJsonAttribute(
+    harness.document.documentElement,
+    "data-yt-master-state",
+  );
+  assert.equal(
+    state.playerVideoId,
+    VIDEO_B,
+    "duplicate player IDs must resolve to the rendered current watch player",
+  );
+  assert.equal(
+    harness.document.documentElement.hasAttribute("data-yt-master-page-stale"),
+    false,
+  );
+});
+
 test("Page Coherence cancels old recovery work but retains a permanent mismatch", () => {
   const harness = createHarness(
     PAGE_COHERENCE_SOURCE,
@@ -901,6 +1001,31 @@ test("Comment Cleaner releases a new no-permalink container after coherent autop
     fresh.comments.hasAttribute("data-iow-stale-video"),
     false,
     "a new renderer tree can be accepted without a comment permalink once page identity is coherent",
+  );
+});
+
+test("Comment Cleaner accepts current comments when ended-video playerResponse is retained", () => {
+  const { harness, watch } = initialiseCommentCleanerWatch();
+  const old = createCommentsContainer({ permalinkVideoId: VIDEO_A });
+  harness.document.body.appendChild(old.comments);
+
+  harness.dispatchWindow("yt-navigate-start");
+  old.comments.remove();
+  const fresh = createCommentsContainer();
+  harness.document.body.appendChild(fresh.comments);
+  setWatchUrl(harness, VIDEO_B);
+  watch.setIdentity(VIDEO_B);
+  watch.flexy.setAttribute("video-id", VIDEO_B);
+  watch.flexy.data = {
+    playerResponse: { videoDetails: { videoId: VIDEO_A } },
+  };
+  harness.dispatchWindow("yt-navigate-finish");
+  harness.clock.tick(700);
+
+  assert.equal(
+    fresh.comments.hasAttribute("data-iow-stale-video"),
+    false,
+    "current replacement comments must not remain hidden behind retained ended-video data",
   );
 });
 

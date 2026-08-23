@@ -3,8 +3,8 @@
   "modules": {
     "commentCleaner": {
       "path": "sources/modules/youtube-comment-cleaner.user.js",
-      "version": "1.17",
-      "sha256": "f32f607dc87a86fe02a34398e08756ca0be70c6f42ec434f29b0027995b2a4cd"
+      "version": "1.18",
+      "sha256": "c36a6edce2bf41e16915d8882246a0aa2a4fd8a729c917c657e498008e24403e"
     },
     "feedUiCleaner": {
       "path": "sources/modules/youtube-feed-ui-cleaner.user.js",
@@ -18,8 +18,8 @@
     },
     "pageCoherence": {
       "path": "sources/modules/youtube-page-coherence.user.js",
-      "version": "1.6",
-      "sha256": "4bf12fb1f3971bc96b32df5bd79bc4db510c2f3cec0f47836d18c02b1e5349bb"
+      "version": "1.7",
+      "sha256": "c61429e2fc006dc9765afee5273e7e72cbfa5f6523c9570baf5054d115e70ea8"
     },
     "playerPreferencesLite": {
       "path": "sources/modules/youtube-player-preferences-lite.user.js",

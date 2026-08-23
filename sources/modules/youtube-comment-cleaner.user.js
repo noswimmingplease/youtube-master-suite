@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         YouTube Comment Cleaner
 // @namespace    Citizen.youtube.comment-cleaner
-// @version      1.17
+// @version      1.18
 // @description  Cleans YouTube comments, prevents stale comments across SPA navigation, preserves replies, compacts spacing, and colours commenter/uploader names.
 // @author       Citizen
 // @license      GNU GPLv3
@@ -190,40 +190,17 @@
     return "";
   };
 
-  const getPlayerVideoId = () => {
-    try {
-      return (
-        document.getElementById("movie_player")?.getVideoData?.()?.video_id ||
-        ""
-      );
-    } catch {
-      return "";
-    }
-  };
-
-  const getFlexyVideoId = (flexy) => {
-    try {
-      return (
-        flexy?.data?.playerResponse?.videoDetails?.videoId ||
-        flexy?.getAttribute("video-id") ||
-        ""
-      );
-    } catch {
-      return "";
-    }
-  };
-
-  const isRenderedWatchFlexy = (flexy) => {
+  const isRenderedElement = (element) => {
     if (
-      !flexy?.isConnected ||
-      flexy.hidden ||
-      flexy.getAttribute("aria-hidden") === "true"
+      !element?.isConnected ||
+      element.hidden ||
+      element.getAttribute("aria-hidden") === "true"
     ) {
       return false;
     }
 
     try {
-      const style = getComputedStyle(flexy);
+      const style = getComputedStyle(element);
       if (
         style.display === "none" ||
         style.visibility === "hidden" ||
@@ -236,25 +213,81 @@
     }
 
     return (
-      typeof flexy.getClientRects !== "function" ||
-      flexy.getClientRects().length > 0
+      typeof element.getClientRects !== "function" ||
+      element.getClientRects().length > 0
     );
   };
 
+  const readPlayerVideoId = (player) => {
+    try {
+      return player?.getVideoData?.()?.video_id || "";
+    } catch {
+      return "";
+    }
+  };
+
+  const getActivePlayer = () => {
+    const players = Array.from(
+      document.querySelectorAll('[id="movie_player"]'),
+    );
+    const renderedPlayers = players.filter(isRenderedElement);
+    const currentVideoId = getCurrentVideoId();
+
+    return (
+      renderedPlayers.find(
+        (player) => readPlayerVideoId(player) === currentVideoId,
+      ) ||
+      renderedPlayers[0] ||
+      players.find(
+        (player) =>
+          player.isConnected && readPlayerVideoId(player) === currentVideoId,
+      ) ||
+      players.find((player) => player.isConnected) ||
+      null
+    );
+  };
+
+  const getPlayerVideoId = () => readPlayerVideoId(getActivePlayer());
+
+  const getFlexyVideoId = (flexy, urlVideoId = "", playerVideoId = "") => {
+    try {
+      const dataVideoId =
+        flexy?.data?.playerResponse?.videoDetails?.videoId || "";
+      const attributeVideoId = flexy?.getAttribute("video-id") || "";
+
+      if (
+        dataVideoId &&
+        attributeVideoId &&
+        dataVideoId !== attributeVideoId &&
+        urlVideoId &&
+        urlVideoId === playerVideoId
+      ) {
+        if (attributeVideoId === urlVideoId) return attributeVideoId;
+        if (dataVideoId === urlVideoId) return dataVideoId;
+      }
+
+      return dataVideoId || attributeVideoId;
+    } catch {
+      return "";
+    }
+  };
+
+  const isRenderedWatchFlexy = (flexy) => isRenderedElement(flexy);
+
   const getActiveWatchFlexy = () => {
-    const playerFlexy = document
-      .getElementById("movie_player")
-      ?.closest("ytd-watch-flexy");
-    if (playerFlexy?.isConnected) return playerFlexy;
+    const playerFlexy = getActivePlayer()?.closest("ytd-watch-flexy");
+    if (isRenderedWatchFlexy(playerFlexy)) return playerFlexy;
 
     const placeholderFlexy = document
       .getElementById(SCROLL_PLAYER_PLACEHOLDER_ID)
       ?.closest("ytd-watch-flexy");
-    if (placeholderFlexy?.isConnected) return placeholderFlexy;
+    if (isRenderedWatchFlexy(placeholderFlexy)) return placeholderFlexy;
 
     const flexies = Array.from(document.querySelectorAll("ytd-watch-flexy"));
     return (
       flexies.find(isRenderedWatchFlexy) ||
+      (playerFlexy?.isConnected ? playerFlexy : null) ||
+      (placeholderFlexy?.isConnected ? placeholderFlexy : null) ||
       flexies.find((flexy) => flexy.isConnected) ||
       null
     );
@@ -263,7 +296,11 @@
   const destinationVideoIdentityIsCoherent = (destinationVideoId) => {
     const currentVideoId = getCurrentVideoId();
     const playerVideoId = getPlayerVideoId();
-    const flexyVideoId = getFlexyVideoId(getActiveWatchFlexy());
+    const flexyVideoId = getFlexyVideoId(
+      getActiveWatchFlexy(),
+      currentVideoId,
+      playerVideoId,
+    );
     return Boolean(
       destinationVideoId &&
         currentVideoId === destinationVideoId &&
@@ -946,6 +983,16 @@ yt-comment-view-model #header-author-badges {
 
     for (const mutation of mutations) {
       if (mutation.type === "attributes") {
+        if (
+          mutation.attributeName === "video-id" &&
+          mutation.target === getActiveWatchFlexy()
+        ) {
+          bindCommentsVideoGuardDestination();
+          syncCommentsVideoGuard();
+          scheduleCommentsVideoGuardRecovery();
+          continue;
+        }
+
         collectCommentsVideoGuardRoots(
           commentsVideoGuardRoots,
           mutation.target,
@@ -986,7 +1033,7 @@ yt-comment-view-model #header-author-badges {
     if (observing || !isWatchPath()) return;
 
     observer.observe(document.documentElement, {
-      attributeFilter: ["href"],
+      attributeFilter: ["href", "video-id"],
       attributes: true,
       childList: true,
       subtree: true,
