@@ -239,6 +239,7 @@ function verifySharedRuntimeContracts(moduleId, source) {
 }
 
 run(process.execPath, ["build-master.mjs", "--check"]);
+run(process.execPath, ["--test", "tests/navigation-guards.test.mjs"]);
 run(process.execPath, ["--check", userscriptPath]);
 
 const userscript = readFileSync(userscriptPath, "utf8");
@@ -358,12 +359,6 @@ for (const [moduleId, lockedSource] of lockedModules) {
     lockedSource.sha256,
     `${moduleId}: canonical source differs from the source lock`,
   );
-  assert(
-    userscript.includes(
-      `${lockedSource.path} | sha256:${lockedSource.sha256}`,
-    ),
-    `${moduleId}: canonical source manifest entry is missing`,
-  );
   assert.match(
     userscript,
     new RegExp(
@@ -384,7 +379,7 @@ assert(
 );
 assert(
   !userscript.includes("SponsorBlock Queue Width (folded"),
-  "The generated source manifest must only list canonical modules",
+  "The generated userscript must not mention the vestigial module",
 );
 assert(
   userscript.includes("sidebarWidthPx: 374"),
@@ -452,6 +447,9 @@ for (const feedFilteringRequirement of [
   "const INNER_CONTAINER_SELECTORS = [",
   "function reconcileFilteredCards(root = document)",
   "function resetTemporaryReveal()",
+  "function syncMutationObservation()",
+  "function stopMutationObservation()",
+  "window.addEventListener('pagehide'",
   "location.pathname === '/results'",
   '!container.closest(`[${PERMANENT_HIDDEN_FLAG}="1"]`)',
 ]) {
@@ -485,6 +483,10 @@ for (const miniplayerButtonRequirement of [
   'const PLAYER_SELECTORS = ["#movie_player", ".html5-video-player"]',
   "let installedButton = null;",
   "player.querySelectorAll(NATIVE_MINIPLAYER_BUTTON_SELECTOR)",
+  "function getActiveWatchFlexy() {",
+  "clearInstallAttempts();",
+  "m.removedNodes && m.removedNodes.length",
+  'window.addEventListener("pagehide"',
   'window.addEventListener("pageshow", onNavigate);',
 ]) {
   assert(
@@ -533,10 +535,10 @@ assert(
 );
 for (const staleCommentRequirement of [
   'const STALE_COMMENTS_ATTRIBUTE = "data-iow-stale-video"',
-  'a[href*="/watch?"][href*="lc="]',
-  "commentsVideoId !== currentVideoId",
+  'const COMMENT_PERMALINK_LINK_SELECTOR =',
+  'link.closest?.("#published-time-text")',
   "markCurrentCommentsStale();",
-  'attributeFilter: ["href"]',
+  'attributeFilter: ["href", "video-id"]',
 ]) {
   assert(
     userscript.includes(staleCommentRequirement),
@@ -546,6 +548,62 @@ for (const staleCommentRequirement of [
 const commentCleanerSource = canonicalSources.get("commentCleaner") || "";
 const playerPreferencesSource =
   canonicalSources.get("playerPreferencesLite") || "";
+for (const captionThemeRequirement of [
+  "useReadableYellowCaptions: true",
+  "function buildCaptionCss()",
+  ".html5-video-player .ytp-caption-segment",
+  "ytd-video-preview .ytp-caption-segment",
+  "color: #ffe36e !important;",
+  "0 2px 4px #000 !important;",
+  "buildCaptionCss(),",
+]) {
+  assert(
+    playerPreferencesSource.includes(captionThemeRequirement),
+    `Missing readable-caption requirement: ${captionThemeRequirement}`,
+  );
+}
+const captionCssBuilder = playerPreferencesSource.match(
+  /function buildCaptionCss\(\) \{([\s\S]*?)\n  \}\n\n  function buildShortsCss\(\)/,
+)?.[1] || "";
+assert(captionCssBuilder, "Missing readable-caption CSS builder body");
+const captionCssTemplate = captionCssBuilder.match(
+  /return `([\s\S]*?)`;/,
+)?.[1] || "";
+assert(captionCssTemplate, "Missing readable-caption CSS template");
+const captionDeclarationNames = [
+  ...captionCssTemplate.matchAll(/^\s*([a-z][a-z-]*)\s*:/gim),
+].map((match) => match[1].toLowerCase());
+assert.deepEqual(
+  captionDeclarationNames,
+  ["color", "text-shadow"],
+  "Caption theme may declare only colour and text shadow",
+);
+for (const commentGuardRequirement of [
+  "const COMMENTS_VIDEO_GUARD_CHECK_DELAYS_MS = [600, 1600, 3200, 6400]",
+  "let preNavigationCommentNodes = new Set();",
+  "const pendingStaleCommentContainers = new Set();",
+  "const destinationVideoIdentityIsCoherent = (destinationVideoId) => {",
+  "const getCommentsVideoIds = (comments) => {",
+  "const alignCommentsVideoGuardToCurrentUrl = () => {",
+  "preNavigationCommentNodesAreDetached(comments)",
+  "preNavigationCommentNodesMatchDestination(",
+  "commentsVideoGuardTrackedVideoId = getCurrentVideoId();",
+  'document.querySelectorAll(\'[id="movie_player"]\')',
+  "urlVideoId === playerVideoId",
+  "if (attributeVideoId === urlVideoId) return attributeVideoId;",
+  'attributeFilter: ["href", "video-id"]',
+  'window.addEventListener("pagehide", () => resetCommentsVideoGuard(""), true);',
+]) {
+  assert(
+    commentCleanerSource.includes(commentGuardRequirement),
+    `Missing Comment Cleaner autoplay guard requirement: ${commentGuardRequirement}`,
+  );
+}
+assert.doesNotMatch(
+  commentCleanerSource,
+  /if \(!commentsVideoGuardDestinationVideoId\) \{\s*commentsVideoGuardDestinationVideoId = currentVideoId;\s*commentsVideoGuardTrackedVideoId = currentVideoId;/,
+  "Binding an autoplay destination must not mark it settled before comments are verified",
+);
 assert(
   playerPreferencesSource.includes(
     "grid-shelf-view-model:has(ytm-shorts-lockup-view-model-v2)",
@@ -744,7 +802,7 @@ for (const navigationRequirement of [
   "let navigationInProgress = false;",
   "let navigationFinishPending = false;",
   "if (navigationInProgress || !isEligiblePath() || isFullscreen()) return false;",
-  "if (navigationInProgress || !isEligiblePath() || scrollScheduled) return;",
+  "if (navigationInProgress || !isEligiblePath() || scrollSyncFrame) return;",
   "function beginNavigationLock()",
   "function finishNavigationLock()",
   "function finishNavigationLockIfSettled()",
@@ -834,13 +892,18 @@ for (const lifecycleRequirement of [
   "if (!urlVideoId) return null;",
   "if (replacementVideoId !== urlVideoId) return null;",
   "function canDiscardOffRouteOrphan(player)",
+  "function isRenderedWatchRoot(root)",
+  ".querySelector(`#${PLACEHOLDER_ID}`)",
   'const PLAYER_RECOVERY_HOST_ID = "ytsmp-player-recovery-host"',
   "function ensurePlayerRecoveryHost()",
   "function startPlayerAdoptionObservation()",
   "playerAdoptionObserverTarget === target",
   "canDiscardOffRouteOrphan(candidate)",
   "recoveryHost.appendChild(candidate);",
-  "scheduleOffRouteOrphanFinalisation();",
+  "function finaliseOffRouteOrphanIfSafe(candidate = floatedPlayer)",
+  'document.addEventListener("emptied"',
+  "function cancelScheduledAnimationFrames()",
+  'window.addEventListener("pagehide", cancelScheduledAnimationFrames, true);',
 ]) {
   assert(
     scrollMiniplayerSource.includes(lifecycleRequirement),
@@ -849,8 +912,13 @@ for (const lifecycleRequirement of [
 }
 assert.match(
   scrollMiniplayerSource,
-  /if \(\s*floatedPlayer === candidate[\s\S]{0,220}?canDiscardOffRouteOrphan\(candidate\)[\s\S]{0,120}?candidate\.remove\(\);/,
+  /function finaliseOffRouteOrphanIfSafe\(candidate = floatedPlayer\)[\s\S]{0,700}?if \(!canDiscardOffRouteOrphan\(candidate\)\) return false;[\s\S]{0,120}?candidate\.remove\(\);/,
   "Scroll Miniplayer may discard only a confirmed inactive off-route orphan",
+);
+assert.doesNotMatch(
+  scrollMiniplayerSource,
+  /recoveryHost\.appendChild\(candidate\);[\s\S]{0,160}?scheduleOffRouteOrphanFinalisation\(\);/,
+  "An active off-route orphan must not keep an indefinite polling loop alive",
 );
 assert(
   scrollMiniplayerSource.includes(
@@ -972,9 +1040,37 @@ assert.match(
 );
 
 const pageCoherenceSource = canonicalSources.get("pageCoherence") || "";
+for (const coherenceRecoveryRequirement of [
+  "staleRecoveryDelaysMs: [2000, 5000, 10000]",
+  "const getActiveWatchFlexy = () => {",
+  '"#ytsmp-player-placeholder"',
+  'document.querySelectorAll(\'[id="movie_player"]\')',
+  "const getFlexyVideoIdentity = (flexy, urlVideoId, playerVideoId) => {",
+  'source = "video-id-attribute-confirmed-by-url-player";',
+  "const flexyIdentityObserver = new MutationObserver((mutations) => {",
+  'attributeFilter: ["video-id"]',
+  "const beginNavigationGeneration = (videoId = \"\") => {",
+  "if (stalePageData) scheduleStaleRecoveryChecks(snapshot);",
+  "window.addEventListener(\"pagehide\", handlePageHide, true);",
+]) {
+  assert(
+    pageCoherenceSource.includes(coherenceRecoveryRequirement),
+    `Missing Page Coherence recovery requirement: ${coherenceRecoveryRequirement}`,
+  );
+}
+assert.doesNotMatch(
+  pageCoherenceSource,
+  /const handleNavigateStart = \(\) => \{[\s\S]{0,300}?setStalePageData\(false\);/,
+  "Navigation start must not reveal metadata already known to be stale",
+);
 assert.match(
   pageCoherenceSource,
-  /"loadedmetadata",\s+\(event\) => \{\s+if \(!isWatchPath\(\)\) return;[\s\S]{0,320}?player\?\.querySelector\("video\.html5-main-video"\)[\s\S]{0,180}?if \(event\.target !== activeVideo\) return;/,
+  /const confirmedMismatch = Boolean\([\s\S]{0,260}?urlVideoId !== playerVideoId[\s\S]{0,160}?urlVideoId !== flexyVideoId[\s\S]{0,160}?playerVideoId !== flexyVideoId/,
+  "Page Coherence must guard every persistent disagreement between URL, player and active metadata",
+);
+assert.match(
+  pageCoherenceSource,
+  /"loadedmetadata",\s+\(event\) => \{\s+if \(!isWatchPath\(\)\) return;[\s\S]{0,180}?const player = getActivePlayer\(\);[\s\S]{0,220}?player\?\.querySelector\("video\.html5-main-video"\)[\s\S]{0,180}?if \(event\.target !== activeVideo\) return;/,
   "Page Coherence must ignore metadata events outside the active watch player",
 );
 
@@ -1006,6 +1102,10 @@ for (const layoutRefreshRequirement of [
   "playerLayoutRefreshAttemptTimers.delete(delay);",
   "function clearPlayerLayoutRefreshAttempts()",
   "playerLayoutRefreshAttemptTimers.clear();",
+  "function cancelScheduledAnimationWork()",
+  'window.addEventListener(\n    "pagehide"',
+  "function isRenderedWatchFlexy(flexy)",
+  '.querySelector("#ytsmp-player-placeholder")',
 ]) {
   assert(
     playerPreferencesSource.includes(layoutRefreshRequirement),
@@ -1329,14 +1429,15 @@ for (const coherenceRequirement of [
   'const STALE_ATTRIBUTE = "data-yt-master-page-stale"',
   'const STATE_ATTRIBUTE = "data-yt-master-state"',
   'const EVENTS_ATTRIBUTE = "data-yt-master-events"',
-  "urlVideoId === playerVideoId",
-  "flexyVideoId !== playerVideoId",
+  "urlVideoId !== playerVideoId",
+  "urlVideoId !== flexyVideoId",
+  "playerVideoId !== flexyVideoId",
   "mismatchesBeforeWarning: 2",
   'const LEGACY_NOTICE_ID = "yt-master-page-coherence-notice"',
   "removeLegacyNotice();",
   "globalThis.__YT_MASTER_STATE__",
   '"visibilitychange",',
-  'document.visibilityState === "visible"',
+  'document.visibilityState !== "visible"',
 ]) {
   assert(
     userscript.includes(coherenceRequirement),

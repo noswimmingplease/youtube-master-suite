@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         YouTube Feed UI Cleaner
 // @namespace    Citizen.youtube.feed-ui-cleaner
-// @version      2.5
+// @version      2.6
 // @description  Removes unwanted YouTube UI and filtered feed cards, reconciles recycled renderers, and offers a temporary non-ad reveal control.
 // @author       Citizen
 // @homepageURL  https://github.com/Ci303/youtube-feed-ui-cleaner
@@ -382,7 +382,7 @@
     scheduleFilterToggleUpdate();
   }
 
-  let filterToggleUpdateScheduled = false;
+  let filterToggleUpdateFrame = 0;
 
   function getFilteredContainers() {
     const containers = new Set();
@@ -442,7 +442,7 @@
   }
 
   function updateFilterToggle() {
-    filterToggleUpdateScheduled = false;
+    filterToggleUpdateFrame = 0;
     const existing = document.getElementById(FILTER_TOGGLE_ID);
     if (!CONFIG.showTemporaryRevealControl || !isRuntimeFeedRoute()) {
       existing?.remove();
@@ -478,9 +478,8 @@
   }
 
   function scheduleFilterToggleUpdate() {
-    if (filterToggleUpdateScheduled) return;
-    filterToggleUpdateScheduled = true;
-    requestAnimationFrame(updateFilterToggle);
+    if (filterToggleUpdateFrame) return;
+    filterToggleUpdateFrame = requestAnimationFrame(updateFilterToggle);
   }
 
   function resetTemporaryReveal() {
@@ -488,7 +487,7 @@
     document.getElementById(FILTER_TOGGLE_ID)?.remove();
   }
 
-  let scheduled = false;
+  let cleanUpFrame = 0;
   const pendingCleanUpRoots = new Set();
 
   function addPendingCleanUpRoot(root) {
@@ -505,11 +504,10 @@
   function scheduleCleanUp(root) {
     addPendingCleanUpRoot(root);
     if (!pendingCleanUpRoots.size) return;
-    if (scheduled) return;
+    if (cleanUpFrame) return;
 
-    scheduled = true;
-    requestAnimationFrame(() => {
-      scheduled = false;
+    cleanUpFrame = requestAnimationFrame(() => {
+      cleanUpFrame = 0;
       const roots = Array.from(pendingCleanUpRoots);
       pendingCleanUpRoots.clear();
       roots.forEach((pendingRoot) => {
@@ -569,8 +567,6 @@
   cleanUp(document);
 
   const observer = new MutationObserver((mutations) => {
-    if (!isRuntimeFeedRoute()) return;
-
     for (const mutation of mutations) {
       if (!mutationCanAffectFiltering(mutation)) continue;
 
@@ -591,7 +587,7 @@
     }
   });
 
-  observer.observe(document.documentElement, {
+  const OBSERVER_OPTIONS = {
     attributeFilter: [
       'href',
       'data-ytppl-upcoming-hidden',
@@ -602,15 +598,52 @@
     characterData: true,
     childList: true,
     subtree: true,
-  });
+  };
+  let observerActive = false;
 
-  window.addEventListener('yt-navigate-start', resetTemporaryReveal, true);
-  window.addEventListener('yt-navigate-finish', () => {
+  function stopMutationObservation() {
+    if (!observerActive) return;
+    observer.disconnect();
+    observerActive = false;
+  }
+
+  function syncMutationObservation() {
+    if (!isRuntimeFeedRoute()) {
+      stopMutationObservation();
+      return false;
+    }
+    if (!observerActive) {
+      observer.observe(document.documentElement, OBSERVER_OPTIONS);
+      observerActive = true;
+    }
+    return true;
+  }
+
+  function resetScheduledWork() {
+    if (filterToggleUpdateFrame) cancelAnimationFrame(filterToggleUpdateFrame);
+    if (cleanUpFrame) cancelAnimationFrame(cleanUpFrame);
+    filterToggleUpdateFrame = 0;
+    cleanUpFrame = 0;
+    pendingCleanUpRoots.clear();
+  }
+
+  function reconcileRoute() {
     resetTemporaryReveal();
-    cleanUp(document);
-  }, true);
-  window.addEventListener('pageshow', () => {
+    if (syncMutationObservation()) cleanUp(document);
+  }
+
+  syncMutationObservation();
+
+  window.addEventListener('yt-navigate-start', () => {
     resetTemporaryReveal();
-    cleanUp(document);
+    stopMutationObservation();
+    resetScheduledWork();
   }, true);
+  window.addEventListener('yt-navigate-finish', reconcileRoute, true);
+  window.addEventListener('yt-page-data-updated', reconcileRoute, true);
+  window.addEventListener('pagehide', () => {
+    stopMutationObservation();
+    resetScheduledWork();
+  }, true);
+  window.addEventListener('pageshow', reconcileRoute, true);
 })();

@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         YouTube Comment Cleaner
 // @namespace    Citizen.youtube.comment-cleaner
-// @version      1.15
+// @version      1.18
 // @description  Cleans YouTube comments, prevents stale comments across SPA navigation, preserves replies, compacts spacing, and colours commenter/uploader names.
 // @author       Citizen
 // @license      GNU GPLv3
@@ -92,9 +92,17 @@
     ytd-comments a[href^="/@"],
     ytd-comments a[href^="https://www.youtube.com/@"]
   `;
-  const COMMENT_VIDEO_LINK_SELECTOR =
+  const COMMENT_PERMALINK_LINK_SELECTOR =
     'a[href*="/watch?"][href*="lc="], a[href*="youtube.com/watch?"][href*="lc="]';
   const STALE_COMMENTS_ATTRIBUTE = "data-iow-stale-video";
+  const SCROLL_PLAYER_PLACEHOLDER_ID = "ytsmp-player-placeholder";
+  const COMMENT_RENDERER_SELECTOR = [
+    "ytd-comment-thread-renderer",
+    "ytd-comment-renderer",
+    "ytd-comment-view-model",
+    "yt-comment-view-model",
+  ].join(",");
+  const COMMENTS_VIDEO_GUARD_CHECK_DELAYS_MS = [600, 1600, 3200, 6400];
 
   const COMMENT_MUTATION_SURFACE_SELECTOR = [
     "ytd-comments",
@@ -121,6 +129,15 @@
   let uploaderPathsFallbackTimer = 0;
   let observing = false;
   let commentsVideoGuardPending = false;
+  let commentsVideoGuardSawFreshContainer = false;
+  let commentsVideoGuardGeneration = 0;
+  let commentsVideoGuardSourceVideoId = "";
+  let commentsVideoGuardDestinationVideoId = "";
+  let commentsVideoGuardTrackedVideoId = "";
+  let preNavigationCommentNodes = new Set();
+  const pendingStaleCommentContainers = new Set();
+  const commentsVideoGuardRecoveryTimers = new Map();
+  const commentsVideoGuardScheduledDelays = new Set();
 
   const isWatchPath = () =>
     location.pathname === "/watch" || location.pathname.startsWith("/live/");
@@ -173,19 +190,148 @@
     return "";
   };
 
-  const getCommentsVideoId = (comments) => {
-    if (!comments) return "";
+  const isRenderedElement = (element) => {
+    if (
+      !element?.isConnected ||
+      element.hidden ||
+      element.getAttribute("aria-hidden") === "true"
+    ) {
+      return false;
+    }
 
-    for (const link of comments.querySelectorAll(COMMENT_VIDEO_LINK_SELECTOR)) {
+    try {
+      const style = getComputedStyle(element);
+      if (
+        style.display === "none" ||
+        style.visibility === "hidden" ||
+        style.visibility === "collapse"
+      ) {
+        return false;
+      }
+    } catch {
+      return false;
+    }
+
+    return (
+      typeof element.getClientRects !== "function" ||
+      element.getClientRects().length > 0
+    );
+  };
+
+  const readPlayerVideoId = (player) => {
+    try {
+      return player?.getVideoData?.()?.video_id || "";
+    } catch {
+      return "";
+    }
+  };
+
+  const getActivePlayer = () => {
+    const players = Array.from(
+      document.querySelectorAll('[id="movie_player"]'),
+    );
+    const renderedPlayers = players.filter(isRenderedElement);
+    const currentVideoId = getCurrentVideoId();
+
+    return (
+      renderedPlayers.find(
+        (player) => readPlayerVideoId(player) === currentVideoId,
+      ) ||
+      renderedPlayers[0] ||
+      players.find(
+        (player) =>
+          player.isConnected && readPlayerVideoId(player) === currentVideoId,
+      ) ||
+      players.find((player) => player.isConnected) ||
+      null
+    );
+  };
+
+  const getPlayerVideoId = () => readPlayerVideoId(getActivePlayer());
+
+  const getFlexyVideoId = (flexy, urlVideoId = "", playerVideoId = "") => {
+    try {
+      const dataVideoId =
+        flexy?.data?.playerResponse?.videoDetails?.videoId || "";
+      const attributeVideoId = flexy?.getAttribute("video-id") || "";
+
+      if (
+        dataVideoId &&
+        attributeVideoId &&
+        dataVideoId !== attributeVideoId &&
+        urlVideoId &&
+        urlVideoId === playerVideoId
+      ) {
+        if (attributeVideoId === urlVideoId) return attributeVideoId;
+        if (dataVideoId === urlVideoId) return dataVideoId;
+      }
+
+      return dataVideoId || attributeVideoId;
+    } catch {
+      return "";
+    }
+  };
+
+  const isRenderedWatchFlexy = (flexy) => isRenderedElement(flexy);
+
+  const getActiveWatchFlexy = () => {
+    const playerFlexy = getActivePlayer()?.closest("ytd-watch-flexy");
+    if (isRenderedWatchFlexy(playerFlexy)) return playerFlexy;
+
+    const placeholderFlexy = document
+      .getElementById(SCROLL_PLAYER_PLACEHOLDER_ID)
+      ?.closest("ytd-watch-flexy");
+    if (isRenderedWatchFlexy(placeholderFlexy)) return placeholderFlexy;
+
+    const flexies = Array.from(document.querySelectorAll("ytd-watch-flexy"));
+    return (
+      flexies.find(isRenderedWatchFlexy) ||
+      (playerFlexy?.isConnected ? playerFlexy : null) ||
+      (placeholderFlexy?.isConnected ? placeholderFlexy : null) ||
+      flexies.find((flexy) => flexy.isConnected) ||
+      null
+    );
+  };
+
+  const destinationVideoIdentityIsCoherent = (destinationVideoId) => {
+    const currentVideoId = getCurrentVideoId();
+    const playerVideoId = getPlayerVideoId();
+    const flexyVideoId = getFlexyVideoId(
+      getActiveWatchFlexy(),
+      currentVideoId,
+      playerVideoId,
+    );
+    return Boolean(
+      destinationVideoId &&
+        currentVideoId === destinationVideoId &&
+        playerVideoId &&
+        flexyVideoId &&
+        currentVideoId === playerVideoId &&
+        playerVideoId === flexyVideoId,
+    );
+  };
+
+  const getCommentsVideoIds = (comments) => {
+    const videoIds = new Set();
+    if (!comments) return videoIds;
+
+    for (const link of comments.querySelectorAll(COMMENT_PERMALINK_LINK_SELECTOR)) {
+      const publishedTime = link.matches?.("#published-time-text")
+        ? link
+        : link.closest?.("#published-time-text");
+      if (!publishedTime || !link.closest?.(COMMENT_RENDERER_SELECTOR)) {
+        continue;
+      }
+
       try {
         const videoId = new URL(
           link.href || link.getAttribute("href"),
           location.origin,
         ).searchParams.get("v");
-        if (videoId) return videoId;
+        if (videoId) videoIds.add(videoId);
       } catch {}
     }
-    return "";
+    return videoIds;
   };
 
   const getCommentContainers = (root = document) => {
@@ -201,35 +347,261 @@
     return containers;
   };
 
-  const markCurrentCommentsStale = () => {
-    commentsVideoGuardPending = true;
-    getCommentContainers(document).forEach((comments) =>
-      comments.setAttribute(STALE_COMMENTS_ATTRIBUTE, "1"),
+  const getRenderedCommentNodes = (comments) =>
+    new Set(comments.querySelectorAll(COMMENT_RENDERER_SELECTOR));
+
+  const cancelCommentsVideoGuardRecovery = () => {
+    commentsVideoGuardRecoveryTimers.forEach((timerId) =>
+      clearTimeout(timerId),
     );
+    commentsVideoGuardRecoveryTimers.clear();
+    commentsVideoGuardScheduledDelays.clear();
+  };
+
+  const clearDisconnectedPendingCommentContainers = () => {
+    pendingStaleCommentContainers.forEach((comments) => {
+      if (!comments.isConnected) pendingStaleCommentContainers.delete(comments);
+    });
+  };
+
+  const finishCommentsVideoGuardIfComplete = () => {
+    clearDisconnectedPendingCommentContainers();
+    if (
+      !commentsVideoGuardSawFreshContainer ||
+      pendingStaleCommentContainers.size
+    ) {
+      return false;
+    }
+
+    commentsVideoGuardPending = false;
+    commentsVideoGuardSawFreshContainer = false;
+    commentsVideoGuardSourceVideoId = "";
+    commentsVideoGuardDestinationVideoId = "";
+    commentsVideoGuardTrackedVideoId = getCurrentVideoId();
+    preNavigationCommentNodes = new Set();
+    cancelCommentsVideoGuardRecovery();
+    return true;
+  };
+
+  const preNavigationCommentNodesAreDetached = (comments) => {
+    return Array.from(preNavigationCommentNodes).every(
+      (node) => !node.isConnected || !comments.contains(node),
+    );
+  };
+
+  const preNavigationCommentNodesMatchDestination = (
+    comments,
+    destinationVideoId,
+  ) => {
+    return Array.from(preNavigationCommentNodes).every((node) => {
+      if (!node.isConnected || !comments.contains(node)) return true;
+
+      const nodeVideoIds = getCommentsVideoIds(node);
+      return Boolean(
+        destinationVideoId &&
+          nodeVideoIds.size &&
+          Array.from(nodeVideoIds).every(
+            (videoId) => videoId === destinationVideoId,
+          ),
+      );
+    });
+  };
+
+  const guardCommentsAsStale = (comments) => {
+    comments.setAttribute(STALE_COMMENTS_ATTRIBUTE, "1");
+    pendingStaleCommentContainers.add(comments);
+    commentsVideoGuardPending = true;
+  };
+
+  const resetCommentsVideoGuard = (
+    trackedVideoId = getCurrentVideoId(),
+  ) => {
+    commentsVideoGuardGeneration += 1;
+    cancelCommentsVideoGuardRecovery();
+    commentsVideoGuardPending = false;
+    commentsVideoGuardSawFreshContainer = false;
+    commentsVideoGuardSourceVideoId = "";
+    commentsVideoGuardDestinationVideoId = "";
+    commentsVideoGuardTrackedVideoId = trackedVideoId;
+    preNavigationCommentNodes = new Set();
+    pendingStaleCommentContainers.clear();
+    getCommentContainers(document).forEach((comments) =>
+      comments.removeAttribute(STALE_COMMENTS_ATTRIBUTE),
+    );
+  };
+
+  const bindCommentsVideoGuardDestination = () => {
+    if (!commentsVideoGuardPending || !isWatchPath()) return "";
+
+    const currentVideoId = getCurrentVideoId();
+    if (!currentVideoId) return "";
+
+    if (
+      commentsVideoGuardSourceVideoId === currentVideoId &&
+      destinationVideoIdentityIsCoherent(currentVideoId)
+    ) {
+      resetCommentsVideoGuard();
+      return currentVideoId;
+    }
+
+    if (!commentsVideoGuardDestinationVideoId) {
+      commentsVideoGuardDestinationVideoId = currentVideoId;
+    }
+    return commentsVideoGuardDestinationVideoId === currentVideoId
+      ? currentVideoId
+      : "";
+  };
+
+  const scheduleCommentsVideoGuardRecovery = () => {
+    const destinationVideoId = commentsVideoGuardDestinationVideoId;
+    if (
+      !commentsVideoGuardPending ||
+      !isWatchPath() ||
+      !destinationVideoId ||
+      getCurrentVideoId() !== destinationVideoId
+    ) {
+      return;
+    }
+
+    const generation = commentsVideoGuardGeneration;
+    COMMENTS_VIDEO_GUARD_CHECK_DELAYS_MS.forEach((delay) => {
+      if (commentsVideoGuardScheduledDelays.has(delay)) return;
+
+      commentsVideoGuardScheduledDelays.add(delay);
+      const timerId = setTimeout(() => {
+        commentsVideoGuardRecoveryTimers.delete(delay);
+        if (
+          generation !== commentsVideoGuardGeneration ||
+          !commentsVideoGuardPending ||
+          !isWatchPath() ||
+          getCurrentVideoId() !== destinationVideoId
+        ) {
+          return;
+        }
+
+        syncCommentsVideoGuard();
+      }, delay);
+      commentsVideoGuardRecoveryTimers.set(delay, timerId);
+    });
+  };
+
+  const beginCommentsVideoGuard = ({
+    sourceVideoId = commentsVideoGuardTrackedVideoId || getCurrentVideoId(),
+    destinationVideoId = "",
+  } = {}) => {
+    commentsVideoGuardGeneration += 1;
+    cancelCommentsVideoGuardRecovery();
+    commentsVideoGuardPending = true;
+    commentsVideoGuardSawFreshContainer = false;
+    commentsVideoGuardSourceVideoId = sourceVideoId;
+    commentsVideoGuardDestinationVideoId = destinationVideoId;
+    preNavigationCommentNodes = new Set();
+    pendingStaleCommentContainers.clear();
+    getCommentContainers(document).forEach((comments) => {
+      getRenderedCommentNodes(comments).forEach((node) =>
+        preNavigationCommentNodes.add(node),
+      );
+      comments.setAttribute(STALE_COMMENTS_ATTRIBUTE, "1");
+      pendingStaleCommentContainers.add(comments);
+    });
+  };
+
+  const markCurrentCommentsStale = () => beginCommentsVideoGuard();
+
+  const alignCommentsVideoGuardToCurrentUrl = () => {
+    const currentVideoId = getCurrentVideoId();
+    if (!currentVideoId) return false;
+    if (!commentsVideoGuardTrackedVideoId) {
+      commentsVideoGuardTrackedVideoId = currentVideoId;
+      return false;
+    }
+    if (currentVideoId === commentsVideoGuardTrackedVideoId) return false;
+
+    if (
+      commentsVideoGuardPending &&
+      !commentsVideoGuardDestinationVideoId
+    ) {
+      commentsVideoGuardDestinationVideoId = currentVideoId;
+      return true;
+    }
+
+    if (
+      commentsVideoGuardPending &&
+      commentsVideoGuardDestinationVideoId === currentVideoId
+    ) {
+      return false;
+    }
+
+    beginCommentsVideoGuard({
+      sourceVideoId: commentsVideoGuardTrackedVideoId,
+      destinationVideoId: currentVideoId,
+    });
+    return true;
   };
 
   const syncCommentsVideoGuard = (root = document) => {
     const currentVideoId = getCurrentVideoId();
-    if (!currentVideoId) commentsVideoGuardPending = false;
+    if (!currentVideoId) {
+      resetCommentsVideoGuard();
+      return;
+    }
+
+    alignCommentsVideoGuardToCurrentUrl();
 
     getCommentContainers(root).forEach((comments) => {
-      if (!currentVideoId) {
-        comments.removeAttribute(STALE_COMMENTS_ATTRIBUTE);
-        return;
-      }
+      const commentsVideoIds = getCommentsVideoIds(comments);
+      if (!commentsVideoIds.size) {
+        const guarded =
+          commentsVideoGuardPending ||
+          pendingStaleCommentContainers.has(comments) ||
+          comments.getAttribute(STALE_COMMENTS_ATTRIBUTE) === "1";
+        if (!guarded) return;
 
-      const commentsVideoId = getCommentsVideoId(comments);
-      if (!commentsVideoId) {
-        if (commentsVideoGuardPending) {
-          comments.setAttribute(STALE_COMMENTS_ATTRIBUTE, "1");
+        if (
+          destinationVideoIdentityIsCoherent(
+            commentsVideoGuardDestinationVideoId,
+          ) &&
+          preNavigationCommentNodesAreDetached(comments)
+        ) {
+          comments.removeAttribute(STALE_COMMENTS_ATTRIBUTE);
+          pendingStaleCommentContainers.delete(comments);
+          commentsVideoGuardSawFreshContainer = true;
+        } else {
+          guardCommentsAsStale(comments);
         }
         return;
       }
 
-      const stale = commentsVideoId !== currentVideoId;
+      const expectedVideoId = commentsVideoGuardPending
+        ? commentsVideoGuardDestinationVideoId
+        : currentVideoId;
+      const stale =
+        !expectedVideoId ||
+        currentVideoId !== expectedVideoId ||
+        !preNavigationCommentNodesMatchDestination(
+          comments,
+          expectedVideoId,
+        ) ||
+        Array.from(commentsVideoIds).some(
+          (commentsVideoId) => commentsVideoId !== expectedVideoId,
+        );
       comments.toggleAttribute(STALE_COMMENTS_ATTRIBUTE, stale);
-      if (!stale) commentsVideoGuardPending = false;
+      if (stale) {
+        if (!commentsVideoGuardPending) {
+          beginCommentsVideoGuard({
+            sourceVideoId: "",
+            destinationVideoId: currentVideoId,
+          });
+        }
+        guardCommentsAsStale(comments);
+      } else {
+        pendingStaleCommentContainers.delete(comments);
+        commentsVideoGuardSawFreshContainer = true;
+      }
     });
+
+    finishCommentsVideoGuardIfComplete();
+    if (commentsVideoGuardPending) scheduleCommentsVideoGuardRecovery();
   };
 
   const clearUploaderPathsFallback = () => {
@@ -611,6 +983,16 @@ yt-comment-view-model #header-author-badges {
 
     for (const mutation of mutations) {
       if (mutation.type === "attributes") {
+        if (
+          mutation.attributeName === "video-id" &&
+          mutation.target === getActiveWatchFlexy()
+        ) {
+          bindCommentsVideoGuardDestination();
+          syncCommentsVideoGuard();
+          scheduleCommentsVideoGuardRecovery();
+          continue;
+        }
+
         collectCommentsVideoGuardRoots(
           commentsVideoGuardRoots,
           mutation.target,
@@ -651,7 +1033,7 @@ yt-comment-view-model #header-author-badges {
     if (observing || !isWatchPath()) return;
 
     observer.observe(document.documentElement, {
-      attributeFilter: ["href"],
+      attributeFilter: ["href", "video-id"],
       attributes: true,
       childList: true,
       subtree: true,
@@ -677,6 +1059,7 @@ yt-comment-view-model #header-author-badges {
     stopObserving();
     pendingApplyRoots.clear();
     invalidateUploaderPaths();
+    resetCommentsVideoGuard();
   };
 
   if (isWatchPath()) markUploaderPathsReady();
@@ -685,7 +1068,11 @@ yt-comment-view-model #header-author-badges {
   window.addEventListener(
     "yt-navigate-start",
     () => {
-      markCurrentCommentsStale();
+      if (isWatchPath()) {
+        markCurrentCommentsStale();
+      } else {
+        resetCommentsVideoGuard();
+      }
       invalidateUploaderPaths();
     },
     true,
@@ -695,7 +1082,9 @@ yt-comment-view-model #header-author-badges {
     "yt-navigate-finish",
     () => {
       syncRouteState();
+      bindCommentsVideoGuardDestination();
       syncCommentsVideoGuard();
+      scheduleCommentsVideoGuardRecovery();
       scheduleUploaderPathsFallback();
     },
     true,
@@ -707,7 +1096,9 @@ yt-comment-view-model #header-author-badges {
       if (!isWatchPath()) return;
 
       markUploaderPathsReady();
+      bindCommentsVideoGuardDestination();
       syncCommentsVideoGuard();
+      scheduleCommentsVideoGuardRecovery();
       scheduleApply(document.querySelector("ytd-comments") || document);
       scheduleDelayedApply();
     },
@@ -723,10 +1114,14 @@ yt-comment-view-model #header-author-badges {
         invalidateUploaderPaths();
       }
       syncRouteState();
+      bindCommentsVideoGuardDestination();
       syncCommentsVideoGuard();
+      scheduleCommentsVideoGuardRecovery();
     },
     true,
   );
+
+  window.addEventListener("pagehide", () => resetCommentsVideoGuard(""), true);
 
   GM_addStyle(buildCss());
   syncCommentsVideoGuard();

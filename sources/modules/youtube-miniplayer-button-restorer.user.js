@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         YouTube Miniplayer Button Restorer
 // @namespace    Citizen.youtube.miniplayer-button-restorer
-// @version      1.4
+// @version      1.6
 // @description  Restores a Miniplayer button to YouTube watch and live player controls, falling back to the native miniplayer shortcut when needed.
 // @author       Citizen
 // @homepageURL  https://github.com/Ci303/youtube-miniplayer-button-restorer
@@ -91,8 +91,68 @@
     return null;
   }
 
+  function isRenderedWatchFlexy(flexy) {
+    if (
+      !flexy?.isConnected ||
+      flexy.hidden ||
+      flexy.getAttribute("aria-hidden") === "true"
+    ) {
+      return false;
+    }
+
+    try {
+      const style = getComputedStyle(flexy);
+      if (
+        style.display === "none" ||
+        style.visibility === "hidden" ||
+        style.visibility === "collapse"
+      ) {
+        return false;
+      }
+    } catch {
+      return false;
+    }
+
+    return (
+      typeof flexy.getClientRects !== "function" ||
+      flexy.getClientRects().length > 0
+    );
+  }
+
+  function getActiveWatchFlexy() {
+    const playerFlexy = document
+      .querySelector("#movie_player")
+      ?.closest?.("ytd-watch-flexy");
+    if (playerFlexy?.isConnected) return playerFlexy;
+
+    const placeholderFlexy = document
+      .querySelector("#ytsmp-player-placeholder")
+      ?.closest?.("ytd-watch-flexy");
+    if (placeholderFlexy?.isConnected) return placeholderFlexy;
+
+    const flexies = Array.from(document.querySelectorAll("ytd-watch-flexy"));
+    return (
+      flexies.find(isRenderedWatchFlexy) ||
+      flexies.find((flexy) => flexy.isConnected) ||
+      null
+    );
+  }
+
   function getPlayerEl() {
-    return queryFirst(PLAYER_SELECTORS);
+    const floatedPlayer = document.body?.classList.contains(
+      "ytsmp-scroll-miniplayer-active",
+    )
+      ? Array.from(document.body.children).find((child) =>
+          PLAYER_SELECTORS.some((selector) => child.matches?.(selector)),
+        )
+      : null;
+    if (floatedPlayer) return floatedPlayer;
+
+    const activeFlexy = getActiveWatchFlexy();
+    return (
+      (activeFlexy && queryFirst(PLAYER_SELECTORS, activeFlexy)) ||
+      queryFirst(PLAYER_SELECTORS)
+    );
   }
 
   function getRightControls() {
@@ -292,6 +352,7 @@
     ensureStyles();
     if (installOnce()) {
       clearPoll();
+      clearInstallAttempts();
       return;
     }
     pollUntilInstalled();
@@ -329,7 +390,10 @@
     if (isButtonInstalled()) return;
 
     for (const m of muts) {
-      if (m.addedNodes && m.addedNodes.length) {
+      if (
+        (m.addedNodes && m.addedNodes.length) ||
+        (m.removedNodes && m.removedNodes.length)
+      ) {
         debounceInstall(150);
         break;
       }
@@ -367,6 +431,13 @@
 
   window.addEventListener("yt-navigate-finish", onNavigate);
   window.addEventListener("yt-page-data-updated", onNavigate);
+  window.addEventListener("pagehide", () => {
+    clearTimeout(debTimer);
+    debTimer = 0;
+    clearInstallAttempts();
+    clearPoll();
+    stopObserve();
+  });
   window.addEventListener("pageshow", onNavigate);
 
   ensureStyles();
