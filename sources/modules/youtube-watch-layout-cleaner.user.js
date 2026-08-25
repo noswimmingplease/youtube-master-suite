@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         YouTube Watch Layout Cleaner
 // @namespace    Citizen.youtube.watch-layout-cleaner
-// @version      1.27
-// @description  Expands YouTube watch pages, keeps the right rail fixed at SponsorBlock-friendly width, and widens metadata/comments.
+// @version      1.29
+// @description  Expands YouTube watch pages, keeps the right rail fixed at SponsorBlock-friendly width, preserves its visible popup, and widens metadata/comments.
 // @author       Citizen
 // @homepageURL  https://github.com/Ci303/youtube-watch-layout-cleaner
 // @supportURL   https://github.com/Ci303/youtube-watch-layout-cleaner/issues
@@ -50,6 +50,10 @@
       `${panelSelector} [${QUEUE_THUMBNAIL_FALLBACK_ATTRIBUTE}="1"]`,
   ).join(",\n");
   const EMPTY_SECONDARY_RAIL_ATTRIBUTE = "data-ywlc-empty-secondary-rail";
+  const AUXILIARY_RAIL_SURFACE_SELECTOR = [
+    "#sponsorBlockPopupContainer",
+    "#sponsorBlockPopupContainer iframe",
+  ].join(",");
   const CHAT_SURFACE_SELECTOR = [
     "ytd-live-chat-frame#chat",
     'ytd-engagement-panel-section-list-renderer[target-id="engagement-panel-live-chat"]',
@@ -63,6 +67,7 @@
     "#related",
     "#secondary",
     "#secondary-inner",
+    AUXILIARY_RAIL_SURFACE_SELECTOR,
   ].join(",");
   const QUEUE_ITEM_MUTATION_ATTRIBUTES = [
     "aria-current",
@@ -394,6 +399,17 @@ ${QUEUE_THUMBNAIL_FALLBACK_STYLE_SELECTOR} {
     );
   }
 
+  function isActiveAuxiliaryRailSurface(surface) {
+    if (
+      isElementOrAncestorHidden(surface, surface.closest("ytd-watch-flexy"))
+    ) {
+      return false;
+    }
+
+    const bounds = surface.getBoundingClientRect();
+    return bounds.width > 0 && bounds.height > 0;
+  }
+
   function reconcileSecondaryRailState() {
     railStateReconciliationFrame = 0;
     document.querySelectorAll("ytd-watch-flexy").forEach((watchFlexy) => {
@@ -413,8 +429,17 @@ ${QUEUE_THUMBNAIL_FALLBACK_STYLE_SELECTOR} {
         Array.from(
           watchFlexy.querySelectorAll(PLAYLIST_PANEL_SELECTOR),
         ).some(isActiveQueuePanel);
+      const auxiliarySurfaceVisible =
+        eligible &&
+        Array.from(
+          watchFlexy.querySelectorAll(AUXILIARY_RAIL_SURFACE_SELECTOR),
+        ).some(isActiveAuxiliaryRailSurface);
       const railIsEmpty =
-        eligible && relatedHidden && !chatVisible && !queueVisible;
+        eligible &&
+        relatedHidden &&
+        !chatVisible &&
+        !queueVisible &&
+        !auxiliarySurfaceVisible;
 
       if (railIsEmpty) {
         watchFlexy.setAttribute(EMPTY_SECONDARY_RAIL_ATTRIBUTE, "1");
@@ -504,6 +529,9 @@ ${QUEUE_THUMBNAIL_FALLBACK_STYLE_SELECTOR} {
 
     if (mutation.type !== "childList") return false;
     const changedNodes = [...mutation.addedNodes, ...mutation.removedNodes];
+    if (element.closest(AUXILIARY_RAIL_SURFACE_SELECTOR)) {
+      return true;
+    }
     if (element.closest(`${CHAT_SURFACE_SELECTOR}, #chat-container`)) {
       return true;
     }
@@ -532,6 +560,9 @@ ${QUEUE_THUMBNAIL_FALLBACK_STYLE_SELECTOR} {
         isSecondaryRailMutationAnchor(target);
       const isDiscoveryTarget = isDiscoveryMutationTarget(target);
       const isPlaylistPanel = target.matches(PLAYLIST_PANEL_SELECTOR);
+      const isAuxiliaryRailSurface = target.matches(
+        AUXILIARY_RAIL_SURFACE_SELECTOR,
+      );
       return [
         target,
         isSecondaryRailAnchor
@@ -548,6 +579,13 @@ ${QUEUE_THUMBNAIL_FALLBACK_STYLE_SELECTOR} {
           : isPlaylistPanel
           ? {
               attributeFilter: PANEL_MUTATION_ATTRIBUTES,
+              attributes: true,
+              childList: true,
+              subtree: true,
+            }
+          : isAuxiliaryRailSurface
+          ? {
+              attributeFilter: SURFACE_STATE_MUTATION_ATTRIBUTES,
               attributes: true,
               childList: true,
               subtree: true,

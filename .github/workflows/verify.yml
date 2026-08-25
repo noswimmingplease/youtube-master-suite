@@ -38,7 +38,7 @@ jobs:
           node refresh-source-lock.mjs --self-test
           node verify-master.mjs --self-test
           node verify-installed-master.mjs --self-test
-          node --test tests/navigation-guards.test.mjs
+          node --test tests
 
       - name: Run repository verifier
         env:
@@ -70,7 +70,9 @@ jobs:
           node --check refresh-source-lock.mjs
           node --check verify-installed-master.mjs
           node --check verify-master.mjs
-          node --check tests/navigation-guards.test.mjs
+          for test_file in tests/*.test.mjs; do
+            node --check "$test_file"
+          done
           node --check youtube-master-suite.user.js
           for source in sources/modules/*.user.js; do
             node --check "$source"
