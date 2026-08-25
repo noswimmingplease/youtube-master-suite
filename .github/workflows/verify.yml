@@ -38,7 +38,7 @@ jobs:
           node refresh-source-lock.mjs --self-test
           node verify-master.mjs --self-test
           node verify-installed-master.mjs --self-test
-          node --test tests
+          node --test tests/*.test.mjs
 
       - name: Run repository verifier
         env:

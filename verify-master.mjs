@@ -10,6 +10,10 @@ const userscriptPath = join(suiteDirectory, "youtube-master-suite.user.js");
 const manualCopyPath = join(suiteDirectory, "youtube-master-suite.txt");
 const releaseManifestPath = join(suiteDirectory, "release-manifest.json");
 const sourceLockPath = join(suiteDirectory, "sources.lock.json");
+const testPaths = readdirSync(join(suiteDirectory, "tests"))
+  .filter((name) => name.endsWith(".test.mjs"))
+  .sort()
+  .map((name) => join(suiteDirectory, "tests", name));
 
 const VERIFY_USAGE =
   "Usage: node verify-master.mjs [--release] [--base <git-ref>] | --self-test";
@@ -239,7 +243,8 @@ function verifySharedRuntimeContracts(moduleId, source) {
 }
 
 run(process.execPath, ["build-master.mjs", "--check"]);
-run(process.execPath, ["--test", "tests"]);
+assert(testPaths.length > 0, "No test files found");
+run(process.execPath, ["--test", ...testPaths]);
 run(process.execPath, ["--check", userscriptPath]);
 
 const userscript = readFileSync(userscriptPath, "utf8");
