@@ -10,6 +10,10 @@ const userscriptPath = join(suiteDirectory, "youtube-master-suite.user.js");
 const manualCopyPath = join(suiteDirectory, "youtube-master-suite.txt");
 const releaseManifestPath = join(suiteDirectory, "release-manifest.json");
 const sourceLockPath = join(suiteDirectory, "sources.lock.json");
+const testPaths = readdirSync(join(suiteDirectory, "tests"))
+  .filter((name) => name.endsWith(".test.mjs"))
+  .sort()
+  .map((name) => join(suiteDirectory, "tests", name));
 
 const VERIFY_USAGE =
   "Usage: node verify-master.mjs [--release] [--base <git-ref>] | --self-test";
@@ -239,7 +243,8 @@ function verifySharedRuntimeContracts(moduleId, source) {
 }
 
 run(process.execPath, ["build-master.mjs", "--check"]);
-run(process.execPath, ["--test", "tests/navigation-guards.test.mjs"]);
+assert(testPaths.length > 0, "No test files found");
+run(process.execPath, ["--test", ...testPaths]);
 run(process.execPath, ["--check", userscriptPath]);
 
 const userscript = readFileSync(userscriptPath, "utf8");
@@ -390,18 +395,23 @@ for (const watchLayoutRequirement of [
   '"ytd-playlist-panel-renderer"',
   '"yt-playlist-panel-renderer"',
   'const EMPTY_SECONDARY_RAIL_ATTRIBUTE = "data-ywlc-empty-secondary-rail"',
+  '"#sponsorBlockPopupContainer"',
+  '"#sponsorBlockPopupContainer iframe"',
   "function reconcileSecondaryRailState()",
   "function getRailMutationTargets()",
   'const secondary = watchFlexy.querySelector("#secondary")',
   "targets.add(secondary || watchFlexy);",
   "if (secondary?.parentElement)",
   "function isSecondaryRailMutationAnchor(target)",
+  "function isActiveAuxiliaryRailSurface(surface)",
   "function refreshRailMutationObserver()",
   "replaceObserverRegistrations(railMutationObserver, registrations);",
   "const DISCOVERY_MUTATION_ATTRIBUTES = [",
   "const SURFACE_STATE_MUTATION_ATTRIBUTES = [",
   "const railIsEmpty =",
-  "eligible && relatedHidden && !chatVisible && !queueVisible",
+  "!auxiliarySurfaceVisible",
+  "element.closest(AUXILIARY_RAIL_SURFACE_SELECTOR)",
+  "const isAuxiliaryRailSurface = target.matches(",
 ]) {
   assert(
     watchLayoutSource.includes(watchLayoutRequirement),
@@ -1180,6 +1190,56 @@ assert.match(
   /function setWatchActionHidden\(actionElement, hidden\) \{[\s\S]+?if \(!actionElement\.hidden\) \{\s+actionElement\.hidden = true;[\s\S]+?if \(actionElement\.hidden\) \{\s+actionElement\.hidden = false;/,
   "Player Preferences watch-action writes must remain idempotent",
 );
+assert.match(
+  playerPreferencesSource,
+  /function applyRydIconLeadingClasses\(button\) \{[\s\S]+?iconButtonClasses\.some\([\s\S]{0,120}?button\.classList\.contains\(className\)[\s\S]+?button\.classList\.remove\(\.\.\.iconButtonClasses\);[\s\S]+?iconLeadingClasses\.some\([\s\S]{0,120}?!button\.classList\.contains\(className\)[\s\S]+?button\.classList\.add\(\.\.\.iconLeadingClasses\);/,
+  "Player Preferences RYD class writes must not retrigger its class observer once stable",
+);
+for (const surfaceRoutingRequirement of [
+  "function rootIntersectsSurface(root, selector)",
+  "TOPBAR_DYNAMIC_MUTATION_SURFACE_SELECTOR",
+  "FEED_DYNAMIC_MUTATION_SURFACE_SELECTOR",
+  "SHORTS_DYNAMIC_MUTATION_SURFACE_SELECTOR",
+  "WATCH_PRIMARY_ACTION_MUTATION_SURFACE_SELECTOR",
+  "WATCH_INFO_TEXT_SELECTOR",
+  "WATCH_DESCRIPTION_MUTATION_SURFACE_SELECTOR",
+  "WATCH_ACTION_MENU_MUTATION_SURFACE_SELECTOR",
+]) {
+  assert(
+    playerPreferencesSource.includes(surfaceRoutingRequirement),
+    `Missing Player Preferences surface-routing requirement: ${surfaceRoutingRequirement}`,
+  );
+}
+assert.match(
+  playerPreferencesSource,
+  /function applyDynamicPreferences\(root = document\) \{[\s\S]+?rootIntersectsSurface\(root, TOPBAR_DYNAMIC_MUTATION_SURFACE_SELECTOR\)[\s\S]+?rootIntersectsSurface\(root, SHORTS_DYNAMIC_MUTATION_SURFACE_SELECTOR\)[\s\S]+?rootIntersectsSurface\(root, FEED_DYNAMIC_MUTATION_SURFACE_SELECTOR\)[\s\S]+?WATCH_PRIMARY_ACTION_MUTATION_SURFACE_SELECTOR[\s\S]+?rootIntersectsSurface\(root, WATCH_INFO_TEXT_SELECTOR\)[\s\S]+?WATCH_DESCRIPTION_MUTATION_SURFACE_SELECTOR[\s\S]+?WATCH_ACTION_MENU_MUTATION_SURFACE_SELECTOR/,
+  "Player Preferences ordinary mutations must be routed to feature-specific handlers",
+);
+assert.match(
+  playerPreferencesSource,
+  /const WATCH_PRIMARY_ACTION_MUTATION_SURFACE_SELECTOR = \[[\s\S]{0,240}?RYD_LIKE_BUTTON_SELECTOR,[\s\S]{0,80}?RYD_DISLIKE_BUTTON_SELECTOR,[\s\S]{0,80}?\]\.join\(","\);/,
+  "Player Preferences must observe every supported late RYD action surface",
+);
+assert.match(
+  playerPreferencesSource,
+  /function getFeedApplyRoot\(root\) \{[\s\S]+?closestElement\(applyRoot, UPCOMING_STREAM_SCAN_SELECTOR\)[\s\S]+?function applyDynamicPreferences[\s\S]+?const feedApplyRoot = getFeedApplyRoot\(root\);[\s\S]+?hideUpcomingStreams\(feedApplyRoot\);[\s\S]+?hidePayToWatchCards\(feedApplyRoot\);[\s\S]+?hideWatchedVideos\(feedApplyRoot\);/,
+  "Player Preferences feed filters must reconcile the enclosing card surface",
+);
+assert.match(
+  playerPreferencesSource,
+  /function getWatchPrimaryActionApplyRoot\(root\) \{[\s\S]+?closestElement\(applyRoot, WATCH_PRIMARY_ACTION_CONTAINER_SELECTOR\)[\s\S]+?function applyDynamicPreferences[\s\S]+?const primaryActionApplyRoot = getWatchPrimaryActionApplyRoot\(root\);[\s\S]+?normaliseReturnYoutubeLikeButtons\(primaryActionApplyRoot\);[\s\S]+?normaliseReturnYoutubeDislikeButtons\(primaryActionApplyRoot\);[\s\S]+?hideWatchActionButtons\(primaryActionApplyRoot\);/,
+  "Player Preferences late RYD work must reconcile its enclosing primary-action menu",
+);
+assert.match(
+  playerPreferencesSource,
+  /function addContainedMutationRoots\(roots, root\) \{[\s\S]+?querySelectorAll\(DYNAMIC_MUTATION_SURFACE_SELECTOR\)[\s\S]+?const candidateSet = new Set\(candidates\);[\s\S]+?candidate\.parentElement\?\.closest\?\.[\s\S]+?!candidateSet\.has\(possibleAncestor\)[\s\S]+?addMutationRoot\(roots, candidate\);/,
+  "Player Preferences added wrappers must queue their outermost feature surfaces",
+);
+assert.doesNotMatch(
+  playerPreferencesSource,
+  /const DYNAMIC_MUTATION_SURFACE_SELECTOR = \[[\s\S]{0,600}?"ytd-watch-flexy ytd-watch-metadata"/,
+  "Player Preferences must not treat the whole watch-metadata tree as one dynamic surface",
+);
 const wheelHandlerIndex = playerPreferencesSource.indexOf(
   "function handleWheelVolume(event)",
 );
@@ -1450,12 +1510,7 @@ for (const coherenceRequirement of [
     `Missing page-coherence requirement: ${coherenceRequirement}`,
   );
 }
-assert.match(
-  userscript,
-  /:root\[\$\{STALE_ATTRIBUTE\}\] ytd-watch-metadata h1,[\s\S]+?:root\[\$\{STALE_ATTRIBUTE\}\] ytd-comments/,
-  "Confirmed stale identity content and comments must remain hidden",
-);
-for (const staleContentSelector of [
+for (const forbiddenStaleContentSelector of [
   ":root[${STALE_ATTRIBUTE}] ytd-watch-metadata h1,",
   ":root[${STALE_ATTRIBUTE}] ytd-watch-metadata #owner,",
   ":root[${STALE_ATTRIBUTE}] ytd-watch-metadata #bottom-row,",
@@ -1465,24 +1520,14 @@ for (const staleContentSelector of [
   ":root[${STALE_ATTRIBUTE}] ytd-comments {",
 ]) {
   assert(
-    userscript.includes(staleContentSelector),
-    `Missing targeted page-coherence selector: ${staleContentSelector}`,
+    !userscript.includes(forbiddenStaleContentSelector),
+    `Page Coherence must remain diagnostic-only: ${forbiddenStaleContentSelector}`,
   );
 }
 assert.doesNotMatch(
   userscript,
-  /:root\[\$\{STALE_ATTRIBUTE\}\] ytd-watch-metadata,\s*\n/,
-  "Page Coherence must not hide the metadata component containing native actions",
-);
-assert.doesNotMatch(
-  userscript,
-  /:root\[\$\{STALE_ATTRIBUTE\}\] ytd-video-primary-info-renderer,\s*\n/,
-  "Page Coherence must not hide the legacy primary-info action component",
-);
-assert.doesNotMatch(
-  userscript,
-  /:root\[\$\{STALE_ATTRIBUTE\}\][^\n{]*#actions/,
-  "Page Coherence must not hide YouTube's native action row",
+  /:root\[\$\{STALE_ATTRIBUTE\}\]/,
+  "Page Coherence must diagnose identity mismatches without styling page content",
 );
 for (const removedCoherenceUi of [
   'copyQueueButton.textContent = "Copy queue"',

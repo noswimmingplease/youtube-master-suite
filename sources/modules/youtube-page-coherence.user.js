@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         YouTube Page Coherence Guard
 // @namespace    Citizen.youtube.page-coherence
-// @version      1.7
-// @description  Detects incomplete YouTube queue navigation, hides stale identity content and comments, preserves native actions, and rechecks restored foreground pages.
+// @version      1.8
+// @description  Detects incomplete YouTube queue navigation, publishes identity diagnostics, and rechecks restored foreground pages without hiding native page content.
 // @author       Citizen
 // @license      GNU GPLv3
 // @homepageURL  https://github.com/Ci303/youtube-master-suite
@@ -24,7 +24,6 @@
     mismatchesBeforeWarning: 2,
     eventHistoryLimit: 20,
   });
-  const STYLE_ID = "yt-page-coherence-style";
   const STALE_ATTRIBUTE = "data-yt-master-page-stale";
   const STATE_ATTRIBUTE = "data-yt-master-state";
   const EVENTS_ATTRIBUTE = "data-yt-master-events";
@@ -536,25 +535,6 @@
     recordNavigationEvent("pageshow");
     scheduleChecks();
   };
-
-  const buildCss = () => `
-    :root[${STALE_ATTRIBUTE}] ytd-watch-metadata h1,
-    :root[${STALE_ATTRIBUTE}] ytd-watch-metadata #owner,
-    :root[${STALE_ATTRIBUTE}] ytd-watch-metadata #bottom-row,
-    :root[${STALE_ATTRIBUTE}] ytd-video-primary-info-renderer h1,
-    :root[${STALE_ATTRIBUTE}] ytd-video-primary-info-renderer #info-text,
-    :root[${STALE_ATTRIBUTE}] ytd-video-secondary-info-renderer {
-      display: none !important;
-    }
-
-    :root[${STALE_ATTRIBUTE}] ytd-comments {
-      visibility: hidden !important;
-      opacity: 0 !important;
-      pointer-events: none !important;
-    }
-  `;
-
-  GM_addStyle(buildCss());
 
   globalThis.__YT_MASTER_STATE__ = Object.freeze({
     check: runCoherenceCheck,

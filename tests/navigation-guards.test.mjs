@@ -594,6 +594,19 @@ function initialiseCommentCleanerWatch() {
   return { harness, watch };
 }
 
+test("Page Coherence diagnoses mismatches without hiding native page content", () => {
+  assert.doesNotMatch(
+    PAGE_COHERENCE_SOURCE,
+    /:root\[\$\{STALE_ATTRIBUTE\}\]/,
+    "the diagnostic stale marker must not drive visual hiding",
+  );
+  assert.doesNotMatch(
+    PAGE_COHERENCE_SOURCE,
+    /GM_addStyle\(buildCss\(\)\)/,
+    "the diagnostic module must not install a stale-content stylesheet",
+  );
+});
+
 test("Page Coherence clears a stale guard when the active flexy recovers late", () => {
   const harness = createHarness(
     PAGE_COHERENCE_SOURCE,

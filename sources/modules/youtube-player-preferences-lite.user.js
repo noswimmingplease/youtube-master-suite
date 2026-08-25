@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         YouTube Player Preferences Lite
 // @namespace    Citizen.youtube.player-preferences-lite
-// @version      1.44
+// @version      1.47
 // @description  Applies small YouTube player preferences without touching Enhancer-style miniplayer, queue, autoplay, or background playback controls.
 // @author       Citizen
 // @homepageURL  https://github.com/Ci303/youtube-player-preferences-lite
@@ -225,24 +225,6 @@
   const WATCH_ACTION_INLINE_BUTTON_RULES = [
     { configKey: "hideInlineSaveButton", label: "Save" },
   ];
-  const WATCH_ACTION_MUTATION_SELECTOR = [
-    "ytd-watch-flexy ytd-menu-renderer",
-    WATCH_ACTION_MENU_ITEM_SELECTOR,
-  ].join(",");
-  const DYNAMIC_MUTATION_SURFACE_SELECTOR = [
-    FEED_CARD_CONTAINER_SELECTOR,
-    "ytd-rich-grid-media",
-    "ytd-rich-grid-slim-media",
-    "yt-lockup-view-model",
-    "yt-lockup-view-model-wiz",
-    SHORTS_LINK_SELECTOR,
-    SHORTS_CONVERTED_LINK_SELECTOR,
-    TOPBAR_LOGO_RENDERER_SELECTOR,
-    WATCH_ACTION_MUTATION_SELECTOR,
-    "ytd-watch-flexy ytd-video-owner-renderer",
-    "ytd-watch-flexy ytd-watch-metadata",
-    "ytd-watch-flexy ytd-video-primary-info-renderer",
-  ].join(",");
   const WATCH_DYNAMIC_MUTATION_ROOT_SELECTOR = [
     "ytd-masthead",
     "ytd-watch-flexy ytd-watch-metadata",
@@ -363,6 +345,40 @@
   const WATCH_INFO_STATIC_TEXT_CLASS = "ytppl-watch-info-static-text";
   const WATCH_INFO_NATIVE_HIDDEN_ATTRIBUTE =
     "data-ytppl-watch-info-native-hidden";
+  const TOPBAR_DYNAMIC_MUTATION_SURFACE_SELECTOR = "ytd-masthead";
+  const FEED_DYNAMIC_MUTATION_SURFACE_SELECTOR = [
+    FEED_CARD_CONTAINER_SELECTOR,
+    "ytd-rich-grid-media",
+    "ytd-rich-grid-slim-media",
+    "yt-lockup-view-model",
+    "yt-lockup-view-model-wiz",
+  ].join(",");
+  const SHORTS_DYNAMIC_MUTATION_SURFACE_SELECTOR = [
+    SHORTS_LINK_SELECTOR,
+    SHORTS_CONVERTED_LINK_SELECTOR,
+  ].join(",");
+  const WATCH_PRIMARY_ACTION_CONTAINER_SELECTOR =
+    "ytd-watch-flexy ytd-menu-renderer";
+  const WATCH_PRIMARY_ACTION_MUTATION_SURFACE_SELECTOR = [
+    WATCH_PRIMARY_ACTION_CONTAINER_SELECTOR,
+    RYD_LIKE_BUTTON_SELECTOR,
+    RYD_DISLIKE_BUTTON_SELECTOR,
+  ].join(",");
+  const WATCH_ACTION_MENU_MUTATION_SURFACE_SELECTOR =
+    WATCH_ACTION_MENU_ITEM_SELECTOR;
+  const WATCH_DESCRIPTION_MUTATION_SURFACE_SELECTOR = [
+    DESCRIPTION_TEXT_ROOT_SELECTOR,
+    "ytd-watch-flexy ytd-video-primary-info-renderer",
+  ].join(",");
+  const DYNAMIC_MUTATION_SURFACE_SELECTOR = [
+    TOPBAR_DYNAMIC_MUTATION_SURFACE_SELECTOR,
+    FEED_DYNAMIC_MUTATION_SURFACE_SELECTOR,
+    SHORTS_DYNAMIC_MUTATION_SURFACE_SELECTOR,
+    WATCH_PRIMARY_ACTION_MUTATION_SURFACE_SELECTOR,
+    WATCH_ACTION_MENU_MUTATION_SURFACE_SELECTOR,
+    WATCH_INFO_TEXT_SELECTOR,
+    WATCH_DESCRIPTION_MUTATION_SURFACE_SELECTOR,
+  ].join(",");
   const QUALITY_LEVELS_HIGH_TO_LOW = [
     "highres",
     "hd4320",
@@ -662,7 +678,9 @@
       closestElement(card, FEED_CARD_CONTAINER_SELECTOR) || card;
 
     if (hidden) {
-      container.dataset[datasetKey] = "1";
+      if (container.dataset[datasetKey] !== "1") {
+        container.dataset[datasetKey] = "1";
+      }
     } else if (container.dataset[datasetKey] === "1") {
       delete container.dataset[datasetKey];
     } else {
@@ -976,14 +994,29 @@
   }
 
   function applyRydIconLeadingClasses(button) {
-    button.classList.remove(
+    const iconButtonClasses = [
       "ytSpecButtonShapeNextIconButton",
       "yt-spec-button-shape-next--icon-button",
-    );
-    button.classList.add(
+    ];
+    const iconLeadingClasses = [
       "ytSpecButtonShapeNextIconLeading",
       "yt-spec-button-shape-next--icon-leading",
-    );
+    ];
+
+    if (
+      iconButtonClasses.some((className) =>
+        button.classList.contains(className),
+      )
+    ) {
+      button.classList.remove(...iconButtonClasses);
+    }
+    if (
+      iconLeadingClasses.some(
+        (className) => !button.classList.contains(className),
+      )
+    ) {
+      button.classList.add(...iconLeadingClasses);
+    }
   }
 
   function hasRydIconGraphic(icon) {
@@ -1022,7 +1055,9 @@
 
   function setEmptyRydIconState(icon, empty) {
     if (empty) {
-      icon.setAttribute(EMPTY_RYD_ICON_ATTRIBUTE, "1");
+      if (icon.getAttribute(EMPTY_RYD_ICON_ATTRIBUTE) !== "1") {
+        icon.setAttribute(EMPTY_RYD_ICON_ATTRIBUTE, "1");
+      }
       return;
     }
 
@@ -1736,7 +1771,11 @@
 
   function setExpandedDescriptionCollapsed(expanded, collapsed) {
     if (collapsed) {
-      expanded.dataset[DESCRIPTION_EXPANDED_COLLAPSED_DATASET_KEY] = "1";
+      if (
+        expanded.dataset[DESCRIPTION_EXPANDED_COLLAPSED_DATASET_KEY] !== "1"
+      ) {
+        expanded.dataset[DESCRIPTION_EXPANDED_COLLAPSED_DATASET_KEY] = "1";
+      }
       setImportantStyleProperty(expanded, "display", "none");
       setImportantStyleProperty(expanded, "height", "0px");
       setImportantStyleProperty(expanded, "line-height", "0px");
@@ -1912,7 +1951,12 @@
     }
 
     if (nativeContainer) {
-      nativeContainer.setAttribute(WATCH_INFO_NATIVE_HIDDEN_ATTRIBUTE, "1");
+      if (
+        nativeContainer.getAttribute(WATCH_INFO_NATIVE_HIDDEN_ATTRIBUTE) !==
+        "1"
+      ) {
+        nativeContainer.setAttribute(WATCH_INFO_NATIVE_HIDDEN_ATTRIBUTE, "1");
+      }
     }
   }
 
@@ -2872,19 +2916,87 @@
     clearContextMenuSuppression();
   }
 
+  function rootIntersectsSurface(root, selector) {
+    if (!root || !selector) {
+      return false;
+    }
+    if (root === document || root.nodeType === Node.DOCUMENT_NODE) {
+      return true;
+    }
+
+    const applyRoot = getApplyRoot(root);
+    if (!applyRoot) {
+      return false;
+    }
+
+    return Boolean(
+      applyRoot.matches?.(selector) ||
+        applyRoot.closest?.(selector) ||
+        applyRoot.querySelector?.(selector),
+    );
+  }
+
+  function getFeedApplyRoot(root) {
+    const applyRoot = getApplyRoot(root);
+    return (
+      closestElement(applyRoot, UPCOMING_STREAM_SCAN_SELECTOR) || applyRoot
+    );
+  }
+
+  function getWatchPrimaryActionApplyRoot(root) {
+    const applyRoot = getApplyRoot(root);
+    return (
+      closestElement(applyRoot, WATCH_PRIMARY_ACTION_CONTAINER_SELECTOR) ||
+      applyRoot
+    );
+  }
+
   function applyDynamicPreferences(root = document) {
-    useStandardMastheadLogo(root);
-    clearLegacyHiddenWatchActionButtons(root);
-    rewriteShortsLinks(root);
-    hideUpcomingStreams(root);
-    hidePayToWatchCards(root);
-    hideWatchedVideos(root);
-    normaliseReturnYoutubeLikeButtons(root);
-    normaliseReturnYoutubeDislikeButtons(root);
-    normaliseWatchInfoText(root);
-    runDescriptionCleanup(root);
-    hideWatchActionButtons(root);
-    hideWatchActionMenuItems(root);
+    const fullPageApply =
+      root === document || root?.nodeType === Node.DOCUMENT_NODE;
+
+    if (rootIntersectsSurface(root, TOPBAR_DYNAMIC_MUTATION_SURFACE_SELECTOR)) {
+      useStandardMastheadLogo(root);
+    }
+    if (fullPageApply) {
+      clearLegacyHiddenWatchActionButtons(root);
+    }
+    if (rootIntersectsSurface(root, SHORTS_DYNAMIC_MUTATION_SURFACE_SELECTOR)) {
+      rewriteShortsLinks(root);
+    }
+    if (rootIntersectsSurface(root, FEED_DYNAMIC_MUTATION_SURFACE_SELECTOR)) {
+      const feedApplyRoot = getFeedApplyRoot(root);
+      hideUpcomingStreams(feedApplyRoot);
+      hidePayToWatchCards(feedApplyRoot);
+      hideWatchedVideos(feedApplyRoot);
+    }
+    if (
+      rootIntersectsSurface(
+        root,
+        WATCH_PRIMARY_ACTION_MUTATION_SURFACE_SELECTOR,
+      )
+    ) {
+      const primaryActionApplyRoot = getWatchPrimaryActionApplyRoot(root);
+      normaliseReturnYoutubeLikeButtons(primaryActionApplyRoot);
+      normaliseReturnYoutubeDislikeButtons(primaryActionApplyRoot);
+      hideWatchActionButtons(primaryActionApplyRoot);
+    }
+    if (rootIntersectsSurface(root, WATCH_INFO_TEXT_SELECTOR)) {
+      normaliseWatchInfoText(root);
+    }
+    if (
+      rootIntersectsSurface(root, WATCH_DESCRIPTION_MUTATION_SURFACE_SELECTOR)
+    ) {
+      runDescriptionCleanup(root);
+    }
+    if (
+      rootIntersectsSurface(
+        root,
+        WATCH_ACTION_MENU_MUTATION_SURFACE_SELECTOR,
+      )
+    ) {
+      hideWatchActionMenuItems(root);
+    }
   }
 
   function applyRoutePreferences() {
@@ -2919,12 +3031,20 @@
     if (!CONFIG.collapseDescriptionBlankRows || !isWatchPath()) {
       return;
     }
-    if (!closestElement(event.target, DESCRIPTION_TEXT_ROOT_SELECTOR)) {
+    const descriptionRoot = closestElement(
+      event.target,
+      DESCRIPTION_TEXT_ROOT_SELECTOR,
+    );
+    if (!descriptionRoot) {
       return;
     }
 
     [0, 100, 300, 800, 1500].forEach((delay) => {
-      setTimeout(() => runDescriptionCleanup(document), delay);
+      setTimeout(() => {
+        if (descriptionRoot.isConnected !== false) {
+          runDescriptionCleanup(descriptionRoot);
+        }
+      }, delay);
     });
   }
 
@@ -3040,22 +3160,33 @@
     return true;
   }
 
+  function addContainedMutationRoots(roots, root) {
+    const applyRoot = getApplyRoot(root);
+    if (!applyRoot?.querySelectorAll) {
+      return false;
+    }
+
+    const candidates = Array.from(
+      applyRoot.querySelectorAll(DYNAMIC_MUTATION_SURFACE_SELECTOR),
+    );
+    const candidateSet = new Set(candidates);
+    candidates.forEach((candidate) => {
+      const possibleAncestor = candidate.parentElement?.closest?.(
+        DYNAMIC_MUTATION_SURFACE_SELECTOR,
+      );
+      if (!candidateSet.has(possibleAncestor)) {
+        addMutationRoot(roots, candidate);
+      }
+    });
+    return candidates.length > 0;
+  }
+
   function addAddedNodeMutationRoot(roots, node) {
     if (addScopedMutationRoot(roots, node)) {
       return true;
     }
 
-    const applyRoot = getApplyRoot(node);
-    if (
-      applyRoot &&
-      applyRoot.querySelector &&
-      applyRoot.querySelector(DYNAMIC_MUTATION_SURFACE_SELECTOR)
-    ) {
-      addMutationRoot(roots, applyRoot);
-      return true;
-    }
-
-    return false;
+    return addContainedMutationRoots(roots, node);
   }
 
   function addMutationApplyRoots(roots, mutation) {

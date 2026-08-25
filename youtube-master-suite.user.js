@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         YouTube Master Suite
 // @namespace    Citizen.youtube.master-suite
-// @version      0.1.39
+// @version      0.1.45
 // @description  Consolidates Citizen YouTube userscripts with shared SPA event, mutation-observer, and stylesheet infrastructure.
 // @author       Citizen
 // @license      GNU GPLv3
@@ -18,7 +18,7 @@
 (() => {
   "use strict";
 
-  const MASTER_VERSION = "0.1.39";
+  const MASTER_VERSION = "0.1.45";
   const EXPECTED_MODULE_COUNT = 7;
   const HEALTH_ATTRIBUTE = "data-yt-master-suite";
   const ENABLED_MODULES = Object.freeze({
@@ -3318,7 +3318,7 @@
 
   suite.registerModule(
     "pageCoherence",
-    "Page Coherence Guard v1.7",
+    "Page Coherence Guard v1.8",
     "document-idle",
     () => {
       const MutationObserver = suite.SharedMutationObserver;
@@ -3332,7 +3332,6 @@
           mismatchesBeforeWarning: 2,
           eventHistoryLimit: 20,
         });
-        const STYLE_ID = "yt-page-coherence-style";
         const STALE_ATTRIBUTE = "data-yt-master-page-stale";
         const STATE_ATTRIBUTE = "data-yt-master-state";
         const EVENTS_ATTRIBUTE = "data-yt-master-events";
@@ -3845,25 +3844,6 @@
           scheduleChecks();
         };
 
-        const buildCss = () => `
-          :root[${STALE_ATTRIBUTE}] ytd-watch-metadata h1,
-          :root[${STALE_ATTRIBUTE}] ytd-watch-metadata #owner,
-          :root[${STALE_ATTRIBUTE}] ytd-watch-metadata #bottom-row,
-          :root[${STALE_ATTRIBUTE}] ytd-video-primary-info-renderer h1,
-          :root[${STALE_ATTRIBUTE}] ytd-video-primary-info-renderer #info-text,
-          :root[${STALE_ATTRIBUTE}] ytd-video-secondary-info-renderer {
-            display: none !important;
-          }
-
-          :root[${STALE_ATTRIBUTE}] ytd-comments {
-            visibility: hidden !important;
-            opacity: 0 !important;
-            pointer-events: none !important;
-          }
-        `;
-
-        GM_addStyle(buildCss());
-
         globalThis.__YT_MASTER_STATE__ = Object.freeze({
           check: runCoherenceCheck,
           events: () => navigationEvents.map((entry) => ({ ...entry })),
@@ -3935,7 +3915,7 @@
 
   suite.registerModule(
     "playerPreferencesLite",
-    "Player Preferences Lite v1.44",
+    "Player Preferences Lite v1.47",
     "document-idle",
     () => {
       const MutationObserver = suite.SharedMutationObserver;
@@ -4151,24 +4131,6 @@
         const WATCH_ACTION_INLINE_BUTTON_RULES = [
           { configKey: "hideInlineSaveButton", label: "Save" },
         ];
-        const WATCH_ACTION_MUTATION_SELECTOR = [
-          "ytd-watch-flexy ytd-menu-renderer",
-          WATCH_ACTION_MENU_ITEM_SELECTOR,
-        ].join(",");
-        const DYNAMIC_MUTATION_SURFACE_SELECTOR = [
-          FEED_CARD_CONTAINER_SELECTOR,
-          "ytd-rich-grid-media",
-          "ytd-rich-grid-slim-media",
-          "yt-lockup-view-model",
-          "yt-lockup-view-model-wiz",
-          SHORTS_LINK_SELECTOR,
-          SHORTS_CONVERTED_LINK_SELECTOR,
-          TOPBAR_LOGO_RENDERER_SELECTOR,
-          WATCH_ACTION_MUTATION_SELECTOR,
-          "ytd-watch-flexy ytd-video-owner-renderer",
-          "ytd-watch-flexy ytd-watch-metadata",
-          "ytd-watch-flexy ytd-video-primary-info-renderer",
-        ].join(",");
         const WATCH_DYNAMIC_MUTATION_ROOT_SELECTOR = [
           "ytd-masthead",
           "ytd-watch-flexy ytd-watch-metadata",
@@ -4289,6 +4251,40 @@
         const WATCH_INFO_STATIC_TEXT_CLASS = "ytppl-watch-info-static-text";
         const WATCH_INFO_NATIVE_HIDDEN_ATTRIBUTE =
           "data-ytppl-watch-info-native-hidden";
+        const TOPBAR_DYNAMIC_MUTATION_SURFACE_SELECTOR = "ytd-masthead";
+        const FEED_DYNAMIC_MUTATION_SURFACE_SELECTOR = [
+          FEED_CARD_CONTAINER_SELECTOR,
+          "ytd-rich-grid-media",
+          "ytd-rich-grid-slim-media",
+          "yt-lockup-view-model",
+          "yt-lockup-view-model-wiz",
+        ].join(",");
+        const SHORTS_DYNAMIC_MUTATION_SURFACE_SELECTOR = [
+          SHORTS_LINK_SELECTOR,
+          SHORTS_CONVERTED_LINK_SELECTOR,
+        ].join(",");
+        const WATCH_PRIMARY_ACTION_CONTAINER_SELECTOR =
+          "ytd-watch-flexy ytd-menu-renderer";
+        const WATCH_PRIMARY_ACTION_MUTATION_SURFACE_SELECTOR = [
+          WATCH_PRIMARY_ACTION_CONTAINER_SELECTOR,
+          RYD_LIKE_BUTTON_SELECTOR,
+          RYD_DISLIKE_BUTTON_SELECTOR,
+        ].join(",");
+        const WATCH_ACTION_MENU_MUTATION_SURFACE_SELECTOR =
+          WATCH_ACTION_MENU_ITEM_SELECTOR;
+        const WATCH_DESCRIPTION_MUTATION_SURFACE_SELECTOR = [
+          DESCRIPTION_TEXT_ROOT_SELECTOR,
+          "ytd-watch-flexy ytd-video-primary-info-renderer",
+        ].join(",");
+        const DYNAMIC_MUTATION_SURFACE_SELECTOR = [
+          TOPBAR_DYNAMIC_MUTATION_SURFACE_SELECTOR,
+          FEED_DYNAMIC_MUTATION_SURFACE_SELECTOR,
+          SHORTS_DYNAMIC_MUTATION_SURFACE_SELECTOR,
+          WATCH_PRIMARY_ACTION_MUTATION_SURFACE_SELECTOR,
+          WATCH_ACTION_MENU_MUTATION_SURFACE_SELECTOR,
+          WATCH_INFO_TEXT_SELECTOR,
+          WATCH_DESCRIPTION_MUTATION_SURFACE_SELECTOR,
+        ].join(",");
         const QUALITY_LEVELS_HIGH_TO_LOW = [
           "highres",
           "hd4320",
@@ -4588,7 +4584,9 @@
             closestElement(card, FEED_CARD_CONTAINER_SELECTOR) || card;
 
           if (hidden) {
-            container.dataset[datasetKey] = "1";
+            if (container.dataset[datasetKey] !== "1") {
+              container.dataset[datasetKey] = "1";
+            }
           } else if (container.dataset[datasetKey] === "1") {
             delete container.dataset[datasetKey];
           } else {
@@ -4902,14 +4900,29 @@
         }
 
         function applyRydIconLeadingClasses(button) {
-          button.classList.remove(
+          const iconButtonClasses = [
             "ytSpecButtonShapeNextIconButton",
             "yt-spec-button-shape-next--icon-button",
-          );
-          button.classList.add(
+          ];
+          const iconLeadingClasses = [
             "ytSpecButtonShapeNextIconLeading",
             "yt-spec-button-shape-next--icon-leading",
-          );
+          ];
+
+          if (
+            iconButtonClasses.some((className) =>
+              button.classList.contains(className),
+            )
+          ) {
+            button.classList.remove(...iconButtonClasses);
+          }
+          if (
+            iconLeadingClasses.some(
+              (className) => !button.classList.contains(className),
+            )
+          ) {
+            button.classList.add(...iconLeadingClasses);
+          }
         }
 
         function hasRydIconGraphic(icon) {
@@ -4948,7 +4961,9 @@
 
         function setEmptyRydIconState(icon, empty) {
           if (empty) {
-            icon.setAttribute(EMPTY_RYD_ICON_ATTRIBUTE, "1");
+            if (icon.getAttribute(EMPTY_RYD_ICON_ATTRIBUTE) !== "1") {
+              icon.setAttribute(EMPTY_RYD_ICON_ATTRIBUTE, "1");
+            }
             return;
           }
 
@@ -5662,7 +5677,11 @@
 
         function setExpandedDescriptionCollapsed(expanded, collapsed) {
           if (collapsed) {
-            expanded.dataset[DESCRIPTION_EXPANDED_COLLAPSED_DATASET_KEY] = "1";
+            if (
+              expanded.dataset[DESCRIPTION_EXPANDED_COLLAPSED_DATASET_KEY] !== "1"
+            ) {
+              expanded.dataset[DESCRIPTION_EXPANDED_COLLAPSED_DATASET_KEY] = "1";
+            }
             setImportantStyleProperty(expanded, "display", "none");
             setImportantStyleProperty(expanded, "height", "0px");
             setImportantStyleProperty(expanded, "line-height", "0px");
@@ -5838,7 +5857,12 @@
           }
 
           if (nativeContainer) {
-            nativeContainer.setAttribute(WATCH_INFO_NATIVE_HIDDEN_ATTRIBUTE, "1");
+            if (
+              nativeContainer.getAttribute(WATCH_INFO_NATIVE_HIDDEN_ATTRIBUTE) !==
+              "1"
+            ) {
+              nativeContainer.setAttribute(WATCH_INFO_NATIVE_HIDDEN_ATTRIBUTE, "1");
+            }
           }
         }
 
@@ -6791,19 +6815,87 @@
           clearContextMenuSuppression();
         }
 
+        function rootIntersectsSurface(root, selector) {
+          if (!root || !selector) {
+            return false;
+          }
+          if (root === document || root.nodeType === Node.DOCUMENT_NODE) {
+            return true;
+          }
+
+          const applyRoot = getApplyRoot(root);
+          if (!applyRoot) {
+            return false;
+          }
+
+          return Boolean(
+            applyRoot.matches?.(selector) ||
+              applyRoot.closest?.(selector) ||
+              applyRoot.querySelector?.(selector),
+          );
+        }
+
+        function getFeedApplyRoot(root) {
+          const applyRoot = getApplyRoot(root);
+          return (
+            closestElement(applyRoot, UPCOMING_STREAM_SCAN_SELECTOR) || applyRoot
+          );
+        }
+
+        function getWatchPrimaryActionApplyRoot(root) {
+          const applyRoot = getApplyRoot(root);
+          return (
+            closestElement(applyRoot, WATCH_PRIMARY_ACTION_CONTAINER_SELECTOR) ||
+            applyRoot
+          );
+        }
+
         function applyDynamicPreferences(root = document) {
-          useStandardMastheadLogo(root);
-          clearLegacyHiddenWatchActionButtons(root);
-          rewriteShortsLinks(root);
-          hideUpcomingStreams(root);
-          hidePayToWatchCards(root);
-          hideWatchedVideos(root);
-          normaliseReturnYoutubeLikeButtons(root);
-          normaliseReturnYoutubeDislikeButtons(root);
-          normaliseWatchInfoText(root);
-          runDescriptionCleanup(root);
-          hideWatchActionButtons(root);
-          hideWatchActionMenuItems(root);
+          const fullPageApply =
+            root === document || root?.nodeType === Node.DOCUMENT_NODE;
+
+          if (rootIntersectsSurface(root, TOPBAR_DYNAMIC_MUTATION_SURFACE_SELECTOR)) {
+            useStandardMastheadLogo(root);
+          }
+          if (fullPageApply) {
+            clearLegacyHiddenWatchActionButtons(root);
+          }
+          if (rootIntersectsSurface(root, SHORTS_DYNAMIC_MUTATION_SURFACE_SELECTOR)) {
+            rewriteShortsLinks(root);
+          }
+          if (rootIntersectsSurface(root, FEED_DYNAMIC_MUTATION_SURFACE_SELECTOR)) {
+            const feedApplyRoot = getFeedApplyRoot(root);
+            hideUpcomingStreams(feedApplyRoot);
+            hidePayToWatchCards(feedApplyRoot);
+            hideWatchedVideos(feedApplyRoot);
+          }
+          if (
+            rootIntersectsSurface(
+              root,
+              WATCH_PRIMARY_ACTION_MUTATION_SURFACE_SELECTOR,
+            )
+          ) {
+            const primaryActionApplyRoot = getWatchPrimaryActionApplyRoot(root);
+            normaliseReturnYoutubeLikeButtons(primaryActionApplyRoot);
+            normaliseReturnYoutubeDislikeButtons(primaryActionApplyRoot);
+            hideWatchActionButtons(primaryActionApplyRoot);
+          }
+          if (rootIntersectsSurface(root, WATCH_INFO_TEXT_SELECTOR)) {
+            normaliseWatchInfoText(root);
+          }
+          if (
+            rootIntersectsSurface(root, WATCH_DESCRIPTION_MUTATION_SURFACE_SELECTOR)
+          ) {
+            runDescriptionCleanup(root);
+          }
+          if (
+            rootIntersectsSurface(
+              root,
+              WATCH_ACTION_MENU_MUTATION_SURFACE_SELECTOR,
+            )
+          ) {
+            hideWatchActionMenuItems(root);
+          }
         }
 
         function applyRoutePreferences() {
@@ -6838,12 +6930,20 @@
           if (!CONFIG.collapseDescriptionBlankRows || !isWatchPath()) {
             return;
           }
-          if (!closestElement(event.target, DESCRIPTION_TEXT_ROOT_SELECTOR)) {
+          const descriptionRoot = closestElement(
+            event.target,
+            DESCRIPTION_TEXT_ROOT_SELECTOR,
+          );
+          if (!descriptionRoot) {
             return;
           }
 
           [0, 100, 300, 800, 1500].forEach((delay) => {
-            setTimeout(() => runDescriptionCleanup(document), delay);
+            setTimeout(() => {
+              if (descriptionRoot.isConnected !== false) {
+                runDescriptionCleanup(descriptionRoot);
+              }
+            }, delay);
           });
         }
 
@@ -6959,22 +7059,33 @@
           return true;
         }
 
+        function addContainedMutationRoots(roots, root) {
+          const applyRoot = getApplyRoot(root);
+          if (!applyRoot?.querySelectorAll) {
+            return false;
+          }
+
+          const candidates = Array.from(
+            applyRoot.querySelectorAll(DYNAMIC_MUTATION_SURFACE_SELECTOR),
+          );
+          const candidateSet = new Set(candidates);
+          candidates.forEach((candidate) => {
+            const possibleAncestor = candidate.parentElement?.closest?.(
+              DYNAMIC_MUTATION_SURFACE_SELECTOR,
+            );
+            if (!candidateSet.has(possibleAncestor)) {
+              addMutationRoot(roots, candidate);
+            }
+          });
+          return candidates.length > 0;
+        }
+
         function addAddedNodeMutationRoot(roots, node) {
           if (addScopedMutationRoot(roots, node)) {
             return true;
           }
 
-          const applyRoot = getApplyRoot(node);
-          if (
-            applyRoot &&
-            applyRoot.querySelector &&
-            applyRoot.querySelector(DYNAMIC_MUTATION_SURFACE_SELECTOR)
-          ) {
-            addMutationRoot(roots, applyRoot);
-            return true;
-          }
-
-          return false;
+          return addContainedMutationRoots(roots, node);
         }
 
         function addMutationApplyRoots(roots, mutation) {
@@ -9196,7 +9307,7 @@
 
   suite.registerModule(
     "watchLayoutCleaner",
-    "Watch Layout Cleaner v1.27",
+    "Watch Layout Cleaner v1.29",
     "document-start",
     () => {
       const MutationObserver = suite.SharedMutationObserver;
@@ -9237,6 +9348,10 @@
             `${panelSelector} [${QUEUE_THUMBNAIL_FALLBACK_ATTRIBUTE}="1"]`,
         ).join(",\n");
         const EMPTY_SECONDARY_RAIL_ATTRIBUTE = "data-ywlc-empty-secondary-rail";
+        const AUXILIARY_RAIL_SURFACE_SELECTOR = [
+          "#sponsorBlockPopupContainer",
+          "#sponsorBlockPopupContainer iframe",
+        ].join(",");
         const CHAT_SURFACE_SELECTOR = [
           "ytd-live-chat-frame#chat",
           'ytd-engagement-panel-section-list-renderer[target-id="engagement-panel-live-chat"]',
@@ -9250,6 +9365,7 @@
           "#related",
           "#secondary",
           "#secondary-inner",
+          AUXILIARY_RAIL_SURFACE_SELECTOR,
         ].join(",");
         const QUEUE_ITEM_MUTATION_ATTRIBUTES = [
           "aria-current",
@@ -9587,6 +9703,17 @@
           );
         }
 
+        function isActiveAuxiliaryRailSurface(surface) {
+          if (
+            isElementOrAncestorHidden(surface, surface.closest("ytd-watch-flexy"))
+          ) {
+            return false;
+          }
+
+          const bounds = surface.getBoundingClientRect();
+          return bounds.width > 0 && bounds.height > 0;
+        }
+
         function reconcileSecondaryRailState() {
           railStateReconciliationFrame = 0;
           document.querySelectorAll("ytd-watch-flexy").forEach((watchFlexy) => {
@@ -9606,8 +9733,17 @@
               Array.from(
                 watchFlexy.querySelectorAll(PLAYLIST_PANEL_SELECTOR),
               ).some(isActiveQueuePanel);
+            const auxiliarySurfaceVisible =
+              eligible &&
+              Array.from(
+                watchFlexy.querySelectorAll(AUXILIARY_RAIL_SURFACE_SELECTOR),
+              ).some(isActiveAuxiliaryRailSurface);
             const railIsEmpty =
-              eligible && relatedHidden && !chatVisible && !queueVisible;
+              eligible &&
+              relatedHidden &&
+              !chatVisible &&
+              !queueVisible &&
+              !auxiliarySurfaceVisible;
 
             if (railIsEmpty) {
               watchFlexy.setAttribute(EMPTY_SECONDARY_RAIL_ATTRIBUTE, "1");
@@ -9697,6 +9833,9 @@
 
           if (mutation.type !== "childList") return false;
           const changedNodes = [...mutation.addedNodes, ...mutation.removedNodes];
+          if (element.closest(AUXILIARY_RAIL_SURFACE_SELECTOR)) {
+            return true;
+          }
           if (element.closest(`${CHAT_SURFACE_SELECTOR}, #chat-container`)) {
             return true;
           }
@@ -9725,6 +9864,9 @@
               isSecondaryRailMutationAnchor(target);
             const isDiscoveryTarget = isDiscoveryMutationTarget(target);
             const isPlaylistPanel = target.matches(PLAYLIST_PANEL_SELECTOR);
+            const isAuxiliaryRailSurface = target.matches(
+              AUXILIARY_RAIL_SURFACE_SELECTOR,
+            );
             return [
               target,
               isSecondaryRailAnchor
@@ -9741,6 +9883,13 @@
                 : isPlaylistPanel
                 ? {
                     attributeFilter: PANEL_MUTATION_ATTRIBUTES,
+                    attributes: true,
+                    childList: true,
+                    subtree: true,
+                  }
+                : isAuxiliaryRailSurface
+                ? {
+                    attributeFilter: SURFACE_STATE_MUTATION_ATTRIBUTES,
                     attributes: true,
                     childList: true,
                     subtree: true,
