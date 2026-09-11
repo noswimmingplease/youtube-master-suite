@@ -269,7 +269,7 @@ const workflowSource = readFileSync(
   "utf8",
 );
 const expectedUrl =
-  "https://raw.githubusercontent.com/Ci303/youtube-master-suite/main/" +
+  "https://raw.githubusercontent.com/noswimmingplease/youtube-master-suite/main/" +
   "youtube-master-suite.user.js";
 
 assert.equal(metadata(userscript, "updateURL"), expectedUrl);

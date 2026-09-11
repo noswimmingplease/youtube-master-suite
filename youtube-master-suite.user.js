@@ -1,14 +1,14 @@
 // ==UserScript==
 // @name         YouTube Master Suite
 // @namespace    Citizen.youtube.master-suite
-// @version      0.1.46
+// @version      0.1.47
 // @description  Consolidates Citizen YouTube userscripts with shared SPA event, mutation-observer, and stylesheet infrastructure.
 // @author       Citizen
 // @license      GNU GPLv3
-// @homepageURL  https://github.com/Ci303/youtube-master-suite
-// @supportURL   https://github.com/Ci303/youtube-master-suite/issues
-// @updateURL    https://raw.githubusercontent.com/Ci303/youtube-master-suite/main/youtube-master-suite.user.js
-// @downloadURL  https://raw.githubusercontent.com/Ci303/youtube-master-suite/main/youtube-master-suite.user.js
+// @homepageURL  https://github.com/noswimmingplease/youtube-master-suite
+// @supportURL   https://github.com/noswimmingplease/youtube-master-suite/issues
+// @updateURL    https://raw.githubusercontent.com/noswimmingplease/youtube-master-suite/main/youtube-master-suite.user.js
+// @downloadURL  https://raw.githubusercontent.com/noswimmingplease/youtube-master-suite/main/youtube-master-suite.user.js
 // @match        https://www.youtube.com/*
 // @run-at       document-start
 // @grant        none
@@ -18,7 +18,7 @@
 (() => {
   "use strict";
 
-  const MASTER_VERSION = "0.1.46";
+  const MASTER_VERSION = "0.1.47";
   const EXPECTED_MODULE_COUNT = 7;
   const HEALTH_ATTRIBUTE = "data-yt-master-suite";
   const ENABLED_MODULES = Object.freeze({
@@ -1082,7 +1082,7 @@
 
   suite.registerModule(
     "commentCleaner",
-    "Comment Cleaner v1.19",
+    "Comment Cleaner v1.20",
     "document-idle",
     () => {
       const MutationObserver = suite.SharedMutationObserver;
@@ -2242,7 +2242,7 @@
 
   suite.registerModule(
     "feedUiCleaner",
-    "Feed UI Cleaner v2.6",
+    "Feed UI Cleaner v2.7",
     "document-idle",
     () => {
       const MutationObserver = suite.SharedMutationObserver;
@@ -2884,7 +2884,7 @@
 
   suite.registerModule(
     "miniplayerButtonRestorer",
-    "Miniplayer Button Restorer v1.6",
+    "Miniplayer Button Restorer v1.7",
     "document-idle",
     () => {
       const MutationObserver = suite.SharedMutationObserver;
@@ -3318,7 +3318,7 @@
 
   suite.registerModule(
     "pageCoherence",
-    "Page Coherence Guard v1.8",
+    "Page Coherence Guard v1.9",
     "document-idle",
     () => {
       const MutationObserver = suite.SharedMutationObserver;
@@ -3915,7 +3915,7 @@
 
   suite.registerModule(
     "playerPreferencesLite",
-    "Player Preferences Lite v1.48",
+    "Player Preferences Lite v1.49",
     "document-idle",
     () => {
       const MutationObserver = suite.SharedMutationObserver;
@@ -7304,7 +7304,7 @@
 
   suite.registerModule(
     "scrollMiniplayer",
-    "Scroll Miniplayer v5.20",
+    "Scroll Miniplayer v5.21",
     "document-idle",
     () => {
       const MutationObserver = suite.SharedMutationObserver;
@@ -9323,7 +9323,7 @@
 
   suite.registerModule(
     "watchLayoutCleaner",
-    "Watch Layout Cleaner v1.29",
+    "Watch Layout Cleaner v1.30",
     "document-start",
     () => {
       const MutationObserver = suite.SharedMutationObserver;

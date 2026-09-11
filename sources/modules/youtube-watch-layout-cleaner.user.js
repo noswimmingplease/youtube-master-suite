@@ -1,13 +1,13 @@
 // ==UserScript==
 // @name         YouTube Watch Layout Cleaner
 // @namespace    Citizen.youtube.watch-layout-cleaner
-// @version      1.29
+// @version      1.30
 // @description  Expands YouTube watch pages, keeps the right rail fixed at SponsorBlock-friendly width, preserves its visible popup, and widens metadata/comments.
 // @author       Citizen
-// @homepageURL  https://github.com/Ci303/youtube-watch-layout-cleaner
-// @supportURL   https://github.com/Ci303/youtube-watch-layout-cleaner/issues
-// @updateURL    https://raw.githubusercontent.com/Ci303/youtube-watch-layout-cleaner/main/youtube-watch-layout-cleaner.user.js
-// @downloadURL  https://raw.githubusercontent.com/Ci303/youtube-watch-layout-cleaner/main/youtube-watch-layout-cleaner.user.js
+// @homepageURL  https://github.com/noswimmingplease/youtube-watch-layout-cleaner
+// @supportURL   https://github.com/noswimmingplease/youtube-watch-layout-cleaner/issues
+// @updateURL    https://raw.githubusercontent.com/noswimmingplease/youtube-watch-layout-cleaner/main/youtube-watch-layout-cleaner.user.js
+// @downloadURL  https://raw.githubusercontent.com/noswimmingplease/youtube-watch-layout-cleaner/main/youtube-watch-layout-cleaner.user.js
 // @match        https://www.youtube.com/*
 // @run-at       document-start
 // @grant        none

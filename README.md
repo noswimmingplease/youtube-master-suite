@@ -5,7 +5,7 @@ one maintainable Tampermonkey installation. It preserves each script as an
 isolated feature module while sharing the browser infrastructure that would
 otherwise be duplicated across separate scripts.
 
-[Install or update YouTube Master Suite](https://raw.githubusercontent.com/Ci303/youtube-master-suite/main/youtube-master-suite.user.js)
+[Install or update YouTube Master Suite](https://raw.githubusercontent.com/noswimmingplease/youtube-master-suite/main/youtube-master-suite.user.js)
 
 This repository is the definitive source for the suite. The former standalone
 component repositories are superseded and are not required to build, maintain
@@ -70,7 +70,7 @@ included while keeping the Tampermonkey source concise.
 ## Installation
 
 1. Install Tampermonkey and the Tampermonkey Editors helper extension.
-2. Open the [raw userscript](https://raw.githubusercontent.com/Ci303/youtube-master-suite/main/youtube-master-suite.user.js).
+2. Open the [raw userscript](https://raw.githubusercontent.com/noswimmingplease/youtube-master-suite/main/youtube-master-suite.user.js).
 3. Confirm the Tampermonkey installation prompt.
 4. Disable the individual scripts listed above, including YouTube SponsorBlock
    Queue Width, to prevent duplicated observers, styles, controls and DOM work.
