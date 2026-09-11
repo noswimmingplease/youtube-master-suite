@@ -3,7 +3,7 @@ import { readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-const MASTER_VERSION = "0.1.46";
+const MASTER_VERSION = "0.1.47";
 const suiteDirectory = dirname(fileURLToPath(import.meta.url));
 const outputPath = join(suiteDirectory, "youtube-master-suite.user.js");
 const releaseManifestPath = join(suiteDirectory, "release-manifest.json");
@@ -1485,10 +1485,10 @@ const output = `// ==UserScript==
 // @description  Consolidates Citizen YouTube userscripts with shared SPA event, mutation-observer, and stylesheet infrastructure.
 // @author       Citizen
 // @license      GNU GPLv3
-// @homepageURL  https://github.com/Ci303/youtube-master-suite
-// @supportURL   https://github.com/Ci303/youtube-master-suite/issues
-// @updateURL    https://raw.githubusercontent.com/Ci303/youtube-master-suite/main/youtube-master-suite.user.js
-// @downloadURL  https://raw.githubusercontent.com/Ci303/youtube-master-suite/main/youtube-master-suite.user.js
+// @homepageURL  https://github.com/noswimmingplease/youtube-master-suite
+// @supportURL   https://github.com/noswimmingplease/youtube-master-suite/issues
+// @updateURL    https://raw.githubusercontent.com/noswimmingplease/youtube-master-suite/main/youtube-master-suite.user.js
+// @downloadURL  https://raw.githubusercontent.com/noswimmingplease/youtube-master-suite/main/youtube-master-suite.user.js
 // @match        https://www.youtube.com/*
 // @run-at       document-start
 // @grant        none

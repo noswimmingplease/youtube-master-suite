@@ -1,14 +1,14 @@
 // ==UserScript==
 // @name         YouTube Comment Cleaner
 // @namespace    Citizen.youtube.comment-cleaner
-// @version      1.19
+// @version      1.20
 // @description  Cleans YouTube comments, prevents stale comments across SPA navigation, preserves replies, compacts spacing, and colours commenter/uploader names.
 // @author       Citizen
 // @license      GNU GPLv3
-// @homepageURL  https://github.com/Ci303/youtube-comment-cleaner
-// @supportURL   https://github.com/Ci303/youtube-comment-cleaner/issues
-// @updateURL    https://raw.githubusercontent.com/Ci303/youtube-comment-cleaner/main/youtube-comment-cleaner.user.js
-// @downloadURL  https://raw.githubusercontent.com/Ci303/youtube-comment-cleaner/main/youtube-comment-cleaner.user.js
+// @homepageURL  https://github.com/noswimmingplease/youtube-comment-cleaner
+// @supportURL   https://github.com/noswimmingplease/youtube-comment-cleaner/issues
+// @updateURL    https://raw.githubusercontent.com/noswimmingplease/youtube-comment-cleaner/main/youtube-comment-cleaner.user.js
+// @downloadURL  https://raw.githubusercontent.com/noswimmingplease/youtube-comment-cleaner/main/youtube-comment-cleaner.user.js
 // @run-at       document-idle
 // @match        *://www.youtube.com/*
 // @grant        GM_addStyle

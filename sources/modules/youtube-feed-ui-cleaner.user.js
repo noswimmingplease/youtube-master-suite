@@ -1,13 +1,13 @@
 // ==UserScript==
 // @name         YouTube Feed UI Cleaner
 // @namespace    Citizen.youtube.feed-ui-cleaner
-// @version      2.6
+// @version      2.7
 // @description  Removes unwanted YouTube UI and filtered feed cards, reconciles recycled renderers, and offers a temporary non-ad reveal control.
 // @author       Citizen
-// @homepageURL  https://github.com/Ci303/youtube-feed-ui-cleaner
-// @supportURL   https://github.com/Ci303/youtube-feed-ui-cleaner/issues
-// @updateURL    https://raw.githubusercontent.com/Ci303/youtube-feed-ui-cleaner/main/youtube-feed-ui-cleaner.user.js
-// @downloadURL  https://raw.githubusercontent.com/Ci303/youtube-feed-ui-cleaner/main/youtube-feed-ui-cleaner.user.js
+// @homepageURL  https://github.com/noswimmingplease/youtube-feed-ui-cleaner
+// @supportURL   https://github.com/noswimmingplease/youtube-feed-ui-cleaner/issues
+// @updateURL    https://raw.githubusercontent.com/noswimmingplease/youtube-feed-ui-cleaner/main/youtube-feed-ui-cleaner.user.js
+// @downloadURL  https://raw.githubusercontent.com/noswimmingplease/youtube-feed-ui-cleaner/main/youtube-feed-ui-cleaner.user.js
 // @match        https://www.youtube.com/*
 // @run-at       document-idle
 // @grant        GM_addStyle

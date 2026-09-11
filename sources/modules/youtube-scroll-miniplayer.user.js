@@ -1,13 +1,13 @@
 // ==UserScript==
 // @name         YouTube Scroll Miniplayer
 // @namespace    Citizen.youtube.scroll-miniplayer
-// @version      5.20
+// @version      5.21
 // @description  Floats the active YouTube player with compact queue context, YouTube-style controls, and synchronised corner selection across open windows.
 // @author       Citizen
-// @homepageURL  https://github.com/Ci303/youtube-scroll-miniplayer
-// @supportURL   https://github.com/Ci303/youtube-scroll-miniplayer/issues
-// @updateURL    https://raw.githubusercontent.com/Ci303/youtube-scroll-miniplayer/main/youtube-scroll-miniplayer.user.js
-// @downloadURL  https://raw.githubusercontent.com/Ci303/youtube-scroll-miniplayer/main/youtube-scroll-miniplayer.user.js
+// @homepageURL  https://github.com/noswimmingplease/youtube-scroll-miniplayer
+// @supportURL   https://github.com/noswimmingplease/youtube-scroll-miniplayer/issues
+// @updateURL    https://raw.githubusercontent.com/noswimmingplease/youtube-scroll-miniplayer/main/youtube-scroll-miniplayer.user.js
+// @downloadURL  https://raw.githubusercontent.com/noswimmingplease/youtube-scroll-miniplayer/main/youtube-scroll-miniplayer.user.js
 // @match        https://www.youtube.com/*
 // @run-at       document-idle
 // @grant        none

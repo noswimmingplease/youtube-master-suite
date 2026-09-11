@@ -3,38 +3,38 @@
   "modules": {
     "commentCleaner": {
       "path": "sources/modules/youtube-comment-cleaner.user.js",
-      "version": "1.19",
-      "sha256": "85a287f0a826e1ebf579eb1b5a1a8dcc0006076e5fa058f0d5a953b2a2dd2ced"
+      "version": "1.20",
+      "sha256": "dd34f8544ea7d7b6476c3ccfe11e1c80e76ebf575413dcba4e28d6ad4e33db0f"
     },
     "feedUiCleaner": {
       "path": "sources/modules/youtube-feed-ui-cleaner.user.js",
-      "version": "2.6",
-      "sha256": "823488025109eb45178ab11dba7a9527012391c904fe7694043bffc0d74b4cc5"
+      "version": "2.7",
+      "sha256": "a655045b8248d3b0d5afb3001a9df8429596ed107b754b60809cd807929add6e"
     },
     "miniplayerButtonRestorer": {
       "path": "sources/modules/youtube-miniplayer-button-restorer.user.js",
-      "version": "1.6",
-      "sha256": "1c8fddd9d2a8d77c646c8b94986cfcd0654467208ac0710d2bfed18febc1c6aa"
+      "version": "1.7",
+      "sha256": "a7c392c574d6d0ab010e802f6c87fd6aa8a5efebba4abbc960f1f0526c404a76"
     },
     "pageCoherence": {
       "path": "sources/modules/youtube-page-coherence.user.js",
-      "version": "1.8",
-      "sha256": "1b5d9ef1bc9c35d11d49751ec01459b604a1f88d619beefba5220d035f0d67e5"
+      "version": "1.9",
+      "sha256": "50d5756082e29b8f8496988fa01a24a990df70bc09e86bd6a9a3381e70ac0e60"
     },
     "playerPreferencesLite": {
       "path": "sources/modules/youtube-player-preferences-lite.user.js",
-      "version": "1.48",
-      "sha256": "8990f074e03e138cd747b3211966297d8b88ef76124b1f210bf3fccb20be0341"
+      "version": "1.49",
+      "sha256": "4092ec58b49b98bc8b92ad1c36617ad0527510acdcee31840f24177b8c179d9d"
     },
     "scrollMiniplayer": {
       "path": "sources/modules/youtube-scroll-miniplayer.user.js",
-      "version": "5.20",
-      "sha256": "1c403e99c5878192778a60d410b049a1ea3194a2450c5a667d5bf22c6d4eebdb"
+      "version": "5.21",
+      "sha256": "8a1d27e96294da2d68de200ea7636e544e8c51b9bff53873f09bd5395a94ee2b"
     },
     "watchLayoutCleaner": {
       "path": "sources/modules/youtube-watch-layout-cleaner.user.js",
-      "version": "1.29",
-      "sha256": "16cb964754d1cf40626460e0cfc41d88629a8f7f5d67e60775759cd55eb1f146"
+      "version": "1.30",
+      "sha256": "2273f9d23956d968a21b3466c237cd48ed4cabdfaa56592687df89479ba86883"
     }
   }
 }

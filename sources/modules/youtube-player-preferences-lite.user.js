@@ -1,13 +1,13 @@
 // ==UserScript==
 // @name         YouTube Player Preferences Lite
 // @namespace    Citizen.youtube.player-preferences-lite
-// @version      1.48
+// @version      1.49
 // @description  Applies small YouTube player preferences without touching Enhancer-style miniplayer, queue, autoplay, or background playback controls.
 // @author       Citizen
-// @homepageURL  https://github.com/Ci303/youtube-player-preferences-lite
-// @supportURL   https://github.com/Ci303/youtube-player-preferences-lite/issues
-// @updateURL    https://raw.githubusercontent.com/Ci303/youtube-player-preferences-lite/main/youtube-player-preferences-lite.user.js
-// @downloadURL  https://raw.githubusercontent.com/Ci303/youtube-player-preferences-lite/main/youtube-player-preferences-lite.user.js
+// @homepageURL  https://github.com/noswimmingplease/youtube-player-preferences-lite
+// @supportURL   https://github.com/noswimmingplease/youtube-player-preferences-lite/issues
+// @updateURL    https://raw.githubusercontent.com/noswimmingplease/youtube-player-preferences-lite/main/youtube-player-preferences-lite.user.js
+// @downloadURL  https://raw.githubusercontent.com/noswimmingplease/youtube-player-preferences-lite/main/youtube-player-preferences-lite.user.js
 // @match        https://www.youtube.com/*
 // @run-at       document-idle
 // @grant        none

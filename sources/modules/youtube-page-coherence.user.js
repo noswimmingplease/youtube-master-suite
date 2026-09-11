@@ -1,14 +1,14 @@
 // ==UserScript==
 // @name         YouTube Page Coherence Guard
 // @namespace    Citizen.youtube.page-coherence
-// @version      1.8
+// @version      1.9
 // @description  Detects incomplete YouTube queue navigation, publishes identity diagnostics, and rechecks restored foreground pages without hiding native page content.
 // @author       Citizen
 // @license      GNU GPLv3
-// @homepageURL  https://github.com/Ci303/youtube-master-suite
-// @supportURL   https://github.com/Ci303/youtube-master-suite/issues
-// @updateURL    https://raw.githubusercontent.com/Ci303/youtube-master-suite/main/youtube-master-suite.user.js
-// @downloadURL  https://raw.githubusercontent.com/Ci303/youtube-master-suite/main/youtube-master-suite.user.js
+// @homepageURL  https://github.com/noswimmingplease/youtube-master-suite
+// @supportURL   https://github.com/noswimmingplease/youtube-master-suite/issues
+// @updateURL    https://raw.githubusercontent.com/noswimmingplease/youtube-master-suite/main/youtube-master-suite.user.js
+// @downloadURL  https://raw.githubusercontent.com/noswimmingplease/youtube-master-suite/main/youtube-master-suite.user.js
 // @match        https://www.youtube.com/*
 // @run-at       document-idle
 // @grant        none
