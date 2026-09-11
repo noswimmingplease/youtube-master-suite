@@ -11,6 +11,18 @@ const PLAYER_PREFERENCES_SOURCE = readFileSync(
   "utf8",
 );
 
+test("restored Like button keeps an unmistakable selected state", () => {
+  assert.match(
+    PLAYER_PREFERENCES_SOURCE,
+    /button\[aria-pressed="true"\]/,
+  );
+  assert.match(
+    PLAYER_PREFERENCES_SOURCE,
+    /button\[aria-label\^="Unlike" i\]/,
+  );
+  assert.match(PLAYER_PREFERENCES_SOURCE, /color: #3ea6ff !important;/);
+});
+
 function extractFunction(source, functionName) {
   const marker = `function ${functionName}(`;
   const start = source.indexOf(marker);

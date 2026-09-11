@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         YouTube Master Suite
 // @namespace    Citizen.youtube.master-suite
-// @version      0.1.45
+// @version      0.1.46
 // @description  Consolidates Citizen YouTube userscripts with shared SPA event, mutation-observer, and stylesheet infrastructure.
 // @author       Citizen
 // @license      GNU GPLv3
@@ -18,7 +18,7 @@
 (() => {
   "use strict";
 
-  const MASTER_VERSION = "0.1.45";
+  const MASTER_VERSION = "0.1.46";
   const EXPECTED_MODULE_COUNT = 7;
   const HEALTH_ATTRIBUTE = "data-yt-master-suite";
   const ENABLED_MODULES = Object.freeze({
@@ -3915,7 +3915,7 @@
 
   suite.registerModule(
     "playerPreferencesLite",
-    "Player Preferences Lite v1.47",
+    "Player Preferences Lite v1.48",
     "document-idle",
     () => {
       const MutationObserver = suite.SharedMutationObserver;
@@ -6044,6 +6044,22 @@
                 stroke-linejoin: round !important;
                 stroke-width: 1.8 !important;
                 width: 24px !important;
+              }
+
+              ytd-watch-flexy ytd-menu-renderer
+              :is(
+                #segmented-like-button,
+                like-button-view-model,
+                #like-button
+              )
+              :is(
+                button[aria-pressed="true"],
+                button[aria-label^="Unlike" i],
+                button[title^="Unlike" i]
+              ) {
+                background-color: rgba(62, 166, 255, 0.18) !important;
+                box-shadow: inset 0 0 0 1px rgba(62, 166, 255, 0.65) !important;
+                color: #3ea6ff !important;
               }
 
               ytd-watch-flexy ytd-menu-renderer
