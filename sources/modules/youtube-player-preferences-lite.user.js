@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         YouTube Player Preferences Lite
 // @namespace    Citizen.youtube.player-preferences-lite
-// @version      1.49
+// @version      1.50
 // @description  Applies small YouTube player preferences without touching Enhancer-style miniplayer, queue, autoplay, or background playback controls.
 // @author       Citizen
 // @homepageURL  https://github.com/noswimmingplease/youtube-player-preferences-lite
@@ -2823,6 +2823,21 @@
     }, 850);
   }
 
+  function getPlayerVolume(player, video) {
+    // Read the same volume model that setVolume writes.
+    if (typeof player.getVolume === "function") {
+      try {
+        const percent = player.getVolume();
+        if (typeof percent === "number" && Number.isFinite(percent)) {
+          return clamp(percent / 100, 0, 1);
+        }
+      } catch {
+        // Fall back while the player API is unavailable during navigation.
+      }
+    }
+    return video.volume;
+  }
+
   function setPlayerVolume(player, nextVolume) {
     const video = getPlayerVideo(player);
     if (!video) {
@@ -2872,7 +2887,7 @@
 
     const direction = event.deltaY < 0 ? 1 : -1;
     const step = clamp(CONFIG.wheelVolumeStep, 1, 100) / 100;
-    const nextVolume = clamp(video.volume + direction * step, 0, 1);
+    const nextVolume = clamp(getPlayerVolume(player, video) + direction * step, 0, 1);
 
     const nextPercent = setPlayerVolume(player, nextVolume);
     if (nextPercent === null) {

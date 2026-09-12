@@ -88,6 +88,23 @@ function extractFunction(source, functionName) {
   assert.fail(`Unterminated ${functionName}`);
 }
 
+test("volume increments follow selected volume rather than reset media volume", () => {
+  const context = vm.createContext({ clamp: (n, low, high) => Math.max(low, Math.min(high, n)) });
+  vm.runInContext(extractFunction(PLAYER_PREFERENCES_SOURCE, "getPlayerVolume"), context);
+  let selected = 15;
+  const player = { getVolume: () => selected };
+  const video = { volume: 0.15 };
+  for (let i = 0; i < 17; i++) {
+    selected = Math.round(Math.min(1, context.getPlayerVolume(player, video) + 0.05) * 100);
+  }
+  assert.equal(selected, 100);
+  assert.match(extractFunction(PLAYER_PREFERENCES_SOURCE, "handleWheelVolume"), /getPlayerVolume\(player, video\)/);
+  for (const unavailable of [{}, { getVolume() { throw new Error("transition"); } }, { getVolume: () => NaN }]) {
+    assert.equal(context.getPlayerVolume(unavailable, video), 0.15);
+  }
+  assert.equal(context.getPlayerVolume({ getVolume: () => 0 }, video), 0);
+});
+
 class CountingClassList {
   constructor(classNames) {
     this.classNames = new Set(classNames);

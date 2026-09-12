@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         YouTube Master Suite
 // @namespace    Citizen.youtube.master-suite
-// @version      0.1.47
+// @version      0.1.48
 // @description  Consolidates Citizen YouTube userscripts with shared SPA event, mutation-observer, and stylesheet infrastructure.
 // @author       Citizen
 // @license      GNU GPLv3
@@ -18,7 +18,7 @@
 (() => {
   "use strict";
 
-  const MASTER_VERSION = "0.1.47";
+  const MASTER_VERSION = "0.1.48";
   const EXPECTED_MODULE_COUNT = 7;
   const HEALTH_ATTRIBUTE = "data-yt-master-suite";
   const ENABLED_MODULES = Object.freeze({
@@ -3915,7 +3915,7 @@
 
   suite.registerModule(
     "playerPreferencesLite",
-    "Player Preferences Lite v1.49",
+    "Player Preferences Lite v1.50",
     "document-idle",
     () => {
       const MutationObserver = suite.SharedMutationObserver;
@@ -6722,6 +6722,21 @@
           }, 850);
         }
 
+        function getPlayerVolume(player, video) {
+          // Read the same volume model that setVolume writes.
+          if (typeof player.getVolume === "function") {
+            try {
+              const percent = player.getVolume();
+              if (typeof percent === "number" && Number.isFinite(percent)) {
+                return clamp(percent / 100, 0, 1);
+              }
+            } catch {
+              // Fall back while the player API is unavailable during navigation.
+            }
+          }
+          return video.volume;
+        }
+
         function setPlayerVolume(player, nextVolume) {
           const video = getPlayerVideo(player);
           if (!video) {
@@ -6771,7 +6786,7 @@
 
           const direction = event.deltaY < 0 ? 1 : -1;
           const step = clamp(CONFIG.wheelVolumeStep, 1, 100) / 100;
-          const nextVolume = clamp(video.volume + direction * step, 0, 1);
+          const nextVolume = clamp(getPlayerVolume(player, video) + direction * step, 0, 1);
 
           const nextPercent = setPlayerVolume(player, nextVolume);
           if (nextPercent === null) {
