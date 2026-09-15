@@ -88,21 +88,110 @@ function extractFunction(source, functionName) {
   assert.fail(`Unterminated ${functionName}`);
 }
 
-test("volume increments follow selected volume rather than reset media volume", () => {
+test("volume getter falls back when the player API is unavailable", () => {
   const context = vm.createContext({ clamp: (n, low, high) => Math.max(low, Math.min(high, n)) });
   vm.runInContext(extractFunction(PLAYER_PREFERENCES_SOURCE, "getPlayerVolume"), context);
-  let selected = 15;
-  const player = { getVolume: () => selected };
   const video = { volume: 0.15 };
-  for (let i = 0; i < 17; i++) {
-    selected = Math.round(Math.min(1, context.getPlayerVolume(player, video) + 0.05) * 100);
-  }
-  assert.equal(selected, 100);
-  assert.match(extractFunction(PLAYER_PREFERENCES_SOURCE, "handleWheelVolume"), /getPlayerVolume\(player, video\)/);
   for (const unavailable of [{}, { getVolume() { throw new Error("transition"); } }, { getVolume: () => NaN }]) {
     assert.equal(context.getPlayerVolume(unavailable, video), 0.15);
   }
   assert.equal(context.getPlayerVolume({ getVolume: () => 0 }, video), 0);
+});
+
+function createWheelVolumeHarness({ player, video }) {
+  const overlays = [];
+  const context = vm.createContext({
+    CONFIG: {
+      enablePlayerWheelVolume: true,
+      requireRightMouseButtonForWheelVolume: true,
+      wheelVolumeStep: 5,
+      contextMenuSuppressionWindowMs: 500,
+    },
+    rightButtonHeldOnPlayer: false,
+    contextMenuSuppressionExpiresAt: 0,
+    clamp: (n, low, high) => Math.max(low, Math.min(high, n)),
+    getPlayerFromTarget: (target) => target,
+    getPlayerVideo: () => video,
+    showVolumeOverlay: (_, percent) => overlays.push(percent),
+  });
+  vm.runInContext(
+    ["getPlayerVolume", "setPlayerVolume", "handleWheelVolume"]
+      .map((name) => extractFunction(PLAYER_PREFERENCES_SOURCE, name))
+      .join("\n"),
+    context,
+  );
+  return {
+    overlays,
+    context,
+    wheel(deltaY = -1, buttons = 2, target = player) {
+      const event = {
+        deltaY, buttons, target,
+        prevented: false, stopped: false,
+        preventDefault() { this.prevented = true; },
+        stopImmediatePropagation() { this.stopped = true; },
+      };
+      context.handleWheelVolume(event);
+      return event;
+    },
+  };
+}
+
+test("full wheel handler progresses beyond 20 percent despite reset media volume", () => {
+  let selected = 15;
+  const video = { volume: 0.15, muted: false };
+  const player = { getVolume: () => selected, setVolume: (n) => { selected = n; } };
+  const harness = createWheelVolumeHarness({ player, video });
+  for (let i = 0; i < 20; i++) {
+    video.volume = 0.15;
+    const event = harness.wheel();
+    assert.equal(event.prevented, true);
+    assert.equal(event.stopped, true);
+  }
+  assert.deepEqual(harness.overlays.slice(0, 3), [20, 25, 30]);
+  assert.equal(selected, 100);
+  for (let i = 0; i < 25; i++) harness.wheel(1);
+  assert.equal(selected, 0);
+  assert.equal(video.volume, 0);
+});
+
+test("wheel handler falls back when setVolume and unMute throw", () => {
+  const video = { volume: 0.15, muted: true };
+  const unavailable = () => { throw new Error("player transitioning"); };
+  const player = { getVolume: unavailable, setVolume: unavailable, unMute: unavailable };
+  const harness = createWheelVolumeHarness({ player, video });
+  const event = harness.wheel();
+  assert.equal(video.volume, 0.2);
+  assert.equal(video.muted, false);
+  assert.deepEqual(harness.overlays, [20]);
+  assert.equal(event.prevented, true);
+  assert.equal(event.stopped, true);
+  assert.ok(harness.context.contextMenuSuppressionExpiresAt > Date.now());
+  harness.wheel();
+  assert.equal(video.volume, 0.25);
+});
+
+test("wheel handler falls back without player APIs and keeps zero volume muted", () => {
+  const video = { volume: 0.05, muted: true };
+  const harness = createWheelVolumeHarness({ player: {}, video });
+  harness.wheel(1);
+  assert.equal(video.volume, 0);
+  assert.equal(video.muted, true);
+  harness.wheel();
+  assert.equal(video.volume, 0.05);
+  assert.equal(video.muted, false);
+});
+
+test("wheel handler leaves unrelated scrolling and missing players untouched", () => {
+  const video = { volume: 0.5, muted: false };
+  const harness = createWheelVolumeHarness({ player: {}, video });
+  for (const event of [harness.wheel(-1, 0), harness.wheel(0), harness.wheel(-1, 2, null)]) {
+    assert.equal(event.prevented, false);
+    assert.equal(event.stopped, false);
+  }
+  assert.equal(video.volume, 0.5);
+  assert.deepEqual(harness.overlays, []);
+  const missing = createWheelVolumeHarness({ player: {}, video: null });
+  assert.equal(missing.wheel().prevented, false);
 });
 
 class CountingClassList {

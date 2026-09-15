@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         YouTube Master Suite
 // @namespace    Citizen.youtube.master-suite
-// @version      0.1.48
+// @version      0.1.49
 // @description  Consolidates Citizen YouTube userscripts with shared SPA event, mutation-observer, and stylesheet infrastructure.
 // @author       Citizen
 // @license      GNU GPLv3
@@ -18,7 +18,7 @@
 (() => {
   "use strict";
 
-  const MASTER_VERSION = "0.1.48";
+  const MASTER_VERSION = "0.1.49";
   const EXPECTED_MODULE_COUNT = 7;
   const HEALTH_ATTRIBUTE = "data-yt-master-suite";
   const ENABLED_MODULES = Object.freeze({
@@ -3915,7 +3915,7 @@
 
   suite.registerModule(
     "playerPreferencesLite",
-    "Player Preferences Lite v1.50",
+    "Player Preferences Lite v1.51",
     "document-idle",
     () => {
       const MutationObserver = suite.SharedMutationObserver;
@@ -6746,14 +6746,22 @@
           const nextPercent = Math.round(clamp(nextVolume, 0, 1) * 100);
 
           if (typeof player.setVolume === "function") {
-            player.setVolume(nextPercent);
+            try {
+              player.setVolume(nextPercent);
+            } catch {
+              // Keep the media-element fallback usable during player transitions.
+            }
           }
 
           video.volume = nextPercent / 100;
 
           if (nextPercent > 0) {
             if (typeof player.unMute === "function") {
-              player.unMute();
+              try {
+                player.unMute();
+              } catch {
+                // A stale player API must not prevent the media element unmuting.
+              }
             }
             video.muted = false;
           }

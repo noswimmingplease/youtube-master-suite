@@ -23,8 +23,8 @@
     },
     "playerPreferencesLite": {
       "path": "sources/modules/youtube-player-preferences-lite.user.js",
-      "version": "1.50",
-      "sha256": "f2b4984f47cb47bf8f953f969532fdd97f7a656d579b2209fbb6f4cf85792570"
+      "version": "1.51",
+      "sha256": "23a7739416e1bb2947dfab0509c076364b990405f6432c85803c4b78d3cf9ed4"
     },
     "scrollMiniplayer": {
       "path": "sources/modules/youtube-scroll-miniplayer.user.js",
