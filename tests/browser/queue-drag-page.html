@@ -1,0 +1,301 @@
+<!doctype html>
+<html lang="en" dark>
+<head>
+  <meta charset="utf-8">
+  <title>Queue drag contract fixture</title>
+  <style>
+    * { box-sizing: border-box; }
+    body { margin: 0; background: #111; color: white; font: 14px Arial, sans-serif; }
+    ytd-app, ytd-watch-flexy, ytd-masthead, ytd-watch-metadata, ytd-comments,
+    ytd-miniplayer, ytd-playlist-panel-renderer, ytd-playlist-panel-video-renderer { display: block; }
+    #masthead { height: 48px; }
+    #movie_player { position: relative; width: 640px; height: 112px; background: #222; }
+    video { width: 640px; height: 72px; }
+    .ytp-right-controls { display: flex; height: 40px; }
+    .ytp-button { width: 40px; height: 40px; background: #333; color: white; border: 0; }
+    #columns { display: flex; }
+    #primary { width: 660px; }
+    #secondary { width: 374px; }
+    #queue-host { position: absolute; top: 200px; left: 680px; width: 374px; }
+    body[data-queue-view="miniplayer"] #queue-host { left: auto; right: 24px; width: 374px; }
+    ytd-playlist-panel-renderer { width: 374px; border: 1px solid #444; background: #171717; }
+    .queue-header { height: 48px; padding: 12px; }
+    #items { height: 380px; overflow: auto; position: relative; }
+    ytd-playlist-panel-video-renderer { height: 76px; width: 100%; }
+    ytd-playlist-panel-video-renderer[selected] { background: #302a25; }
+    #container { position: relative; display: flex; height: 76px; padding: 7px 4px; align-items: center; gap: 8px; }
+    .playlist-drag-handle { width: 18px; height: 60px; display: grid; place-items: center; cursor: grab; user-select: none; }
+    #thumbnail { width: 98px; height: 56px; flex: 0 0 98px; background: #685c51; border-radius: 6px; }
+    #meta { display: flex; flex-direction: column; gap: 5px; }
+    #video-title { color: white; text-decoration: none; }
+    #byline { color: #bbb; }
+    .dragging { pointer-events: none; background: #38312b; }
+    .dragging #container { box-shadow: 0 3px 10px #000; }
+    #ordinary-control { position: absolute; top: 48px; left: 10px; z-index: 5; }
+  </style>
+</head>
+<body>
+  <ytd-app>
+    <ytd-masthead id="masthead"><div id="end"><div id="buttons"><button id="avatar-btn" aria-label="Account">Profile</button></div></div></ytd-masthead>
+    <button id="ordinary-control">Ordinary control</button>
+    <ytd-watch-flexy is-two-columns video-id="aaaaaaaaaaa">
+      <div id="player"><div id="movie_player" class="html5-video-player" tabindex="0">
+        <video class="html5-main-video"></video>
+        <div class="ytp-right-controls">
+          <button class="ytp-settings-button ytp-button" aria-label="Settings">S</button>
+          <button class="ytp-size-button ytp-button" aria-label="Default view">D</button>
+          <button class="ytp-fullscreen-button ytp-button" aria-label="Full screen">F</button>
+          <button class="ytp-miniplayer-button ytp-button" aria-label="Miniplayer">I</button>
+        </div>
+      </div></div>
+      <div id="columns"><div id="primary"><div id="primary-inner">
+        <ytd-watch-metadata><h1><yt-formatted-string>Current video</yt-formatted-string></h1><div id="owner"><a href="/@Fixture">Fixture owner</a></div></ytd-watch-metadata>
+        <ytd-comments></ytd-comments>
+      </div></div><div id="secondary"></div></div>
+    </ytd-watch-flexy>
+  </ytd-app>
+  <script>
+    // This fixture reproduces the publicly inspected Closure queue contract.
+    // It is not a copy of production YouTube and does not prove production repair.
+    const fixture = window.fixture = {
+      commits: [], movements: [], selectedVideoId: 'aaaaaaaaaaa', ordinaryClicks: 0,
+      nativeTimerStarts: 0, activeNativeTimers: 0, nativeTicks: 0, scrollEvents: 0,
+      animationCalls: [], nativeMouseStarts: 0, nativeCancelled: 0,
+      intervalRequests: [], groupEvents: [], lifecycleEvents: [],
+      originalIds: Array.from({ length: 18 }, (_, index) => index === 0 ? 'aaaaaaaaaaa' : `queue${String(index).padStart(6, '0')}`),
+    };
+    const view = location.pathname === '/watch' ? 'desktop' : 'miniplayer';
+    document.body.dataset.queueView = view;
+    const app = document.querySelector('ytd-app');
+    const flexy = document.querySelector('ytd-watch-flexy');
+    const player = document.getElementById('movie_player');
+    const video = player.querySelector('video');
+    const response = {
+      playerResponse: { videoDetails: { videoId: fixture.selectedVideoId } },
+      currentVideoEndpoint: { watchEndpoint: { videoId: fixture.selectedVideoId } },
+      contents: { twoColumnWatchNextResults: {} },
+    };
+    app.data = { page: view === 'desktop' ? 'watch' : 'browse', response };
+    flexy.data = response; flexy.videoId = fixture.selectedVideoId; flexy.loading = false;
+    flexy.watchController = { watchNextResponse: response };
+    player.getVideoData = () => ({ video_id: fixture.selectedVideoId, title: 'Current video' });
+    player.getPlayerState = () => video.paused ? 2 : 1;
+    player.getVolume = () => video.volume * 100;
+    player.setVolume = volume => { video.volume = volume / 100; };
+    player.isMuted = () => video.muted;
+    player.getVideoUrl = () => `https://youtu.be/${fixture.selectedVideoId}`;
+    document.getElementById('ordinary-control').addEventListener('click', () => fixture.ordinaryClicks++);
+
+    const host = document.createElement(view === 'desktop' ? 'div' : 'ytd-miniplayer');
+    host.id = 'queue-host';
+    if (view === 'desktop') document.getElementById('secondary').append(host);
+    else { host.className = 'ytp-miniplayer-ui'; app.append(host); flexy.hidden = true; }
+    const panel = document.createElement('ytd-playlist-panel-renderer');
+    panel.setAttribute('can-reorder', '');
+    panel.canReorder = true;
+    const header = document.createElement('div');
+    header.className = 'queue-header'; header.textContent = 'Queue';
+    const items = document.createElement('div'); items.id = 'items';
+    panel.append(header, items); host.append(panel);
+    fixture.panel = panel; fixture.items = items;
+    for (const [index, id] of fixture.originalIds.entries()) {
+      const row = document.createElement('ytd-playlist-panel-video-renderer');
+      row.dataset.videoId = id;
+      row.data = { videoId: id, title: { simpleText: `Queue video ${index + 1}` } };
+      if (!index) row.setAttribute('selected', '');
+      const inner = document.createElement('div'); inner.id = 'container';
+      const handle = document.createElement('div'); handle.className = 'playlist-drag-handle'; handle.id = 'index'; handle.textContent = '⋮';
+      const thumb = document.createElement('a'); thumb.id = 'thumbnail'; thumb.href = `/watch?v=${id}`;
+      const meta = document.createElement('div'); meta.id = 'meta';
+      const title = document.createElement('a'); title.id = 'video-title'; title.href = `/watch?v=${id}`; title.textContent = `Queue video ${index + 1}`;
+      const byline = document.createElement('span'); byline.id = 'byline'; byline.textContent = 'Fixture channel';
+      meta.append(title, byline); inner.append(handle, thumb, meta); row.append(inner); items.append(row);
+    }
+    fixture.order = () => [...items.children].map(row => row.dataset.videoId);
+
+    const nativeSetInterval = window.setInterval;
+    window.setInterval = (callback, delay, ...arguments_) => {
+      fixture.intervalRequests.push(delay);
+      return nativeSetInterval.call(window, callback, delay, ...arguments_);
+    };
+
+    const nativeAnimate = Element.prototype.animate;
+    Element.prototype.animate = function(keyframes, options) {
+      fixture.animationCalls.push({
+        id: this.id, row: this.closest('ytd-playlist-panel-video-renderer')?.dataset.videoId,
+        sortableHost: this.matches('ytd-playlist-panel-video-renderer'),
+        keyframes, duration: options?.duration,
+      });
+      return nativeAnimate.call(this, keyframes, options);
+    };
+    for (const type of ['resize', 'blur', 'pagehide', 'yt-navigate-start', 'mouseup', 'pointercancel', 'visibilitychange']) {
+      const target = ['mouseup', 'pointercancel', 'visibilitychange'].includes(type) ? document : window;
+      target.addEventListener(type, event => {
+        fixture.lifecycleEvents.push({ type, trusted: event.isTrusted, dragging: fixture.group?.isDragging() || false,
+          hidden: document.hidden, width: innerWidth, height: innerHeight });
+        if (fixture.lifecycleEvents.length > 16) fixture.lifecycleEvents.shift();
+      }, true);
+    }
+
+    class NativeGroup {
+      constructor() { this.listeners = new Map(); this.currDragItem_ = null; this.draggerEl_ = null; this.dragger_ = null; }
+      addEventListener(type, callback) {
+        type = String(type);
+        if (!this.listeners.has(type)) this.listeners.set(type, new Set());
+        this.listeners.get(type).add(callback);
+      }
+      removeEventListener(type, callback) { this.listeners.get(String(type))?.delete(callback); }
+      emit(type, event) {
+        const cursor = event.event?.browserEvent || event.event;
+        fixture.groupEvents.push({ type, row: event.currDragItem?.dataset.videoId, x: cursor?.clientX, y: cursor?.clientY });
+        if (fixture.groupEvents.length > 32) fixture.groupEvents.shift();
+        for (const callback of [...(this.listeners.get(type) || [])]) callback.call(this, { type, ...event });
+      }
+      isDragging() { return Boolean(this.dragger_); }
+      getHandleForDragItem_(row) { return row.querySelector('.playlist-drag-handle'); }
+      recacheListAndItemBounds() {
+        items.dlgBounds_ = items.getBoundingClientRect();
+        for (const row of items.children) row.dlgBounds_ = row.getBoundingClientRect();
+      }
+    }
+    class NativeScrollSupport {
+      constructor(container) {
+        this.containerNode_ = container;
+        const box = container.getBoundingClientRect();
+        const margin = Math.min(132, box.height / 4);
+        this.containerBounds_ = { left: box.left + scrollX, top: box.top + scrollY, width: box.width, height: box.height };
+        this.scrollBounds_ = { left: box.left + scrollX, top: box.top + scrollY + margin, width: box.width, height: box.height - 2 * margin };
+        this.horizontalScrolling_ = false;
+        this.scrollDelta_ = { x: 0, y: 0 };
+        this.interval = 0;
+        this.scrollTimer_ = {
+          enabled: false,
+          start: () => {
+            if (this.interval) return;
+            fixture.nativeTimerStarts++; fixture.activeNativeTimers++;
+            this.scrollTimer_.enabled = true;
+            this.interval = setInterval(() => {
+              fixture.nativeTicks++;
+              container.scrollTop += this.scrollDelta_.y;
+            }, 50);
+          },
+          stop: () => {
+            if (!this.interval) return;
+            clearInterval(this.interval); this.interval = 0;
+            fixture.activeNativeTimers--; this.scrollTimer_.enabled = false;
+          },
+        };
+        this.onMouseMove = event => {
+          this.scrollDelta_.y = this.calculateScrollDelta(event.clientY + scrollY, this.scrollBounds_.top, this.scrollBounds_.height);
+          if (this.scrollDelta_.y) this.scrollTimer_.start();
+          else this.scrollTimer_.stop();
+        };
+        document.addEventListener('mousemove', this.onMouseMove);
+      }
+      calculateScrollDelta(coordinate, start, size) {
+        if (coordinate < start) return start - coordinate > 100 ? -48 : -8;
+        if (coordinate > start + size) return coordinate - start - size > 100 ? 48 : 8;
+        return 0;
+      }
+      dispose() { this.scrollTimer_.stop(); document.removeEventListener('mousemove', this.onMouseMove); }
+    }
+    const group = new NativeGroup();
+    const controller = panel.ytReorderableController = {
+      groupJSC$18385_dragListGroup: group,
+      dragScrollSupport: null,
+    };
+    fixture.group = group; fixture.controller = controller;
+    fixture.nativeCalculateScrollDelta = NativeScrollSupport.prototype.calculateScrollDelta;
+    let potential = null;
+    let lastEvent = null;
+    function nativeMove(event) {
+      lastEvent = event;
+      fixture.lastNativeMove = { trusted: event.isTrusted, buttons: event.buttons, x: event.clientX, y: event.clientY };
+      if (!potential) return;
+      if (!group.dragger_ && Math.hypot(event.clientX - potential.x, event.clientY - potential.y) <= 2) return;
+      if (!group.dragger_) {
+        const row = potential.row;
+        const box = row.getBoundingClientRect();
+        group.currDragItem_ = row;
+        group.dragger_ = { scrollTarget: items };
+        group.draggerEl_ = row.cloneNode(true);
+        group.draggerEl_.classList.add('dragging');
+        group.draggerEl_.style.cssText = `position:absolute;left:${box.left + scrollX}px;top:${box.top + scrollY}px;width:${box.width}px;z-index:2030`;
+        app.append(group.draggerEl_);
+        row.style.visibility = 'hidden';
+        group.recacheListAndItemBounds();
+        controller.dragScrollSupport = new NativeScrollSupport(items);
+        fixture.lastSupport = controller.dragScrollSupport;
+        if (fixture.shiftScrollportOnStart) {
+          // Model a native support that captured bounds just before a panel
+          // position change. The actual scrollport must fit onscreen if its
+          // final items are to be reachable through the pointer.
+          host.style.top = '200px';
+          group.recacheListAndItemBounds();
+        }
+        fixture.nativeMouseStarts++;
+        group.emit('dragstart', { event, currDragItem: row, draggerEl: group.draggerEl_ });
+      }
+      const draggerEvent = { clientX: event.clientX, clientY: event.clientY, browserEvent: event };
+      const row = group.currDragItem_;
+      const payload = { event: draggerEvent, currDragItem: row, draggerEl: group.draggerEl_ };
+      group.draggerEl_.style.left = `${event.clientX - potential.offsetX + scrollX}px`;
+      group.draggerEl_.style.top = `${event.clientY - potential.offsetY + scrollY}px`;
+      const centre = event.clientY - potential.offsetY + row.offsetHeight / 2;
+      const candidates = [...items.children].filter(candidate => candidate !== row);
+      const next = candidates.find(candidate => centre < candidate.dlgBounds_.top + candidate.dlgBounds_.height / 2) || null;
+      group.emit('beforedragmove', payload);
+      if (row.nextElementSibling !== next) {
+        items.insertBefore(row, next);
+        fixture.movements.push(fixture.order());
+      }
+      group.recacheListAndItemBounds();
+      group.emit('dragmove', payload);
+    }
+    function nativeEnd(cancelled = false) {
+      if (group.dragger_) {
+        const row = group.currDragItem_;
+        group.draggerEl_.remove(); row.style.visibility = '';
+        if (cancelled) {
+          items.insertBefore(row, potential.originalNext?.isConnected ? potential.originalNext : null);
+          fixture.nativeCancelled++;
+        } else fixture.commits.push(fixture.order());
+        const payload = { event: lastEvent, currDragItem: row, draggerEl: group.draggerEl_ };
+        group.emit('dragend', payload);
+        group.emit('e', payload);
+        controller.dragScrollSupport?.dispose();
+        controller.dragScrollSupport = null;
+        group.currDragItem_ = null; group.draggerEl_ = null; group.dragger_ = null;
+      }
+      potential = null;
+    }
+    panel.addEventListener('mousedown', event => {
+      const handle = event.target.closest('.playlist-drag-handle');
+      fixture.lastNativeDown = { target: event.target.id, handle: Boolean(handle), button: event.button, trusted: event.isTrusted };
+      if (!handle || event.button !== 0 || !event.isTrusted || panel.canReorder === false) return;
+      const row = handle.closest('ytd-playlist-panel-video-renderer');
+      const box = row.getBoundingClientRect();
+      potential = { row, originalNext: row.nextElementSibling, x: event.clientX, y: event.clientY,
+        offsetX: event.clientX - box.left, offsetY: event.clientY - box.top };
+      event.preventDefault();
+    });
+    document.addEventListener('mousemove', nativeMove);
+    document.addEventListener('mouseup', () => nativeEnd());
+    document.addEventListener('keydown', event => { if (event.key === 'Escape') nativeEnd(true); });
+    window.addEventListener('blur', () => nativeEnd(true));
+    window.addEventListener('yt-navigate-start', () => nativeEnd(true));
+    items.addEventListener('scroll', () => { fixture.scrollEvents++; group.recacheListAndItemBounds(); });
+    fixture.cancelNativeDrag = () => nativeEnd(true);
+    fixture.prepareShiftedScrollport = () => {
+      fixture.shiftScrollportOnStart = true;
+      host.style.top = '520px';
+    };
+    fixture.restoreOrder = () => {
+      nativeEnd(true);
+      const rows = new Map([...items.children].map(row => [row.dataset.videoId, row]));
+      for (const id of fixture.originalIds) items.append(rows.get(id));
+      items.scrollTop = 0;
+    };
+  </script>
+</body>
+</html>

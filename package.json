@@ -1,0 +1,10 @@
+{
+  "name": "youtube-master-suite",
+  "private": true,
+  "scripts": {
+    "test:browser": "node --test --test-concurrency=1 tests/browser/*.test.mjs"
+  },
+  "devDependencies": {
+    "playwright": "1.64.0"
+  }
+}

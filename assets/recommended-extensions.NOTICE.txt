@@ -1,0 +1,30 @@
+Recommended extension logos
+===========================
+
+The logos in recommended-extensions.json are unmodified project assets, embedded
+for identification only. They remain the property of their respective projects;
+their inclusion does not imply endorsement of YouTube Master Suite.
+
+Return YouTube Dislike - Anarios and contributors
+Source: https://github.com/Anarios/return-youtube-dislike
+Asset: icons/icon48.png, extension release 4.0.6
+Licence: https://github.com/Anarios/return-youtube-dislike/blob/main/LICENSE
+
+SponsorBlock - Ajay Ramachandran and contributors
+Logo credited by the project to munadikieh
+Source: https://github.com/ajayyy/SponsorBlock
+Asset: icons/IconSponsorBlocker64px.png, extension release 6.1.7
+Licence: https://github.com/ajayyy/SponsorBlock/blob/master/LICENSE
+
+DeArrow - Ajay Ramachandran and contributors
+Source: https://github.com/ajayyy/DeArrow
+Asset: icons/logo-64.png, extension release 2.3.10
+Licence: https://github.com/ajayyy/DeArrow/blob/master/LICENSE
+
+uBlock Origin - Raymond Hill and contributors
+Source: https://github.com/gorhill/uBlock
+Asset: img/ublock.svg, extension release 1.75.0
+Licence: https://github.com/gorhill/uBlock/blob/master/LICENSE.txt
+
+A copy of the GPLv3 licence is included in extension-logos.LICENSE.txt.
+No extension code, browser profile data or personal configuration is included.

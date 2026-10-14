@@ -1,0 +1,364 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark light">
+  <title>YouTube Master Suite — settings preview</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --page: #0f0f0f; --surface: #212121; --hover: #383838; --text: #f1f1f1;
+      --muted: #aaa; --line: #3f3f3f; --accent: #3ea6ff; --accent-text: #0f0f0f;
+      --error: #ff9a9a; --field: #181818;
+    }
+    :root[data-theme="light"] {
+      color-scheme: light;
+      --page: #fff; --surface: #fff; --hover: #eee; --text: #0f0f0f;
+      --muted: #606060; --line: #d5d5d5; --accent: #065fd4; --accent-text: #fff;
+      --error: #b3261e; --field: #fafafa;
+    }
+    * { box-sizing: border-box; }
+    [hidden] { display: none !important; }
+    body { margin: 0; background: var(--page); color: var(--text); font: 14px/1.5 Arial, sans-serif; }
+    button, input, select { font: inherit; }
+    button { border: 0; color: inherit; background: transparent; cursor: pointer; }
+    button:disabled { opacity: .5; cursor: default; }
+    button:focus-visible, input:focus-visible, select:focus-visible, summary:focus-visible {
+      outline: 2px solid var(--accent); outline-offset: 3px;
+    }
+    header.masthead { height: 56px; display: flex; align-items: center; gap: 20px; padding: 0 20px; }
+    .brand { display: flex; align-items: center; gap: 8px; font-weight: 700; font-size: 19px; white-space: nowrap; }
+    .brand svg { width: 29px; height: 22px; }
+    .search { max-width: 580px; margin: 0 auto; flex: 1; border: 1px solid var(--line); border-radius: 24px; padding: 8px 18px; color: var(--muted); }
+    .icon-button { display: grid; place-items: center; width: 40px; height: 40px; padding: 0; border-radius: 50%; flex: 0 0 auto; }
+    .icon-button:hover { background: var(--hover); }
+    .icon-button svg { width: 24px; height: 24px; }
+    .icon-button img { width: 32px; height: 32px; }
+    .icon-button img { display: block; pointer-events: none; }
+    .avatar { display: grid; place-items: center; width: 32px; height: 32px; border-radius: 50%; background: #64748b; color: white; }
+    main { margin: 30px auto; padding: 0 24px; max-width: 1060px; }
+    .video { aspect-ratio: 16 / 9; display: grid; place-items: center; background: #080808; border-radius: 12px; color: #aaa; }
+    h1 { font-size: 20px; margin: 16px 0 4px; }
+    .page-note { color: var(--muted); margin: 12px 0; }
+    .text-button { padding: 8px 14px; border-radius: 20px; font-weight: 600; white-space: nowrap; }
+    .text-button:hover { background: var(--hover); }
+    .primary { background: var(--accent); color: var(--accent-text); }
+    .primary:hover { filter: brightness(.92); background: var(--accent); }
+    .page-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+    dialog {
+      width: min(640px, calc(100vw - 24px)); max-height: calc(100dvh - 24px);
+      padding: 0; border: 1px solid var(--line); border-radius: 12px;
+      color: var(--text); background: var(--surface); box-shadow: 0 12px 48px #0008;
+    }
+    dialog::backdrop { background: #0008; }
+    .panel { display: flex; flex-direction: column; max-height: calc(100dvh - 26px); }
+    .panel-header { display: flex; align-items: center; justify-content: space-between; padding: 12px 16px 4px 24px; }
+    .panel-header h2 { font-size: 20px; font-weight: 600; margin: 0; }
+    .panel-header .close { font-size: 28px; font-weight: 400; line-height: 1; }
+    .intro { margin: 0; padding: 0 24px 14px; color: var(--muted); font-size: 12px; }
+    nav { display: flex; gap: 8px; overflow-x: auto; padding: 0 24px; border-bottom: 1px solid var(--line); flex-shrink: 0; }
+    nav button { padding: 10px 4px; white-space: nowrap; color: var(--muted); border-bottom: 2px solid transparent; }
+    nav button[aria-selected="true"] { color: var(--text); border-color: var(--text); }
+    .content { padding: 4px 24px 18px; overflow: auto; min-height: 0; }
+    .row { display: flex; gap: 24px; justify-content: space-between; align-items: center; padding: 14px 0; border-bottom: 1px solid var(--line); }
+    .row > label { flex: 1; }
+    .description { display: block; color: var(--muted); font-size: 12px; margin-top: 3px; }
+    .switch {
+      appearance: none; width: 36px; height: 20px; border-radius: 12px; position: relative;
+      margin: 0 2px; background: #717171; cursor: pointer; flex: 0 0 auto;
+    }
+    .switch::after { content: ""; position: absolute; width: 16px; height: 16px; border-radius: 50%; top: 2px; left: 2px; background: white; }
+    .switch:checked { background: var(--accent); }
+    .switch:checked::after { left: 18px; }
+    select, .hex { background: var(--field); color: var(--text); border: 1px solid var(--line); border-radius: 6px; padding: 7px 9px; max-width: 190px; }
+    .hex { width: 108px; font-family: ui-monospace, monospace; text-transform: uppercase; }
+    .hex[aria-invalid="true"] { border-color: var(--error); }
+    .colour-rows { padding-top: 8px; }
+    .colour-row { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin: 12px 0; }
+    .colour-row label { flex: 1; min-width: 145px; }
+    .swatch { width: 36px; height: 32px; border: 1px solid var(--line); border-radius: 6px; background: var(--swatch); }
+    .swatch:hover { outline: 2px solid var(--accent); outline-offset: 2px; }
+    .field-error { color: var(--error); font-size: 12px; width: 100%; margin: 0; }
+    .picker { background: var(--field); border: 1px solid var(--line); border-radius: 8px; padding: 14px; margin: 12px 0; }
+    .picker-heading { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
+    .picker h3 { margin: 0; font-size: 14px; font-weight: 500; }
+    .channel { display: grid; grid-template-columns: 42px 1fr 36px; gap: 12px; align-items: center; margin: 10px 0; }
+    .channel output { text-align: right; font-size: 12px; font-variant-numeric: tabular-nums; }
+    input[type="range"] { appearance: none; width: 100%; height: 6px; border-radius: 4px; margin: 8px 0; cursor: pointer; }
+    input[type="range"]::-moz-range-thumb { width: 14px; height: 14px; background: #fff; border: 1px solid #666; border-radius: 50%; }
+    input[type="range"]::-webkit-slider-thumb { appearance: none; width: 14px; height: 14px; background: #fff; border: 1px solid #666; border-radius: 50%; }
+    .preview { background: var(--page); border: 1px solid var(--line); border-radius: 8px; padding: 14px; margin-top: 16px; }
+    .preview p { margin: 4px 0 12px; }
+    .preview p:last-child { margin-bottom: 0; }
+    .preview .name { font-weight: 700; }
+    .preview time { color: var(--muted); margin-left: 10px; font-size: 12px; }
+    .preview .pin { color: var(--owner-colour, var(--muted)); font-size: 12px; margin-bottom: 6px; }
+    .preview .owner { color: var(--owner-colour, var(--text)); }
+    .preview .viewer { color: var(--viewer-colour, var(--text)); }
+    .preview[data-mode="off"] .name { font-weight: 500; }
+    .warning { color: var(--error); font-size: 12px; margin: 10px 0 0; }
+    .section-note { font-size: 12px; color: var(--muted); margin: 16px 0 0; }
+    footer { border-top: 1px solid var(--line); padding: 12px 16px; display: flex; flex-wrap: wrap; gap: 8px; align-items: center; flex-shrink: 0; }
+    footer .spacer { flex: 1; }
+    #status { color: var(--muted); margin: 10px 0; }
+    @media (max-width: 480px) {
+      .search { display: none; } .masthead .brand { margin-right: auto; }
+      .row { gap: 10px; } nav, .content { padding-left: 16px; padding-right: 16px; }
+      footer .spacer { display: none; } footer .text-button { padding: 8px 10px; }
+      select { max-width: 145px; }
+    }
+  </style>
+</head>
+<body>
+  <header class="masthead">
+    <span class="brand"><svg viewBox="0 0 29 22" aria-hidden="true"><rect width="29" height="22" rx="6" fill="#f03"/><path d="m11 6 9 5-9 5z" fill="white"/></svg>YouTube</span>
+    <div class="search">Search</div>
+    <button id="suite-settings" class="icon-button" title="Suite settings" aria-label="Suite settings" aria-haspopup="dialog" aria-controls="settings-dialog">
+      <img src="../assets/YouTube_Master_Suite_Logo.svg" width="32" height="32" alt="" aria-hidden="true">
+    </button>
+    <div class="avatar" aria-label="Preview profile">U</div>
+  </header>
+  <main>
+    <div class="video">Settings appearance preview</div>
+    <h1>YouTube Master Suite settings</h1>
+    <p class="page-note">Isolated interface preview. Nothing here changes YouTube, playback or your installed userscript.</p>
+    <div class="page-actions">
+      <button id="open-preview" class="text-button primary">Open settings</button>
+      <button id="theme-toggle" class="text-button">Preview light theme</button>
+    </div>
+    <p id="status" role="status">Preview edits stay in memory and disappear when this page reloads.</p>
+  </main>
+  <dialog id="settings-dialog" aria-labelledby="panel-title" aria-describedby="panel-intro">
+    <div class="panel">
+      <div class="panel-header"><h2 id="panel-title">Suite settings</h2><button class="icon-button close" id="close-panel" aria-label="Close settings">×</button></div>
+      <p class="intro" id="panel-intro">Appearance prototype. Save keeps this preview only; integration would apply settings after a deliberate reload.</p>
+      <nav role="tablist" aria-label="Settings sections"></nav>
+      <div class="content">
+        <section id="section-comments" role="tabpanel" aria-labelledby="tab-comments">
+          <div class="row"><label for="colour-mode">Name colours<span class="description">Viewer names, uploader names and creator/pinned badges.</span></label><select id="colour-mode"><option value="default">Default</option><option value="preset">Preset palette</option><option value="custom">Custom</option><option value="off">Off · YouTube styling</option></select></div>
+          <div class="row" id="palette-row" hidden><label for="palette">Palette</label><select id="palette"><option value="teal-coral">Teal / coral</option><option value="lavender-gold">Lavender / gold</option><option value="cyan-rose">Cyan / rose</option></select></div>
+          <div class="colour-rows" id="custom-colours" hidden>
+            <div class="colour-row"><label for="viewer-hex">Viewer name</label><button class="swatch" id="viewer-swatch" aria-label="Choose viewer colour" aria-expanded="false" aria-controls="colour-picker"></button><input class="hex" id="viewer-hex" type="text" maxlength="7" spellcheck="false" autocomplete="off" aria-describedby="viewer-error" aria-label="Viewer colour hex code"><p class="field-error" id="viewer-error" hidden>Enter a six-digit hex colour, for example #82A3E6.</p></div>
+            <div class="colour-row"><label for="owner-hex">Uploader and pinned badges</label><button class="swatch" id="owner-swatch" aria-label="Choose uploader colour" aria-expanded="false" aria-controls="colour-picker"></button><input class="hex" id="owner-hex" type="text" maxlength="7" spellcheck="false" autocomplete="off" aria-describedby="owner-error" aria-label="Uploader colour hex code"><p class="field-error" id="owner-error" hidden>Enter a six-digit hex colour, for example #FF9F1C.</p></div>
+          </div>
+          <div class="picker" id="colour-picker" role="group" aria-labelledby="picker-title" hidden>
+            <div class="picker-heading"><h3 id="picker-title">Choose colour</h3><button class="text-button" id="close-picker">Done</button></div>
+            <div class="channel"><label for="red">Red</label><input id="red" type="range" min="0" max="255" step="1"><output for="red" id="red-value"></output></div>
+            <div class="channel"><label for="green">Green</label><input id="green" type="range" min="0" max="255" step="1"><output for="green" id="green-value"></output></div>
+            <div class="channel"><label for="blue">Blue</label><input id="blue" type="range" min="0" max="255" step="1"><output for="blue" id="blue-value"></output></div>
+            <p class="section-note">This picker is part of the panel, so it follows the same dark or light theme. No system colour dialogue opens.</p>
+          </div>
+          <div class="preview" id="comment-preview" aria-label="Comment colour preview">
+            <div class="pin">⌖ Pinned by @ChannelOwner</div>
+            <span class="name owner">@ChannelOwner</span><time>1 hour ago</time><p>A preview of the uploader's comment.</p>
+            <span class="name viewer">@Viewer</span><time>20 minutes ago</time><p>A preview of an ordinary viewer's comment.</p>
+          </div>
+          <p id="contrast-warning" class="warning" hidden>One or both colours have low contrast against this background. Consider a different colour.</p>
+          <div class="row"><label for="compactComments">Compact spacing<span class="description">Keep the suite's current tighter comment layout.</span></label><input id="compactComments" class="switch" type="checkbox" role="switch"></div>
+          <div class="row"><label for="hideCommentControls">Hide comment controls<span class="description">Likes, dislikes, reply, action menu and composer. Existing replies remain readable.</span></label><input id="hideCommentControls" class="switch" type="checkbox" role="switch"></div>
+          <p class="section-note">Off changes name styling only. Comment-loading and navigation safeguards would remain enabled.</p>
+        </section>
+        <section id="section-feed" role="tabpanel" aria-labelledby="tab-feed" hidden></section>
+        <section id="section-player" role="tabpanel" aria-labelledby="tab-player" hidden></section>
+        <section id="section-layout" role="tabpanel" aria-labelledby="tab-layout" hidden></section>
+        <section id="section-miniplayer" role="tabpanel" aria-labelledby="tab-miniplayer" hidden></section>
+      </div>
+      <footer><button id="restore-defaults" class="text-button">Restore defaults</button><span class="spacer"></span><button id="cancel-panel" class="text-button">Cancel</button><button id="save-preview" class="text-button primary">Save preview</button></footer>
+    </div>
+  </dialog>
+  <script>
+    (() => {
+      'use strict';
+      const $ = id => document.getElementById(id);
+      const DEFAULTS = Object.freeze({
+        colourMode: 'default', palette: 'teal-coral', viewerColour: '#82A3E6', ownerColour: '#FF9F1C',
+        compactComments: true, hideCommentControls: true,
+        hideShorts: true, hideWatchedVideos: true, hideMixes: true, hidePodcasts: true, hideMembersOnly: true,
+        watchedThreshold: '90', yellowCaptions: true, mirrorButton: true, theatreMode: true,
+        wheelVolume: true, wheelStep: '5', hideRelated: true, hideChat: true, hideInfoCards: true,
+        hideEndScreens: true, fullscreenComments: true, miniplayerEnabled: true,
+        corner: 'top-right', queueInfo: true,
+      });
+      const DARK_PALETTES = Object.freeze({
+        'teal-coral': ['#80CBC4', '#FFAB91'], 'lavender-gold': ['#B39DDB', '#FFD54F'], 'cyan-rose': ['#81D4FA', '#F48FB1'],
+      });
+      const LIGHT_PALETTES = Object.freeze({
+        'teal-coral': ['#00695C', '#A83222'], 'lavender-gold': ['#65409B', '#806000'], 'cyan-rose': ['#006A8E', '#A82659'],
+      });
+      const GROUPS = {
+        feed: [
+          ['hideShorts', 'Hide Shorts'], ['hideWatchedVideos', 'Hide watched videos'],
+          ['hideMixes', 'Hide mixes'], ['hidePodcasts', 'Hide podcasts'], ['hideMembersOnly', 'Hide members-only videos'],
+          ['watchedThreshold', 'Watched threshold', ['80', '90', '95', '100'], value => `${value}%`],
+        ],
+        player: [
+          ['yellowCaptions', 'Readable yellow captions'], ['mirrorButton', 'Show mirror button'],
+          ['theatreMode', 'Automatic theatre mode'], ['wheelVolume', 'Right-button wheel volume'],
+          ['wheelStep', 'Volume step', ['1', '2', '5', '10'], value => `${value}%`],
+        ],
+        layout: [
+          ['hideRelated', 'Hide related videos'], ['hideChat', 'Hide live chat'], ['hideInfoCards', 'Hide info cards'],
+          ['hideEndScreens', 'Hide end-screen recommendations'], ['fullscreenComments', 'Scrollable fullscreen comments'],
+        ],
+        miniplayer: [
+          ['miniplayerEnabled', 'Scroll miniplayer'],
+          ['corner', 'Preferred corner', ['top-right', 'bottom-right', 'bottom-left', 'top-left'], value => value.replace('-', ' ')],
+          ['queueInfo', 'Show compact title and queue information'],
+        ],
+      };
+      let saved = { ...DEFAULTS };
+      let draft = { ...saved };
+      let pickerTarget = null;
+      let pickerTrigger = null;
+      const dialog = $('settings-dialog');
+      const tabIds = ['comments', 'feed', 'player', 'layout', 'miniplayer'];
+      function selectTab(id, focus = false) {
+        closePicker(false);
+        for (const tab of tabIds) {
+          const selected = tab === id;
+          $(`section-${tab}`).hidden = !selected;
+          $(`tab-${tab}`).setAttribute('aria-selected', String(selected));
+          $(`tab-${tab}`).tabIndex = selected ? 0 : -1;
+        }
+        document.querySelector('.content').scrollTop = 0;
+        if (focus) $(`tab-${id}`).focus();
+      }
+      for (const id of tabIds) {
+        const tab = document.createElement('button');
+        tab.id = `tab-${id}`; tab.textContent = id === 'miniplayer' ? 'Miniplayer' : id[0].toUpperCase() + id.slice(1);
+        tab.setAttribute('role', 'tab'); tab.setAttribute('aria-controls', `section-${id}`);
+        tab.addEventListener('click', () => selectTab(id));
+        tab.addEventListener('keydown', event => {
+          const index = tabIds.indexOf(id);
+          const next = event.key === 'ArrowRight' ? (index + 1) % tabIds.length :
+            event.key === 'ArrowLeft' ? (index + tabIds.length - 1) % tabIds.length :
+            event.key === 'Home' ? 0 : event.key === 'End' ? tabIds.length - 1 : -1;
+          if (next >= 0) { event.preventDefault(); selectTab(tabIds[next], true); }
+        });
+        document.querySelector('nav').append(tab);
+      }
+      for (const [group, rows] of Object.entries(GROUPS)) {
+        for (const [key, labelText, choices, format] of rows) {
+          const row = document.createElement('div'); row.className = 'row';
+          const label = document.createElement('label'); label.htmlFor = key; label.textContent = labelText;
+          const input = document.createElement(choices ? 'select' : 'input'); input.id = key;
+          if (choices) {
+            for (const value of choices) { const option = document.createElement('option'); option.value = value; option.textContent = format(value); input.append(option); }
+          } else { input.type = 'checkbox'; input.className = 'switch'; input.setAttribute('role', 'switch'); }
+          row.append(label, input); $(`section-${group}`).append(row);
+          input.addEventListener('change', () => { draft[key] = choices ? input.value : input.checked; });
+        }
+      }
+      const miniplayerNote = document.createElement('p'); miniplayerNote.className = 'section-note';
+      miniplayerNote.textContent = 'Size remains automatic and adapts to the available window space.';
+      $('section-miniplayer').append(miniplayerNote);
+      function normaliseHex(value) { return /^#?[0-9a-f]{6}$/i.test(value.trim()) ? '#' + value.trim().replace(/^#/, '').toUpperCase() : null; }
+      function theme() { return document.documentElement.dataset.theme; }
+      function colours() {
+        if (draft.colourMode === 'off') return null;
+        if (draft.colourMode === 'default') return [DEFAULTS.viewerColour, DEFAULTS.ownerColour];
+        if (draft.colourMode === 'preset') return (theme() === 'dark' ? DARK_PALETTES : LIGHT_PALETTES)[draft.palette];
+        return [draft.viewerColour, draft.ownerColour];
+      }
+      function rgb(hex) { return [1, 3, 5].map(offset => parseInt(hex.slice(offset, offset + 2), 16)); }
+      function hex(channels) { return '#' + channels.map(value => value.toString(16).padStart(2, '0')).join('').toUpperCase(); }
+      function luminance(colour) {
+        return rgb(colour).map(value => { const channel = value / 255; return channel <= .04045 ? channel / 12.92 : ((channel + .055) / 1.055) ** 2.4; })
+          .reduce((sum, channel, index) => sum + channel * [.2126, .7152, .0722][index], 0);
+      }
+      function updateColours() {
+        const custom = draft.colourMode === 'custom';
+        $('custom-colours').hidden = !custom; $('palette-row').hidden = draft.colourMode !== 'preset';
+        const pair = colours(); const preview = $('comment-preview'); preview.dataset.mode = draft.colourMode;
+        for (const [index, name] of ['viewer', 'owner'].entries()) {
+          if (pair) preview.style.setProperty(`--${name}-colour`, pair[index]); else preview.style.removeProperty(`--${name}-colour`);
+          $(`${name}-swatch`).style.setProperty('--swatch', draft[`${name}Colour`]);
+        }
+        const invalid = custom && ['viewer', 'owner'].some(name => !normaliseHex($(`${name}-hex`).value));
+        $('save-preview').disabled = invalid;
+        const background = luminance(theme() === 'dark' ? '#0F0F0F' : '#FFFFFF');
+        $('contrast-warning').hidden = !pair || !pair.some(colour => {
+          const foreground = luminance(colour);
+          return (Math.max(foreground, background) + .05) / (Math.min(foreground, background) + .05) < 4.5;
+        });
+      }
+      function populate() {
+        for (const [key, value] of Object.entries(draft)) {
+          const input = $(key); if (!input) continue;
+          if (input.type === 'checkbox') input.checked = value; else input.value = value;
+        }
+        $('colour-mode').value = draft.colourMode; $('palette').value = draft.palette;
+        for (const name of ['viewer', 'owner']) {
+          $(`${name}-hex`).value = draft[`${name}Colour`];
+          $(`${name}-hex`).setAttribute('aria-invalid', 'false'); $(`${name}-error`).hidden = true;
+        }
+        updateColours();
+      }
+      function closePicker(restoreFocus = true) {
+        $('colour-picker').hidden = true;
+        pickerTrigger?.setAttribute('aria-expanded', 'false');
+        if (restoreFocus) pickerTrigger?.focus();
+        pickerTarget = null; pickerTrigger = null;
+      }
+      function updateChannels() {
+        const channels = rgb(draft[`${pickerTarget}Colour`]);
+        ['red', 'green', 'blue'].forEach((name, index) => {
+          $(name).value = channels[index]; $(`${name}-value`).value = channels[index];
+          const start = [...channels]; const end = [...channels]; start[index] = 0; end[index] = 255;
+          $(name).style.background = `linear-gradient(to right, ${hex(start)}, ${hex(end)})`;
+        });
+      }
+      for (const name of ['viewer', 'owner']) {
+        $(`${name}-hex`).addEventListener('input', event => {
+          const value = normaliseHex(event.target.value);
+          event.target.setAttribute('aria-invalid', String(!value)); $(`${name}-error`).hidden = Boolean(value);
+          if (value) { draft[`${name}Colour`] = value; if (pickerTarget === name) updateChannels(); }
+          updateColours();
+        });
+        $(`${name}-swatch`).addEventListener('click', event => {
+          if (pickerTarget === name) { closePicker(); return; }
+          closePicker(false); pickerTarget = name; pickerTrigger = event.currentTarget;
+          pickerTrigger.setAttribute('aria-expanded', 'true'); $('colour-picker').hidden = false;
+          $('picker-title').textContent = name === 'viewer' ? 'Viewer name colour' : 'Uploader and pinned colour';
+          updateChannels(); $('red').focus();
+        });
+      }
+      for (const name of ['red', 'green', 'blue']) {
+        $(name).addEventListener('input', () => {
+          if (!pickerTarget) return;
+          draft[`${pickerTarget}Colour`] = hex(['red', 'green', 'blue'].map(channel => Number($(channel).value)));
+          $(`${pickerTarget}-hex`).value = draft[`${pickerTarget}Colour`];
+          $(`${pickerTarget}-hex`).setAttribute('aria-invalid', 'false'); $(`${pickerTarget}-error`).hidden = true;
+          updateChannels(); updateColours();
+        });
+      }
+      $('close-picker').addEventListener('click', () => closePicker());
+      $('colour-mode').addEventListener('change', event => { closePicker(false); draft.colourMode = event.target.value; updateColours(); });
+      $('palette').addEventListener('change', event => { draft.palette = event.target.value; updateColours(); });
+      function openPanel() { draft = { ...saved }; closePicker(false); populate(); selectTab('comments'); dialog.showModal(); $('tab-comments').focus(); }
+      $('suite-settings').addEventListener('click', openPanel); $('open-preview').addEventListener('click', openPanel);
+      for (const id of ['close-panel', 'cancel-panel']) $(id).addEventListener('click', () => dialog.close());
+      dialog.addEventListener('close', () => closePicker(false));
+      dialog.addEventListener('keydown', event => {
+        if (event.key === 'Escape' && pickerTarget) { event.preventDefault(); event.stopPropagation(); closePicker(); }
+      });
+      dialog.addEventListener('click', event => {
+        if (event.target !== dialog) return;
+        const box = dialog.getBoundingClientRect();
+        if (event.clientX < box.left || event.clientX > box.right || event.clientY < box.top || event.clientY > box.bottom) dialog.close();
+      });
+      $('restore-defaults').addEventListener('click', () => { draft = { ...DEFAULTS }; closePicker(false); populate(); });
+      $('save-preview').addEventListener('click', () => {
+        if ($('save-preview').disabled) return;
+        saved = { ...draft }; $('status').textContent = 'Preview saved in memory only. The installed suite is unchanged; reloading clears these edits.'; dialog.close();
+      });
+      $('theme-toggle').addEventListener('click', () => {
+        const next = theme() === 'dark' ? 'light' : 'dark'; document.documentElement.dataset.theme = next;
+        $('theme-toggle').textContent = `Preview ${next === 'dark' ? 'light' : 'dark'} theme`; updateColours();
+      });
+      populate(); selectTab('comments');
+    })();
+  </script>
+</body>
+</html>

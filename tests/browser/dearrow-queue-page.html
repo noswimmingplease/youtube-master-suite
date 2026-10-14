@@ -1,0 +1,173 @@
+<!doctype html>
+<html lang="en" dark>
+<head>
+  <meta charset="utf-8">
+  <title>DeArrow queue compatibility contract fixture</title>
+  <style>
+    * { box-sizing: border-box; }
+    body { margin: 0; background: #111; color: #eee; font: 14px Arial, sans-serif; }
+    ytd-app, ytd-masthead, ytd-watch-flexy, ytd-watch-metadata, ytd-comments,
+    ytd-miniplayer, ytd-playlist-panel-renderer, ytd-playlist-panel-video-renderer { display: block; }
+    #masthead { height: 48px; }
+    #movie_player { width: 640px; height: 112px; position: relative; background: #222; }
+    video { width: 640px; height: 72px; }
+    .ytp-right-controls { display: flex; height: 40px; }
+    .ytp-button { width: 40px; height: 40px; background: #333; color: white; border: 0; }
+    #columns { display: flex; }
+    #primary { width: 660px; }
+    #secondary { width: 374px; }
+    #queue-host { position: absolute; top: 200px; left: 680px; width: 374px; }
+    body[data-queue-view="miniplayer"] #queue-host { left: auto; right: 24px; }
+    ytd-playlist-panel-renderer { width: 100%; border: 1px solid #444; background: #171717; }
+    .queue-header { padding: 12px; }
+    #items { max-height: 380px; overflow: auto; }
+    ytd-playlist-panel-video-renderer { width: 100%; }
+    ytd-playlist-panel-video-renderer[selected] { background: #302a25; }
+    ytd-playlist-panel-video-renderer #container { display: flex; min-height: 70px; padding: 7px 4px; align-items: flex-start; gap: 8px; }
+    .playlist-drag-handle { width: 18px; height: 56px; flex: 0 0 18px; display: grid; place-items: center; }
+    #thumbnail { width: 98px; height: 56px; flex: 0 0 98px; background: #685c51; border-radius: 6px; }
+    .cbCustomThumbnail { background: #695d37 !important; }
+    #meta { min-width: 0; flex: 1 1 auto; display: flex; flex-direction: column; gap: 5px; }
+    #video-title { color: white; text-decoration: none; font: 600 14px/20px Arial, sans-serif; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; }
+    #byline { line-height: 17px; color: #bbb; }
+    .row-actions { display: flex; gap: 4px; }
+    .row-actions button { width: 28px; height: 24px; background: #333; color: white; border: none; }
+    .dragging { position: absolute; pointer-events: none; background: #38312b; }
+
+    /* DeArrow 2.3.10 public/content.css: the visibility/size rules relevant here.
+       https://github.com/ajayyy/DeArrow/blob/2.3.10/public/content.css
+       JS additionally makes the duplicated-title parent inline-flex, width 100%.
+       This is a bounded compatibility fixture, not the full extension or YouTube. */
+    .cbButton { background: transparent; border-radius: 50%; border: none; padding: 0; vertical-align: top; margin-left: 10px; margin-right: 10px; cursor: pointer; }
+    .cbButton img { height: 60%; top: 0; bottom: 0; display: block; margin: auto; }
+    .cbShowOriginal { display: none; opacity: 1; transition: opacity 0.2s; margin-right: 0; margin-left: 5px; z-index: 1; }
+    .cbShowOriginal:hover { opacity: 0.7; }
+    *:hover > *:not(.ytp-ce-element, .ytp-autonav-suggestion-card) > * > .cbShowOriginal:not(.cbMobile),
+    .ytp-ce-element:hover > * > .cbShowOriginal:not(.cbMobile),
+    .ytp-autonav-suggestion-card:hover > * > .cbShowOriginal:not(.cbMobile),
+    .cbShowOriginal.cbDontHide, .cbShowOriginal.cbMobileDontHide { display: inline !important; }
+    .cbShowOriginal img.cbShowOriginalImage, .cbTitleButton svg { height: 20px; }
+    ytd-playlist-panel-video-renderer #video-title { width: 100%; }
+  </style>
+</head>
+<body>
+  <ytd-app>
+    <ytd-masthead id="masthead"><div id="end"><div id="buttons"><button id="avatar-btn" aria-label="Account">Profile</button></div></div></ytd-masthead>
+    <ytd-watch-flexy is-two-columns video-id="aaaaaaaaaaa">
+      <div id="player"><div id="movie_player" class="html5-video-player" tabindex="0">
+        <video class="html5-main-video"></video>
+        <div class="ytp-right-controls">
+          <button class="ytp-settings-button ytp-button" aria-label="Settings">S</button>
+          <button class="ytp-size-button ytp-button" aria-label="Default view">D</button>
+          <button class="ytp-fullscreen-button ytp-button" aria-label="Full screen">F</button>
+          <button class="ytp-miniplayer-button ytp-button" aria-label="Miniplayer">I</button>
+        </div>
+      </div></div>
+      <div id="columns"><div id="primary"><div id="primary-inner">
+        <ytd-watch-metadata><h1><yt-formatted-string>Current video</yt-formatted-string></h1><div id="owner"><a href="/@Fixture">Fixture owner</a></div></ytd-watch-metadata>
+        <ytd-comments></ytd-comments>
+      </div></div><div id="secondary"></div></div>
+    </ytd-watch-flexy>
+  </ytd-app>
+  <script>
+    const fixture = window.fixture = { toggleClicks: 0, titleClicks: 0, actionClicks: 0 };
+    const view = location.pathname === '/watch' ? 'desktop' : 'miniplayer';
+    document.body.dataset.queueView = view;
+    const app = document.querySelector('ytd-app');
+    const flexy = document.querySelector('ytd-watch-flexy');
+    const player = document.getElementById('movie_player');
+    const video = player.querySelector('video');
+    const response = {
+      playerResponse: { videoDetails: { videoId: 'aaaaaaaaaaa' } },
+      currentVideoEndpoint: { watchEndpoint: { videoId: 'aaaaaaaaaaa' } },
+      contents: { twoColumnWatchNextResults: {} },
+    };
+    app.data = { page: view === 'desktop' ? 'watch' : 'browse', response };
+    flexy.data = response; flexy.videoId = 'aaaaaaaaaaa'; flexy.loading = false;
+    flexy.watchController = { watchNextResponse: response };
+    player.getVideoData = () => ({ video_id: 'aaaaaaaaaaa', title: 'Current video' });
+    player.getPlayerState = () => video.paused ? 2 : 1;
+    player.getVolume = () => video.volume * 100;
+    player.setVolume = volume => { video.volume = volume / 100; };
+    player.isMuted = () => video.muted;
+    player.getVideoUrl = () => 'https://youtu.be/aaaaaaaaaaa';
+    const host = document.createElement(view === 'desktop' ? 'div' : 'ytd-miniplayer');
+    host.id = 'queue-host';
+    if (view === 'desktop') document.getElementById('secondary').append(host);
+    else { app.append(host); flexy.hidden = true; }
+    const panel = document.createElement('ytd-playlist-panel-renderer');
+    panel.setAttribute('can-reorder', '');
+    const header = document.createElement('div'); header.className = 'queue-header'; header.textContent = 'Queue';
+    const items = document.createElement('div'); items.id = 'items';
+    panel.append(header, items); host.append(panel);
+    fixture.host = host; fixture.panel = panel; fixture.items = items;
+    for (let index = 0; index < 6; index++) {
+      const row = document.createElement('ytd-playlist-panel-video-renderer'); row.dataset.index = String(index);
+      if (!index) row.setAttribute('selected', '');
+      const inner = document.createElement('div'); inner.id = 'container';
+      const handle = document.createElement('div'); handle.className = 'playlist-drag-handle'; handle.textContent = '⋮';
+      const thumb = document.createElement('a'); thumb.id = 'thumbnail'; thumb.href = '/watch?v=aaaaaaaaaaa';
+      const meta = document.createElement('div'); meta.id = 'meta';
+      const wrapper = document.createElement('div'); wrapper.className = 'fixture-title-parent';
+      const title = document.createElement('a'); title.id = 'video-title'; title.href = '/watch?v=aaaaaaaaaaa';
+      title.textContent = 'Native title for queue video ' + (index + 1);
+      title.addEventListener('click', event => { event.preventDefault(); fixture.titleClicks++; });
+      wrapper.append(title);
+      const byline = document.createElement('span'); byline.id = 'byline'; byline.textContent = 'Fixture channel';
+      meta.append(wrapper, byline);
+      if (!index) {
+        const actions = document.createElement('div'); actions.className = 'row-actions';
+        const action = document.createElement('button'); action.className = 'native-like'; action.setAttribute('aria-label', 'Like'); action.textContent = '+';
+        action.addEventListener('click', () => fixture.actionClicks++); actions.append(action); meta.append(actions);
+      }
+      inner.append(handle, thumb, meta); row.append(inner); items.append(row);
+    }
+    fixture.installDeArrow = (index = 0, { button = true, title = 'DeArrow replacement title with enough words to wrap naturally' } = {}) => {
+      const row = items.children[index];
+      const original = row.querySelector('#video-title');
+      const custom = original.cloneNode(true); custom.classList.add('cbCustomTitle'); custom.textContent = title;
+      custom.addEventListener('click', event => { event.preventDefault(); fixture.titleClicks++; });
+      original.style.setProperty('display', 'none', 'important');
+      original.parentElement.style.display = 'inline-flex'; original.parentElement.style.width = '100%';
+      original.parentElement.append(custom);
+      row.querySelector('#thumbnail').classList.add('cbCustomThumbnail');
+      if (button) fixture.insertButton(index);
+      return custom;
+    };
+    fixture.insertButton = (index = 0) => {
+      const row = items.children[index]; const wrapper = row.querySelector('.fixture-title-parent');
+      const button = document.createElement('button'); button.className = 'cbButton cbShowOriginal'; button.setAttribute('aria-label', 'Show original title');
+      const image = document.createElement('img'); image.className = 'cbShowOriginalImage';
+      image.src = 'data:image/svg+xml,%3Csvg xmlns="http://www.w3.org/2000/svg" width="20" height="20"%3E%3Crect width="20" height="20" fill="orange"/%3E%3C/svg%3E';
+      button.append(image); wrapper.append(button);
+      button.addEventListener('click', () => {
+        fixture.toggleClicks++;
+        const original = wrapper.querySelector('#video-title:not(.cbCustomTitle)');
+        const custom = wrapper.querySelector('.cbCustomTitle');
+        const showOriginal = image.classList.toggle('cbOriginalShown');
+        original.style.setProperty('display', showOriginal ? '-webkit-box' : 'none', 'important');
+        custom.style.setProperty('display', showOriginal ? 'none' : '-webkit-box', 'important');
+      });
+      return button;
+    };
+    fixture.metrics = (index = 0, clone = false) => {
+      const row = clone ? document.querySelector('.dragging') : items.children[index];
+      const custom = row.querySelector('.cbCustomTitle');
+      const original = row.querySelector('#video-title:not(.cbCustomTitle)');
+      const parent = row.querySelector('.fixture-title-parent');
+      const button = row.querySelector('.cbShowOriginal');
+      return {
+        rowHeight: row.getBoundingClientRect().height,
+        titleWidth: (custom || original).getBoundingClientRect().width,
+        titleHeight: (custom || original).getBoundingClientRect().height,
+        parentWidth: parent.getBoundingClientRect().width,
+        padding: getComputedStyle(parent).paddingInlineEnd,
+        logoDisplay: button ? getComputedStyle(button).display : null,
+        customDisplay: custom ? getComputedStyle(custom).display : null,
+        originalDisplay: getComputedStyle(original).display,
+        originalStyle: original.getAttribute('style'), customStyle: custom?.getAttribute('style') || null,
+      };
+    };
+  </script>
+</body>
+</html>

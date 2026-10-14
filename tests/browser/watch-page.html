@@ -1,0 +1,277 @@
+<!doctype html>
+<html lang="en" dark>
+<head>
+  <meta charset="utf-8">
+  <title>Video A - YouTube</title>
+  <style>
+    * { box-sizing: border-box; }
+    body { margin: 0; background: #111; color: white; font: 16px sans-serif; }
+    ytd-app, ytd-watch-flexy, ytd-watch-metadata, ytd-comments,
+    ytd-comment-thread-renderer, ytd-comment-renderer { display: block; }
+    ytd-app[fullscreen] { height: 100vh; overflow: hidden; }
+    html:fullscreen #movie_player { width: 100%; height: calc(100vh - 80px); }
+    html:fullscreen video { width: 100%; height: calc(100vh - 120px); }
+    #masthead { height: 44px; }
+    #player { margin: 16px; }
+    #movie_player { position: relative; width: 640px; height: 360px; background: #222; }
+    video { display: block; width: 640px; height: 320px; }
+    .ytp-right-controls { display: flex; justify-content: flex-end; height: 40px; }
+    .ytp-button { width: 40px; height: 40px; border: 0; padding: 0; color: white; background: #333; }
+    .ytp-caption-window-container { position: absolute; top: 200px; left: 100px; }
+    #columns { display: flex; }
+    #primary { width: 720px; padding: 16px; }
+    #secondary { width: 374px; }
+    ytd-comments { min-height: 950px; padding-top: 16px; }
+    .comment-message { padding: 12px; }
+    .ytp-contextmenu { position: fixed; z-index: 10000; top: 90px; left: 120px; background: #333; }
+    .ytp-contextmenu[hidden] { display: none; }
+    .ytp-menuitem { padding: 12px; cursor: pointer; }
+    .ytp-html5-clipboard { position: absolute; left: -10000px; width: 1px; height: 1px; }
+  </style>
+</head>
+<body>
+  <ytd-app>
+    <ytd-masthead id="masthead">
+      <button id="next-video">Next video</button>
+      <button id="stalled-next-video">Next video with retained controller</button>
+      <button id="clear-queue">Clear queue</button>
+      <button id="select-video">Select new video with retained comments</button>
+      <button id="page-fullscreen">Page fullscreen</button>
+      <div id="end"><div id="buttons"><button id="avatar-btn" aria-label="Account">Profile</button></div></div>
+    </ytd-masthead>
+    <ytd-watch-flexy video-id="aaaaaaaaaaa">
+      <div id="player">
+        <div id="movie_player" class="html5-video-player" tabindex="0">
+          <video class="html5-main-video"></video>
+          <div class="ytp-caption-window-container">Unmirrored caption</div>
+          <div class="ytp-right-controls">
+            <button class="ytp-settings-button ytp-button" aria-label="Settings">S</button>
+            <button class="ytp-size-button ytp-button" aria-label="Default view">D</button>
+            <button class="ytp-fullscreen-button ytp-button" aria-label="Full screen">F</button>
+            <button class="ytp-miniplayer-button ytp-button" aria-label="Miniplayer">I</button>
+          </div>
+        </div>
+      </div>
+      <div id="columns">
+        <div id="primary"><div id="primary-inner">
+          <ytd-watch-metadata><h1><yt-formatted-string>Video A</yt-formatted-string></h1><div id="owner"><a href="/@ChannelOwner">Channel owner</a></div></ytd-watch-metadata>
+          <ytd-comments></ytd-comments>
+        </div></div>
+        <div id="secondary"><ytd-playlist-panel-renderer></ytd-playlist-panel-renderer></div>
+      </div>
+    </ytd-watch-flexy>
+  </ytd-app>
+  <!-- YouTube portals its native menu outside the player. -->
+  <div class="ytp-contextmenu" role="menu" hidden>
+    <div id="copy-url" class="ytp-menuitem" role="menuitem" tabindex="0"><div class="ytp-menuitem-label">Copy video URL</div></div>
+    <div id="copy-time" class="ytp-menuitem" role="menuitem" tabindex="0"><div class="ytp-menuitem-label">Copy video URL at current time</div></div>
+    <textarea class="ytp-html5-clipboard" readonly tabindex="-1"></textarea>
+  </div>
+  <script>
+    // Only YouTube's page/player contracts are supplied by this fixture.
+    // DOM, styles, focus, input, clipboard dispatch and fullscreen remain native.
+    const app = document.querySelector('ytd-app');
+    const flexy = document.querySelector('ytd-watch-flexy');
+    const player = document.getElementById('movie_player');
+    const video = player.querySelector('video');
+    const comments = document.querySelector('ytd-comments');
+    const menu = document.querySelector('.ytp-contextmenu');
+    const clipboard = menu.querySelector('textarea');
+    const fixture = window.fixture = {
+      playerId: 'aaaaaaaaaaa', copies: [], copyResults: [], completionCalls: 0,
+      queueClears: 0, completionArguments: [], responseEvents: [],
+      reloadCommentsPending: false, commentsReadyEvents: [],
+    };
+    let reloadCommentTimer = 0;
+    let reloadCommentResponse = null;
+    function cancelPendingReloadComments() {
+      clearTimeout(reloadCommentTimer);
+      reloadCommentTimer = 0;
+      reloadCommentResponse = null;
+      fixture.reloadCommentsPending = false;
+    }
+    const titleFor = id => id === 'aaaaaaaaaaa' ? 'Video A' : 'Video B';
+    const responseFor = id => ({
+      playerResponse: { videoDetails: { videoId: id } },
+      currentVideoEndpoint: { watchEndpoint: { videoId: id } },
+      contents: { twoColumnWatchNextResults: {} },
+    });
+    function renderMetadata(response) {
+      if (reloadCommentResponse && reloadCommentResponse !== response) cancelPendingReloadComments();
+      const id = response.currentVideoEndpoint.watchEndpoint.videoId;
+      flexy.data = response;
+      flexy.videoId = id;
+      flexy.loading = false;
+      flexy.setAttribute('video-id', id);
+      document.querySelector('h1 yt-formatted-string').textContent = titleFor(id);
+      document.title = titleFor(id) + ' - YouTube';
+    }
+    function renderComments(response) {
+      const id = response.currentVideoEndpoint.watchEndpoint.videoId;
+      // Native DOM construction also permits testing with Trusted Types enforcement.
+      comments.replaceChildren();
+      for (const owner of [false, true]) {
+        const thread = document.createElement('ytd-comment-thread-renderer');
+        const renderer = document.createElement('ytd-comment-renderer');
+        const author = document.createElement('a');
+        author.id = 'author-text'; author.className = owner ? 'fixture-owner' : 'fixture-viewer';
+        author.href = owner ? '/@ChannelOwner' : '/@Viewer'; author.textContent = owner ? '@ChannelOwner' : '@Viewer';
+        renderer.append(author);
+        if (owner) {
+          const badge = document.createElement('ytd-author-comment-badge-renderer'); badge.textContent = 'Creator';
+          const pin = document.createElement('ytd-pinned-comment-badge-renderer'); pin.textContent = 'Pinned by @ChannelOwner';
+          renderer.append(badge, pin);
+        } else {
+          const like = document.createElement('button'); like.id = 'like-button'; like.textContent = 'Like comment';
+          renderer.append(like);
+        }
+        const time = document.createElement('a'); time.id = 'published-time-text'; time.textContent = 'Now';
+        time.href = '/watch?v=' + id + '&lc=' + (owner ? 'owner' : 'fixture'); renderer.append(time);
+        if (!owner) {
+          const message = document.createElement('div'); message.id = 'content-text'; message.className = 'comment-message';
+          message.textContent = 'Comment for ' + titleFor(id); renderer.append(message);
+        }
+        thread.append(renderer); comments.append(thread);
+      }
+    }
+    player.getVideoData = () => ({ video_id: fixture.playerId, title: titleFor(fixture.playerId) });
+    player.getPlayerState = () => video.paused ? 2 : 1;
+    player.getVolume = () => video.volume * 100;
+    player.setVolume = volume => { video.volume = volume / 100; };
+    player.isMuted = () => video.muted;
+    player.getVideoUrl = () => 'https://youtu.be/' + fixture.playerId + '?list=fixture-queue&index=2';
+    // Model the verified native same-data entry chain, not a direct comments
+    // rewrite by updatePageData_. The subscriber represents native response
+    // rendering; this fixture verifies dispatch, not production repair efficacy.
+    const watchResponseEvents = new EventTarget();
+    const controller = flexy.watchController = {
+      watchNextResponse: null,
+      setWatchNextResponse(response) {
+        if (reloadCommentResponse && reloadCommentResponse !== response) cancelPendingReloadComments();
+        const type = response === this.watchNextResponse
+          ? 'WATCH_NEXT_RESPONSE_RELOADED' : 'WATCH_NEXT_RESPONSE_UPDATED';
+        this.watchNextResponse = response;
+        fixture.responseEvents.push({
+          type, videoId: response.currentVideoEndpoint.watchEndpoint.videoId,
+          acceptedResponse: response === flexy.data && response === app.data?.response,
+        });
+        watchResponseEvents.dispatchEvent(new CustomEvent(type, { detail: response }));
+      },
+    };
+    for (const type of ['WATCH_NEXT_RESPONSE_RELOADED', 'WATCH_NEXT_RESPONSE_UPDATED']) {
+      watchResponseEvents.addEventListener(type, event => {
+        const response = event.detail;
+        renderMetadata(response);
+        if (event.type === 'WATCH_NEXT_RESPONSE_UPDATED') {
+          renderComments(response);
+          window.dispatchEvent(new Event('yt-page-data-updated'));
+          return;
+        }
+        // The verified RELOADED handler schedules comment delivery after 1,000 ms.
+        // A later accepted response must cancel or reject this earlier work.
+        cancelPendingReloadComments();
+        reloadCommentResponse = response;
+        fixture.reloadCommentsPending = true;
+        reloadCommentTimer = setTimeout(() => {
+          if (reloadCommentResponse !== response) return;
+          cancelPendingReloadComments();
+          if (response !== flexy.data || response !== controller.watchNextResponse ||
+              response !== app.data?.response ||
+              new URL(location.href).searchParams.get('v') !== response.currentVideoEndpoint.watchEndpoint.videoId) return;
+          renderComments(response);
+          fixture.commentsReadyEvents.push({
+            videoId: response.currentVideoEndpoint.watchEndpoint.videoId,
+            acceptedResponse: true,
+          });
+          flexy.dispatchEvent(new Event('yt-watch-comments-ready', { bubbles: true }));
+        }, 1000);
+      });
+    }
+    flexy.onPageLoadWithSameData_ = () => controller.setWatchNextResponse(flexy.data);
+    flexy.updatePageData_ = response => {
+      fixture.completionCalls++;
+      fixture.completionArguments.push(response === flexy.data && response === app.data?.response);
+      if (response !== flexy.data) throw new Error('Fixture expects the exact accepted response');
+      flexy.onPageLoadWithSameData_();
+    };
+    const initialResponse = responseFor(fixture.playerId);
+    renderMetadata(initialResponse);
+    renderComments(initialResponse);
+    controller.watchNextResponse = initialResponse;
+    app.data = { page: 'watch', url: location.href, response: flexy.data };
+
+    function advance(stalled) {
+      window.dispatchEvent(new Event('yt-navigate-start'));
+      fixture.playerId = 'bbbbbbbbbbb';
+      history.pushState(null, '', '/watch?v=bbbbbbbbbbb&list=fixture-queue&index=2');
+      const response = responseFor(fixture.playerId);
+      cancelPendingReloadComments();
+      flexy.data = response;
+      // A retained controller with loading=false reproduces the old-title issue.
+      flexy.loading = !stalled;
+      app.data = { page: 'watch', url: location.href, response };
+      video.dispatchEvent(new Event('loadedmetadata', { bubbles: true }));
+      window.dispatchEvent(new Event('yt-navigate-finish'));
+      if (!stalled) setTimeout(() => flexy.updatePageData_(response), 100);
+    }
+    document.getElementById('next-video').onclick = () => advance(false);
+    document.getElementById('stalled-next-video').onclick = () => advance(true);
+    document.getElementById('clear-queue').onclick = () => {
+      fixture.queueClears++;
+      document.querySelector('ytd-playlist-panel-renderer').replaceChildren();
+      history.replaceState(null, '', '/watch?v=' + fixture.playerId);
+      app.data.url = location.href;
+      window.dispatchEvent(new Event('yt-page-data-updated'));
+    };
+    document.getElementById('select-video').onclick = () => {
+      window.dispatchEvent(new Event('yt-navigate-start'));
+      fixture.playerId = 'bbbbbbbbbbb';
+      history.pushState(null, '', '/watch?v=bbbbbbbbbbb');
+      const response = responseFor(fixture.playerId);
+      renderMetadata(response);
+      controller.watchNextResponse = response;
+      app.data = { page: 'watch', url: location.href, response };
+      // Native metadata/controller have settled, but the old comment tree was
+      // retained. Recovery must use the same accepted response through the
+      // verified RELOADED event path, not an old-controller UPDATED path.
+      video.dispatchEvent(new Event('loadedmetadata', { bubbles: true }));
+      window.dispatchEvent(new Event('yt-navigate-finish'));
+      window.dispatchEvent(new Event('yt-page-data-updated'));
+    };
+    player.querySelector('.ytp-size-button').onclick = () => flexy.toggleAttribute('theater');
+    document.getElementById('page-fullscreen').onclick = () => document.documentElement.requestFullscreen();
+    player.querySelector('.ytp-fullscreen-button').onclick = () => player.requestFullscreen();
+    document.addEventListener('fullscreenchange', () => {
+      const pageFullscreen = document.fullscreenElement === document.documentElement;
+      app.toggleAttribute('fullscreen', pageFullscreen);
+      flexy.toggleAttribute('fullscreen', pageFullscreen);
+    });
+    player.addEventListener('contextmenu', event => {
+      event.preventDefault();
+      menu.hidden = false;
+    });
+    document.addEventListener('copy', event => {
+      fixture.copies.push({
+        trusted: event.isTrusted,
+        customised: event.defaultPrevented,
+        value: event.defaultPrevented ? event.clipboardData.getData('text/plain') : clipboard.value,
+      });
+    });
+    for (const item of menu.querySelectorAll('.ytp-menuitem')) {
+      item.addEventListener('click', () => {
+        clipboard.value = player.getVideoUrl() + (item.id === 'copy-time' ? '&t=90' : '');
+        clipboard.select();
+        const success = document.execCommand('copy');
+        fixture.copyResults.push(success);
+        if (success) menu.hidden = true;
+      });
+      item.addEventListener('keydown', event => {
+        if (['Enter', ' ', 'ArrowRight'].includes(event.key)) {
+          event.preventDefault();
+          item.click();
+        }
+      });
+    }
+  </script>
+</body>
+</html>

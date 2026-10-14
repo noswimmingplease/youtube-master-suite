@@ -1,0 +1,96 @@
+name: Verify
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+
+      - name: Verify generated master
+        run: node build-master.mjs --check
+
+      - name: Exercise verification safeguards
+        run: |
+          node build-master.mjs --self-test
+          node refresh-source-lock.mjs --self-test
+          node verify-master.mjs --self-test
+          node verify-installed-master.mjs --self-test
+
+      - name: Run repository verifier
+        env:
+          VERIFY_BASE_REF: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event.before }}
+        run: |
+          base_ref="$VERIFY_BASE_REF"
+          if [[ -z "$base_ref" || "$base_ref" =~ ^0+$ ]]; then
+            if git rev-parse --verify HEAD^ >/dev/null 2>&1; then
+              base_ref="HEAD^"
+            else
+              base_ref=""
+            fi
+          fi
+          if [[ -n "$base_ref" ]]; then
+            if ! git cat-file -e "${base_ref}^{commit}" 2>/dev/null; then
+              git fetch --no-tags --depth=1 origin "$base_ref"
+            fi
+            node verify-master.mjs --base "$base_ref"
+          else
+            node verify-master.mjs
+          fi
+
+      - name: Verify install-parity helper
+        run: node verify-installed-master.mjs youtube-master-suite.user.js
+
+      - name: Install browser-test dependency
+        run: npm ci --ignore-scripts
+
+      - name: Install isolated Firefox
+        run: npx --no-install playwright install --with-deps firefox
+
+      - name: Run Firefox regression checks
+        run: npm run test:browser
+
+      - name: Check JavaScript syntax
+        run: |
+          node --check build-master.mjs
+          node --check refresh-source-lock.mjs
+          node --check verify-installed-master.mjs
+          node --check verify-master.mjs
+          for test_file in tests/*.test.mjs; do
+            node --check "$test_file"
+          done
+          for test_file in tests/browser/*.mjs; do
+            node --check "$test_file"
+          done
+          node --check youtube-master-suite.user.js
+          for source in sources/*.mjs; do
+            node --check "$source"
+          done
+          for source in sources/modules/*.user.js; do
+            node --check "$source"
+          done
+
+      - name: Confirm verification made no changes
+        run: git diff --exit-code

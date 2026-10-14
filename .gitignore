@@ -1,0 +1,5 @@
+# Local manual-install copy; generated userscript is the canonical artefact.
+youtube-master-suite.txt
+
+# Development-only browser test dependency.
+node_modules/

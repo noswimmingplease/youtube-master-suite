@@ -1,0 +1,45 @@
+{
+  "schemaVersion": 2,
+  "modules": {
+    "commentCleaner": {
+      "path": "sources/modules/youtube-comment-cleaner.user.js",
+      "version": "1.24",
+      "sha256": "a2f715995c3e8191cc1b3ada145a08d2b0d6fb2fcebe63967be600329311e830"
+    },
+    "feedUiCleaner": {
+      "path": "sources/modules/youtube-feed-ui-cleaner.user.js",
+      "version": "2.7",
+      "sha256": "a655045b8248d3b0d5afb3001a9df8429596ed107b754b60809cd807929add6e"
+    },
+    "miniplayerButtonRestorer": {
+      "path": "sources/modules/youtube-miniplayer-button-restorer.user.js",
+      "version": "1.11",
+      "sha256": "055727e684f3f9aa3ff85de5d0ec18e860b8dd95245c054a9403f12cfda332a1"
+    },
+    "pageCoherence": {
+      "path": "sources/modules/youtube-page-coherence.user.js",
+      "version": "1.13",
+      "sha256": "3e94010fad829a6a35a67aafcd1bb8ffb87129bbb05eb5fe85e5b1ad290b49fe"
+    },
+    "playerPreferencesLite": {
+      "path": "sources/modules/youtube-player-preferences-lite.user.js",
+      "version": "1.68",
+      "sha256": "865f627bbd660674ae0cdc32bb27eb9410d88aa5658b6630d03474660e9484c4"
+    },
+    "scrollMiniplayer": {
+      "path": "sources/modules/youtube-scroll-miniplayer.user.js",
+      "version": "5.25",
+      "sha256": "bd4bc569274331991de7bc902e2606a4d7d2564299d7de2bd68a61bdd799d6a1"
+    },
+    "suiteSettings": {
+      "path": "sources/modules/youtube-suite-settings.user.js",
+      "version": "1.13",
+      "sha256": "606837b6f8a95e2299ff253cdf6eda6d57a684307aeecf392123d13ecc944c81"
+    },
+    "watchLayoutCleaner": {
+      "path": "sources/modules/youtube-watch-layout-cleaner.user.js",
+      "version": "1.34",
+      "sha256": "6c99633c44b9304ba88895a9931046e2918245bbac73a388d9dfca53aed853a5"
+    }
+  }
+}
