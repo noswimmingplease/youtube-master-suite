@@ -230,8 +230,8 @@ included while keeping the Tampermonkey source concise.
    and approve installation in Tampermonkey. No GitHub sign-in is needed.
 3. If the browser downloads the file instead, open **YouTube Master Suite** in
    Tampermonkey's editor (or create a new script), replace its contents with the
-   complete generated file and save. Keep its existing name and namespace when
-   updating an installed copy.
+   complete generated file and save. Update the existing script rather than
+   creating a second copy.
 4. Disable the individual scripts listed above, including YouTube SponsorBlock
    Queue Width, to prevent duplicated observers, styles, controls and DOM work.
 5. Reload YouTube so the master starts at `document-start`.
@@ -248,9 +248,14 @@ Publishing the repository does not change this setting, and no authentication
 token belongs in userscript metadata.
 
 Use the installation steps above or the TampermonkeyFS workflow below for each
-update. Keep the existing script name and namespace, verify the saved source,
-then reload YouTube to activate it. Committing, pushing or creating a
-release does not update an installed copy automatically.
+update. Keep the script name and use the `youtube.master-suite` namespace,
+verify the saved source, then reload YouTube to activate it. Committing, pushing
+or creating a release does not update an installed copy automatically.
+
+If an older installation uses `Citizen.youtube.master-suite`, replace its source
+in the existing Tampermonkey editor so the namespace changes without creating a
+duplicate installation. This is a metadata-only correction within v1.0.0;
+runtime behaviour and stored preferences are unchanged.
 
 ## Runtime health marker
 

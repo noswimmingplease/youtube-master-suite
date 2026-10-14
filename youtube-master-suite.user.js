@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         YouTube Master Suite
-// @namespace    Citizen.youtube.master-suite
+// @namespace    youtube.master-suite
 // @version      1.0.0
-// @description  Consolidates Citizen YouTube userscripts with shared SPA event, mutation-observer, and stylesheet infrastructure.
+// @description  Video mirroring, volume and quality controls, scrolling miniplayer, fullscreen comments, queue layout, feed and comment cleanup, colour settings, clean video links and optional-cookie rejection.
 // @author       Citizen
 // @license      GNU GPLv3
 // @homepageURL  https://github.com/noswimmingplease/youtube-master-suite

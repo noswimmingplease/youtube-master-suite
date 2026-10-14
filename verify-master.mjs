@@ -105,6 +105,36 @@ function compareVersions(left, right) {
   return compareDottedVersions(left, right);
 }
 
+function normaliseEditableMetadata(source) {
+  const metadataEnd = source.indexOf("// ==/UserScript==");
+  assert(metadataEnd >= 0, "Userscript metadata end not found");
+  const header = source.slice(0, metadataEnd).replace(
+    /^\/\/[ \t]+@(description|namespace)[ \t]+[^\r\n]*$/gm,
+    "// @$1 <editable-metadata>",
+  );
+  return (header + source.slice(metadataEnd)).trimEnd();
+}
+
+function assertGeneratedVersionIncreased(
+  currentSource,
+  comparisonSource,
+  comparisonRef,
+) {
+  if (
+    normaliseEditableMetadata(currentSource) ===
+    normaliseEditableMetadata(comparisonSource)
+  ) {
+    return;
+  }
+  assert(
+    compareVersions(
+      metadata(currentSource, "version"),
+      metadata(comparisonSource, "version"),
+    ) > 0,
+    `Generated changes since ${comparisonRef} require a master version increase`,
+  );
+}
+
 function assertChangedModuleVersionsIncreased(
   currentSourceLock,
   comparisonSourceLock,
@@ -162,6 +192,61 @@ function runSelfTests() {
   assert(compareVersions("1.10.0", "1.9.9") > 0);
   assert(compareVersions("2.0.0", "2.0.1") < 0);
   assert.equal(compareVersions("3.4.5", "3.4.5"), 0);
+  const comparisonUserscript = [
+    "// ==UserScript==",
+    "// @name Fixture",
+    "// @namespace fixture.old",
+    "// @version 1.0.0",
+    "// @description Original description",
+    "// @grant none",
+    "// ==/UserScript==",
+    "console.log('original');",
+    "// @description Runtime comment",
+  ].join("\n");
+  const metadataOnlyUserscript = comparisonUserscript
+    .replace("fixture.old", "fixture.new")
+    .replace("Original description", "New description");
+  assert.doesNotThrow(() =>
+    assertGeneratedVersionIncreased(
+      metadataOnlyUserscript,
+      comparisonUserscript,
+      "fixture-base",
+    ),
+  );
+  for (const changedSource of [
+    metadataOnlyUserscript.replace(
+      "console.log('original');",
+      "console.log('changed');",
+    ),
+    metadataOnlyUserscript.replace("Runtime comment", "Changed runtime comment"),
+    metadataOnlyUserscript.replace("@grant none", "@grant GM_setValue"),
+    metadataOnlyUserscript.replace("@name Fixture", "@name Changed"),
+    metadataOnlyUserscript.replace("@version 1.0.0", "@version 0.9.0"),
+    metadataOnlyUserscript.replace("// @namespace fixture.new\n", ""),
+    metadataOnlyUserscript.replace(
+      "@namespace fixture.new",
+      "@namespace fixture.new\n// @namespace duplicate",
+    ),
+  ]) {
+    assert.throws(
+      () =>
+        assertGeneratedVersionIncreased(
+          changedSource,
+          comparisonUserscript,
+          "fixture-base",
+        ),
+      /require a master version increase/,
+    );
+  }
+  assert.doesNotThrow(() =>
+    assertGeneratedVersionIncreased(
+      metadataOnlyUserscript
+        .replace("@version 1.0.0", "@version 1.0.1")
+        .replace("console.log('original');", "console.log('changed');"),
+      comparisonUserscript,
+      "fixture-base",
+    ),
+  );
   assert.doesNotThrow(() =>
     assertReleaseVersionAboveStableTags("1.2.0", ["v1.0.0", "v1.1.9"]),
   );
@@ -269,10 +354,11 @@ const workflowSource = readFileSync(
   "utf8",
 );
 // Private GitHub raw URLs are not a reliable unauthenticated update channel.
-// Keep updates manual without embedding credentials or changing script identity.
+// Keep updates manual and validate the published script identity.
 assert.equal(metadata(userscript, "updateURL"), "none");
 assert.equal(metadata(userscript, "downloadURL"), "none");
 assert.equal(metadata(userscript, "name"), "YouTube Master Suite");
+assert.equal(metadata(userscript, "namespace"), "youtube.master-suite");
 assert.match(metadata(userscript, "version"), /^\d+\.\d+\.\d+$/);
 assert.equal(sourceLock.schemaVersion, 2);
 const lockedModules = Object.entries(sourceLock.modules || {});
@@ -1667,15 +1753,11 @@ if (comparisonArtifactExists) {
     `${versionComparisonRef}:youtube-master-suite.user.js`,
   );
 }
-if (
-  comparisonUserscript &&
-  comparisonUserscript.trimEnd() !== userscript.trimEnd()
-) {
-  const comparisonVersion = metadata(comparisonUserscript, "version");
-  const currentVersion = metadata(userscript, "version");
-  assert(
-    compareVersions(currentVersion, comparisonVersion) > 0,
-    `Generated changes since ${versionComparisonRef} require a master version increase`,
+if (comparisonUserscript) {
+  assertGeneratedVersionIncreased(
+    userscript,
+    comparisonUserscript,
+    versionComparisonRef,
   );
 }
 
