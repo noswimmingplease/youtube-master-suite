@@ -12,7 +12,7 @@ function extractFunction(name) {
   const start = source.indexOf(`function ${name}(`);
   assert.notEqual(start, -1, `${name} must exist in the canonical module`);
   const next = source.indexOf("\n  function ", start + 1);
-  const end = next === -1 ? source.indexOf("\n  installQueueDragAssistance", start) : next;
+  const end = next === -1 ? source.indexOf("\n  const scheduleQueuePlayingMarkerReconciliation =", start) : next;
   assert.notEqual(end, -1, `${name} extraction must be bounded`);
   return source.slice(start, end);
 }

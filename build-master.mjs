@@ -6,7 +6,7 @@ import { createSuiteSettings } from "./sources/suite-settings.mjs";
 import { createSettingsDialog } from "./sources/settings-panel-dom.mjs";
 import { rejectYouTubeOptionalCookies } from "./sources/youtube-cookie-consent.mjs";
 
-const MASTER_VERSION = "1.0.0";
+const MASTER_VERSION = "1.1.4";
 const suiteDirectory = dirname(fileURLToPath(import.meta.url));
 const outputPath = join(suiteDirectory, "youtube-master-suite.user.js");
 const releaseManifestPath = join(suiteDirectory, "release-manifest.json");
@@ -1562,7 +1562,7 @@ const output = `// ==UserScript==
 // @name         YouTube Master Suite
 // @namespace    youtube.master-suite
 // @version      ${MASTER_VERSION}
-// @description  Video mirroring, volume and quality controls, scrolling miniplayer, fullscreen comments, queue layout, feed and comment cleanup, colour settings, clean video links and optional-cookie rejection.
+// @description  Video mirroring, volume and quality controls, scrolling miniplayer, fullscreen comments, play next in queue, queue layout, feed and comment cleanup, colour settings, clean video links and optional-cookie rejection.
 // @author       Citizen
 // @license      GNU GPLv3
 // @homepageURL  https://github.com/noswimmingplease/youtube-master-suite

@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         YouTube Master Suite
 // @namespace    youtube.master-suite
-// @version      1.0.0
-// @description  Video mirroring, volume and quality controls, scrolling miniplayer, fullscreen comments, queue layout, feed and comment cleanup, colour settings, clean video links and optional-cookie rejection.
+// @version      1.1.4
+// @description  Video mirroring, volume and quality controls, scrolling miniplayer, fullscreen comments, play next in queue, queue layout, feed and comment cleanup, colour settings, clean video links and optional-cookie rejection.
 // @author       Citizen
 // @license      GNU GPLv3
 // @homepageURL  https://github.com/noswimmingplease/youtube-master-suite
@@ -89,7 +89,7 @@
   // Consent pages need only the rejection action, not player/feed modules.
   if (window.location.hostname !== "www.youtube.com") return;
 
-  const MASTER_VERSION = "1.0.0";
+  const MASTER_VERSION = "1.1.4";
   const EXPECTED_MODULE_COUNT = 8;
   const HEALTH_ATTRIBUTE = "data-yt-master-suite";
   const ENABLED_MODULES = Object.freeze({
@@ -10969,7 +10969,7 @@
 
   suite.registerModule(
     "watchLayoutCleaner",
-    "Watch Layout Cleaner v1.34",
+    "Watch Layout Cleaner v1.41",
     "document-start",
     () => {
       const MutationObserver = suite.SharedMutationObserver;
@@ -11692,6 +11692,7 @@
           scheduleQueueThumbnailItems(items);
           if (railStateMayHaveChanged) {
             scheduleSecondaryRailStateReconciliation();
+            scheduleQueuePlayingMarkerReconciliation();
           }
           if (targetsMayHaveChanged) refreshRailMutationObserver();
         });
@@ -11727,6 +11728,432 @@
           queueThumbnailFallbackTimers = QUEUE_THUMBNAIL_FALLBACK_DELAYS_MS.map(
             (delay) => setTimeout(applyQueueThumbnailFallbacks, delay),
           );
+        }
+
+        function installQueuePlayingMarkerReconciliation() {
+          const panelSelector = "ytd-playlist-panel-renderer, yt-playlist-panel-renderer";
+          const rowSelector = "ytd-playlist-panel-video-renderer, yt-playlist-panel-video-renderer";
+          const controller = element => element?.polymerController || element?.getPolymerController?.() || element;
+          const attempted = new WeakMap();
+          let frame = 0;
+          let navigating = false;
+
+          function reconcile() {
+            frame = 0;
+            if (navigating) return;
+            const players = [...document.querySelectorAll('#movie_player')].filter(player =>
+              player.isConnected && player.getClientRects().length);
+            if (players.length !== 1 || players[0].classList.contains('ad-showing') ||
+                players[0].classList.contains('ad-interrupting')) return;
+            const player = players[0];
+            let videoId, listId;
+            try {
+              videoId = player.getVideoData?.()?.video_id;
+              listId = player.getPlaylistId?.();
+            } catch { return; }
+            if (typeof videoId !== 'string' || !/^[\w-]{11}$/.test(videoId) ||
+                typeof listId !== 'string' || !listId.startsWith('TLPQ')) return;
+            for (const panel of document.querySelectorAll(panelSelector)) {
+              try {
+                const owner = controller(panel), data = owner?.data;
+                if (!panel.isConnected || data?.playlistId !== listId || !Array.isArray(data.contents) ||
+                    !data.contents.length || data.contents.length > 1000 ||
+                    !Number.isInteger(data.currentIndex) ||
+                    (Number.isInteger(data.totalVideos) && data.totalVideos !== data.contents.length)) continue;
+                const videos = data.contents.map(item => item.playlistPanelVideoRenderer);
+                const index = data.currentIndex;
+                if (videos.some(video => !video || typeof video.videoId !== 'string' || !/^[\w-]{11}$/.test(video.videoId)) ||
+                    videos[index]?.videoId !== videoId || videos.filter(video => video.videoId === videoId).length !== 1) continue;
+                const items = panel.querySelector('#items');
+                const rows = items ? [...items.children] : [];
+                // Do not touch a partially stamped panel or a DOM move awaiting commit.
+                if (rows.length !== videos.length || rows.some((row, i) => !row.matches(rowSelector) ||
+                    controller(row)?.data?.videoId !== videos[i].videoId ||
+                    !videos[i].playlistSetVideoId || controller(row)?.data?.playlistSetVideoId !== videos[i].playlistSetVideoId)) continue;
+                const reorder = owner.ytReorderableController;
+                if (reorder && Object.getOwnPropertyNames(reorder).some(name =>
+                  name.endsWith('dragListGroup') && reorder[name]?.isDragging?.())) continue;
+                const modelMismatch = videos.some((video, i) => Boolean(video.selected) !== (i === index));
+                const rowMismatch = (row, i) => {
+                  const rowOwner = controller(row), selected = i === index;
+                  return Boolean(rowOwner.data.selected) !== selected ||
+                    (typeof rowOwner.selected === 'boolean' && rowOwner.selected !== selected) ||
+                    row.hasAttribute('selected') !== selected;
+                };
+                if (!modelMismatch && !rows.some(rowMismatch)) { attempted.delete(panel); continue; }
+                const signature = JSON.stringify([listId, videoId, index, videos.map((video, i) =>
+                  [video.playlistSetVideoId, Boolean(video.selected), Boolean(controller(rows[i]).data.selected),
+                    controller(rows[i]).selected, rows[i].hasAttribute('selected')])]);
+                if (attempted.get(panel) === signature) continue; // A native no-op must not create a restamping loop.
+                if (modelMismatch) {
+                  if (typeof owner.set !== 'function') continue;
+                  attempted.set(panel, signature);
+                  // Rebind only the panel's display model. The native playlist manager,
+                  // queue order, endpoints and playback are deliberately left alone.
+                  owner.set('data', { ...data, contents: data.contents.map((item, i) =>
+                    Boolean(videos[i].selected) === (i === index) ? item :
+                      { ...item, playlistPanelVideoRenderer: { ...videos[i], selected: i === index } }) });
+                  continue; // Let the native stamper finish before checking reused rows.
+                }
+                rows.forEach((row, i) => {
+                  const rowOwner = controller(row), selected = i === index;
+                  if (typeof rowOwner.set !== 'function') return;
+                  if (rowMismatch(row, i)) {
+                    attempted.set(panel, signature);
+                    // selected is a native computed property of data; rebind data rather
+                    // than overriding that property or hiding its arrow with CSS.
+                    rowOwner.set('data', { ...rowOwner.data, selected });
+                  }
+                });
+              } catch { /* Unknown native bindings are left untouched. */ }
+            }
+          }
+
+          function schedule() {
+            if (!navigating && !frame) frame = requestAnimationFrame(reconcile);
+          }
+          ['yt-playlist-data-updated', 'yt-page-data-updated'].forEach(type => suite.addWindowListener(type, schedule, true));
+          suite.addWindowListener('yt-rendererstamper-finished', event => {
+            if (event.target?.closest?.(panelSelector)) schedule();
+          }, true);
+          suite.addWindowListener('yt-navigate-start', () => {
+            navigating = true;
+            if (frame) cancelAnimationFrame(frame);
+            frame = 0;
+          }, true);
+          ['yt-navigate-finish', 'pageshow'].forEach(type => suite.addWindowListener(type, () => {
+            navigating = false;
+            schedule();
+          }, true));
+          suite.addWindowListener('pagehide', () => {
+            navigating = true;
+            if (frame) cancelAnimationFrame(frame);
+            frame = 0;
+          }, true);
+          schedule();
+          return schedule;
+        }
+
+        function installQueuePlayNext() {
+          const marker = "ytMasterPlayNext";
+          const panelSelector = "ytd-playlist-panel-renderer, yt-playlist-panel-renderer";
+          const rowSelector = "ytd-playlist-panel-video-renderer, yt-playlist-panel-video-renderer";
+          let entries = new WeakMap();
+          let sheets = new WeakMap();
+          let pending = null;
+          let toast = null;
+          let toastTimer = 0;
+          let menuFrame = 0;
+
+          const controller = (element) => element?.polymerController || element?.getPolymerController?.() || element;
+          const validId = (value) => typeof value === "string" && /^[\w-]{11}$/.test(value);
+
+          function sheetData(popup) {
+            // Current view-model wrappers deliberately return a Symbol from .data.
+            // Their native reactive getter and external .data setter remain separate.
+            const read = popup?.componentProps?.data;
+            try { return typeof read === "function" ? read() : null; }
+            catch { return null; } // A dismissed native sheet may already be disposed.
+          }
+
+          function queueCommand(item) {
+            const data = item?.menuServiceItemRenderer || item?.listItemViewModel;
+            const endpoint = data?.serviceEndpoint || data?.rendererContext?.commandContext?.onTap?.innertubeCommand;
+            const actions = endpoint?.signalServiceEndpoint?.actions;
+            if (!Array.isArray(actions) || actions.length !== 1) return null;
+            const command = actions[0]?.addToPlaylistCommand;
+            if (command?.listType !== "PLAYLIST_EDIT_LIST_TYPE_QUEUE") return null;
+            const ids = command.videoIds || [command.videoId];
+            if (!Array.isArray(ids) || ids.length !== 1 || !validId(ids[0]) ||
+                (command.videoId !== undefined && command.videoId !== ids[0])) return null;
+            return { endpoint, command, videoId: ids[0] };
+          }
+
+          function activeVideoId() {
+            const ids = new Set();
+            let visible = 0;
+            for (const player of document.querySelectorAll('#movie_player')) {
+              if (!player.isConnected || !player.getClientRects().length) continue;
+              visible++;
+              const id = player.getVideoData?.()?.video_id;
+              if (validId(id)) ids.add(id);
+            }
+            return visible === 1 && ids.size === 1 ? [...ids][0] : visible ? undefined : null;
+          }
+
+          function activePlayer(anchor) {
+            return [...document.querySelectorAll('#movie_player')].find(player =>
+              player.isConnected && player.getClientRects().length &&
+              player.getVideoData?.()?.video_id === anchor);
+          }
+
+          function queueState(anchor) {
+            const queues = [];
+            const activeListId = activePlayer(anchor)?.getPlaylistId?.();
+            for (const panel of document.querySelectorAll(panelSelector)) {
+              if (!panel.isConnected) continue;
+              const owner = controller(panel);
+              const data = owner?.data;
+              if (typeof data?.playlistId !== "string" || !data.playlistId.startsWith("TLPQ")) continue;
+              if (!panel.getClientRects().length && data.playlistId !== activeListId) continue;
+              // Visible panels can also belong to a previous queue during navigation.
+              if (data.playlistId !== activeListId) return { unavailable: true };
+              if (!Array.isArray(data.contents) || data.contents.length > 1000 || owner.canReorder === false) {
+                return { unavailable: true };
+              }
+              const videos = data.contents.map(item => item.playlistPanelVideoRenderer);
+              if (!videos.length || videos.some(video => !validId(video?.videoId))) return { unavailable: true };
+              const selected = videos.filter(video => video.selected === true);
+              if (selected.length !== 1 || selected[0].videoId !== anchor ||
+                  (Number.isInteger(data.totalVideos) && data.totalVideos > videos.length)) return { unavailable: true };
+              queues.push({ panel, owner, data, videos, listId: data.playlistId });
+            }
+            return queues.length > 1 ? { unavailable: true } : queues[0] || null;
+          }
+
+          function notify(message) {
+            clearTimeout(toastTimer);
+            toast?.remove();
+            toast = document.createElement("div");
+            toast.setAttribute("role", "status");
+            toast.setAttribute("data-yt-master-queue-status", "");
+            toast.textContent = message;
+            Object.assign(toast.style, {
+              position: "fixed", bottom: "24px", left: "24px", zIndex: "2202",
+              padding: "14px 20px", borderRadius: "8px", font: "14px Roboto, Arial, sans-serif",
+              background: "var(--yt-spec-raised-background, #212121)",
+              color: "var(--yt-spec-text-primary, #fff)", boxShadow: "0 4px 16px #0005",
+              maxWidth: "calc(100vw - 48px)", pointerEvents: "none",
+            });
+            document.body?.appendChild(toast);
+            toastTimer = setTimeout(() => { toast?.remove(); toast = null; toastTimer = 0; }, 4000);
+          }
+
+          function finish(message) {
+            if (pending) {
+              pending.observer.disconnect();
+              clearTimeout(pending.timer);
+              if (pending.frame) cancelAnimationFrame(pending.frame);
+              pending = null;
+            }
+            if (message) notify(message);
+          }
+
+          function tryMoveNext() {
+            if (!pending) return;
+            pending.frame = 0;
+            const operation = pending;
+            try {
+              if (activeVideoId() !== operation.anchor) {
+                finish("Playback changed; the queue was not reordered.");
+                return;
+              }
+              if (operation.listId && activePlayer(operation.anchor)?.getPlaylistId?.() !== operation.listId) {
+                finish("The queue changed; no item was moved.");
+                return;
+              }
+              const queue = queueState(operation.anchor);
+              if (!queue || queue.unavailable) return;
+              if (operation.listId && queue.listId !== operation.listId) {
+                finish("The queue changed; no item was moved.");
+                return;
+              }
+              const index = queue.videos.findIndex(video => video.videoId === operation.videoId);
+              if (index < 0) return;
+              const currentIndex = queue.videos.findIndex(video => video.selected === true);
+              if (index === currentIndex || index === currentIndex + 1) { finish("Playing next in queue"); return; }
+              if (operation.committed) return; // Wait for native data to confirm, never commit twice.
+              const items = queue.panel.querySelector("#items");
+              const rows = items ? [...items.children].filter(row => row.matches(rowSelector)) : [];
+              if (typeof queue.owner.handleDrop !== "function" || rows.length !== queue.videos.length ||
+                  rows.some((row, i) => {
+                    const data = controller(row)?.data;
+                    return items.childNodes[i] !== row || data?.videoId !== queue.videos[i].videoId ||
+                      !data?.playlistSetVideoId || data.playlistSetVideoId !== queue.videos[i].playlistSetVideoId;
+                  })) return;
+              const reorder = queue.owner.ytReorderableController;
+              if (reorder && Object.getOwnPropertyNames(reorder).some(name =>
+                name.endsWith("dragListGroup") && reorder[name]?.isDragging?.())) return;
+              const row = rows[index];
+              // This is the same DOM move + controller commit used by native dragging.
+              // Never change the queue model, call a private network API or reload playback.
+              items.insertBefore(row, rows[currentIndex].nextSibling);
+              operation.committed = true;
+              try {
+                queue.owner.handleDrop({ currDragItem: row });
+                scheduleMove();
+              } catch {
+                // The native commit may have partially completed. Do not retry it or
+                // overwrite native state with a speculative rollback.
+                finish("Could not confirm Play next. Please check the queue.");
+              }
+            } catch {
+              finish("Could not move the video next. Please check the queue.");
+            }
+          }
+
+          function scheduleMove() {
+            if (pending && !pending.frame) pending.frame = requestAnimationFrame(tryMoveNext);
+          }
+
+          function queueDispatcher(popup) {
+            const app = document.querySelector("ytd-app");
+            // Some older clients expose this method on the host, others only on its
+            // controller. Preserve the callable receiver rather than choosing blindly.
+            const targets = popup.matches("yt-sheet-view-model") ? [app, popup] : [popup, app];
+            for (const target of targets) {
+              for (const owner of [target, controller(target)]) {
+                if (typeof owner?.resolveCommand === "function") return endpoint => owner.resolveCommand(endpoint);
+              }
+            }
+            if (!app?.isConnected) return null;
+            // Current clients no longer expose resolveCommand on elements. This is
+            // YouTube's native action-router contract; its handler invokes the internal
+            // command service and appends an acknowledgement to returnValue.
+            return endpoint => {
+              const action = { actionName: "yt-command-executor-command", optionalAction: false,
+                args: [endpoint, popup], returnValue: [] };
+              app.dispatchEvent(new CustomEvent("yt-action", { detail: action, bubbles: true, composed: true }));
+              return action.returnValue.length > 0;
+            };
+          }
+
+          function begin(entry, popup) {
+            if (entry.used) return;
+            if (pending) { notify("Please wait for the queue to update, then try again."); return; }
+            const anchor = activeVideoId();
+            if (anchor === undefined) { notify("Could not identify the playing video. Please try again."); return; }
+            const queue = anchor ? queueState(anchor) : null;
+            if (queue?.unavailable) { notify("The queue is still updating. Please try again."); return; }
+            if (anchor === entry.videoId) { notify("This video is already playing."); return; }
+            const playlist = anchor && activePlayer(anchor)?.getPlaylist?.();
+            const existing = queue?.videos.some(video => video.videoId === entry.videoId) ||
+              (Array.isArray(playlist) && playlist.includes(entry.videoId));
+            const dispatch = existing ? null : queueDispatcher(popup);
+            if (!existing && !dispatch) { notify("Play next is unavailable in this menu."); return; }
+            entry.used = true; // Only consume a selection once a native operation can start.
+            popup.closest("tp-yt-iron-dropdown")?.close?.();
+            if (anchor) {
+              const observer = new MutationObserver(records => {
+                if (records.some(record => record.target.closest?.(panelSelector) ||
+                    [...record.addedNodes].some(node => node.matches?.(panelSelector) || node.querySelector?.(panelSelector)))) scheduleMove();
+              });
+              pending = { anchor, videoId: entry.videoId, listId: queue?.listId, observer, frame: 0, timer: 0 };
+              observer.observe(document.querySelector("ytd-app") || document.documentElement, {
+                childList: true, subtree: true, attributes: true,
+                attributeFilter: ["selected", "aria-selected", "href"],
+              });
+              pending.timer = setTimeout(() => finish(pending.committed
+                ? "Could not confirm Play next. Please check the queue."
+                : existing ? "Could not move the queued video next. Please try again."
+                  : "Added to queue, but could not move it next. Please check the queue."), 8000);
+            }
+            if (!existing) {
+              const command = { ...entry.command, openMiniplayer: anchor ? false : entry.command.openMiniplayer };
+              const endpoint = {
+                ...entry.endpoint,
+                signalServiceEndpoint: { ...entry.endpoint.signalServiceEndpoint,
+                  actions: [{ ...entry.endpoint.signalServiceEndpoint.actions[0], addToPlaylistCommand: command }] },
+              };
+              // Keep the original native creation command and metadata. Do not retry:
+              // an ambiguous resolver result can still mean the video was added.
+              if (dispatch(endpoint) === false) {
+                finish("YouTube could not accept Play next. Please check the queue.");
+                return;
+              }
+            }
+            scheduleMove();
+          }
+
+          function openMenu(event) {
+            const popup = event.target;
+            if (!popup?.matches?.("ytd-menu-popup-renderer, yt-sheet-view-model")) return;
+            try {
+              const sheet = popup.matches("yt-sheet-view-model");
+              sheets.delete(popup);
+              const owner = controller(popup);
+              const data = sheet ? sheetData(popup) : owner?.data;
+              const list = data?.content?.listViewModel;
+              const sourceItems = sheet ? list?.listItems : data?.items;
+              if (!Array.isArray(sourceItems) || sourceItems.length > 60 ||
+                  (sheet ? typeof popup.setters?.data !== "function" : typeof owner.set !== "function")) return;
+              const items = sourceItems.filter(item =>
+                (item?.menuServiceItemRenderer || item?.listItemViewModel)?.[marker] !== true);
+              if (items.some(item => {
+                const icon = item?.menuServiceItemRenderer?.icon?.iconType ||
+                  item?.listItemViewModel?.leadingImage?.sources?.[0]?.clientResource?.imageName;
+                return ["QUEUE_PLAY_NEXT", "ADD_TO_QUEUE_HEAD"].includes(icon?.toUpperCase());
+              })) return;
+              const index = items.findIndex(item => queueCommand(item));
+              if (index < 0 || (sheet && !items[index].listItemViewModel)) return;
+              const entry = queueCommand(items[index]);
+              const endpoint = { signalServiceEndpoint: { signal: "CLIENT_SIGNAL", actions: [] } };
+              if (sheet) {
+                const record = {
+                  ...items[index].listItemViewModel,
+                  title: { content: "Play next in queue" },
+                  leadingImage: { sources: [{ clientResource: { imageName: "QUEUE_PLAY_NEXT" } }] },
+                  rendererContext: { accessibilityContext: { label: "Play next in queue" },
+                    commandContext: { onTap: { innertubeCommand: endpoint } } },
+                  targetId: "yt-master-play-next", [marker]: true,
+                };
+                items.splice(index, 0, { listItemViewModel: record });
+                const updated = { ...data, content: { ...data.content, listViewModel: { ...list, listItems: items } } };
+                // Native view-model rows do not expose .data. Bind activation to the
+                // owned sheet's exact model and native target ID, not text or position.
+                sheets.set(popup, { data: updated, entry });
+                popup.data = updated;
+              } else {
+                const record = {
+                  text: { simpleText: "Play next in queue" }, icon: { iconType: "QUEUE_PLAY_NEXT" },
+                  serviceEndpoint: endpoint, [marker]: true,
+                };
+                entries.set(record, entry);
+                items.splice(index, 0, { menuServiceItemRenderer: record });
+                owner.set("data", { ...data, items });
+              }
+              // Stamp through the native menu, then let its dropdown fit the extra row.
+              if (menuFrame) cancelAnimationFrame(menuFrame);
+              menuFrame = requestAnimationFrame(() => {
+                menuFrame = 0;
+                if (popup.isConnected) popup.closest("tp-yt-iron-dropdown")?.refit?.();
+              });
+            } catch { /* An unrecognised menu keeps its native Add to queue action. */ }
+          }
+
+          function activate(event) {
+            const source = event.detail?.sourceEvent;
+            if (!event.isTrusted && !(source instanceof Event && source.isTrusted)) return;
+            if (event.type === "keydown" && !["Enter", " "].includes(event.key)) return;
+            const row = event.target?.closest?.("ytd-menu-service-item-renderer, yt-list-item-view-model");
+            const popup = row?.closest("ytd-menu-popup-renderer, yt-sheet-view-model");
+            const sheet = sheets.get(popup);
+            const entry = row?.matches('yt-list-item-view-model[data-target-id="yt-master-play-next"]')
+              ? sheet && sheetData(popup) === sheet.data && sheet.entry
+              : row && entries.get(controller(row)?.data);
+            if (!entry) return;
+            event.preventDefault();
+            event.stopImmediatePropagation();
+            try { begin(entry, popup); }
+            catch { finish("Play next could not be completed. Please check the queue."); }
+          }
+
+          function reset() {
+            finish();
+            entries = new WeakMap();
+            sheets = new WeakMap();
+            if (menuFrame) cancelAnimationFrame(menuFrame);
+            menuFrame = 0;
+            clearTimeout(toastTimer);
+            toastTimer = 0;
+            toast?.remove();
+            toast = null;
+          }
+          suite.addWindowListener("yt-popup-opened", openMenu, true);
+          ["click", "tap", "keydown"].forEach(type => document.addEventListener(type, activate, true));
+          ["yt-playlist-data-updated", "yt-page-data-updated"].forEach(type => suite.addWindowListener(type, scheduleMove, true));
+          ["yt-navigate-start", "pagehide"].forEach(type => suite.addWindowListener(type, reset, true));
+          return reset;
         }
 
         function installQueueDragAssistance() {
@@ -12222,6 +12649,8 @@
           };
         }
 
+        const scheduleQueuePlayingMarkerReconciliation = installQueuePlayingMarkerReconciliation();
+        installQueuePlayNext();
         installQueueDragAssistance();
         ensureStyle();
         scheduleQueueThumbnailFallbacks();

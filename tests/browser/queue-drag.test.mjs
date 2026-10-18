@@ -10,7 +10,7 @@ const FIXTURE = readFileSync(new URL("./queue-drag-page.html", import.meta.url),
 const WATCH_URL = "https://www.youtube.com/watch?v=aaaaaaaaaaa&list=fixture-queue";
 const HOME_URL = "https://www.youtube.com/";
 const start = SOURCE.indexOf("  function installQueueDragAssistance(");
-const end = SOURCE.indexOf("\n  installQueueDragAssistance();", start);
+const end = SOURCE.indexOf("\n  const scheduleQueuePlayingMarkerReconciliation =", start);
 assert.ok(start >= 0 && end > start, "Canonical source must expose its self-contained queue drag installer");
 const INSTALLER = SOURCE.slice(start, end);
 let browser;
