@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         YouTube Player Preferences Lite
 // @namespace    Citizen.youtube.player-preferences-lite
-// @version      1.68
+// @version      1.70
 // @description  Applies small YouTube player preferences without touching Enhancer-style miniplayer, queue, autoplay, or background playback controls.
 // @author       Citizen
 // @homepageURL  https://github.com/noswimmingplease/youtube-player-preferences-lite
@@ -27,6 +27,8 @@
     watchedVideoThresholdPercent: 90,
     hideRelatedVideos: true,
     hideAskButton: true,
+    showRydTooltipBar: false,
+    showDeArrowTitleButton: false,
     hideThanksButton: true,
     hideShareButton: true,
     hideInlineSaveButton: false,
@@ -2142,6 +2144,30 @@
 
   function buildWatchCleanupCss() {
     const rules = [];
+    if (!CONFIG.showRydTooltipBar) {
+      // RYD can attach its tooltip outside the watch-page container.
+      rules.push(`
+        .ryd-tooltip-bar-container {
+          display: none !important;
+        }
+      `);
+    }
+    if (CONFIG.hideAskButton) {
+      rules.push(`
+        ytd-menu-renderer .you-chat-entrypoint-button,
+        .you-chat-entrypoint-button.ytd-menu-renderer {
+          display: none !important;
+        }
+      `);
+    }
+    if (!CONFIG.showDeArrowTitleButton) {
+      // Hide only DeArrow's watch-title button container, never title content.
+      rules.push(`
+        ytd-watch-flexy .cbTitleButtonContainer {
+          display: none !important;
+        }
+      `);
+    }
     if (CONFIG.hideRelatedVideos) {
       rules.push(`
         ytd-watch-flexy #secondary #related {

@@ -46,6 +46,117 @@ test("button preferences migrate older records and validate icon choices without
   assert.equal(settings.validate({ headerSettingsIcon: 'monochrome', playerSettingsIcon: 'colour' }).playerSettingsIcon, 'colour');
 });
 
+test("RYD tooltip-bar visibility defaults off without changing older saved preferences", () => {
+  const key = "yt-master-suite.settings.v1";
+  const { settings } = fixture({ [key]: JSON.stringify({ version: 1, values: {
+    showDeArrowTitleButton: true, showDeArrowQueueButton: false, hideChat: false,
+  } }) });
+  assert.equal(settings.defaults.showRydTooltipBar, false);
+  assert.equal(settings.initial.showRydTooltipBar, false);
+  assert.equal(settings.initial.showDeArrowTitleButton, true);
+  assert.equal(settings.initial.showDeArrowQueueButton, false);
+  assert.equal(settings.initial.hideChat, false);
+  assert.equal(settings.overrides("playerPreferencesLite", { feedFilterProfiles: {} }).showRydTooltipBar, false);
+});
+
+test("menu preferences migrate without changing watched thresholds or existing choices", () => {
+  const { settings } = fixture({ 'yt-master-suite.settings.v1': JSON.stringify({ version: 1, values: {
+    watchedThreshold: '95', hideWatchedVideos: false, showDeArrowTitleButton: true,
+  } }) });
+  assert.equal(settings.initial.menuShowDownload, false);
+  assert.equal(settings.initial.menuGroupChannelTools, true);
+  assert.equal(settings.initial.menuShowAgeLimit, true);
+  assert.equal(settings.initial.menuShowNotInterested, true);
+  assert.equal(settings.initial.menuShowDontRecommend, true);
+  assert.equal(settings.initial.menuShowReport, true);
+  assert.equal(settings.initial.watchedThreshold, '95');
+  assert.equal(settings.initial.hideWatchedVideos, false);
+  assert.equal(settings.initial.showDeArrowTitleButton, true);
+  assert.ok(Object.isFrozen(settings.initial.menuItemOrder));
+});
+
+test("menu order is a bounded whitelist without duplicate, unknown or executable entries", () => {
+  const { settings } = fixture();
+  const order = settings.validate({ menuItemOrder: ['share', 'share', 'report', '<script>', null, {}] }).menuItemOrder;
+  assert.deepEqual(order.slice(0, 2), ['share', 'report']);
+  assert.equal(order.length, settings.defaults.menuItemOrder.length);
+  assert.equal(new Set(order).size, order.length);
+  assert.ok(order.every(item => settings.defaults.menuItemOrder.includes(item)));
+  for (const value of [null, {}, 'share', Array(100).fill('share')]) {
+    assert.deepEqual(settings.validate({ menuItemOrder: value }).menuItemOrder, settings.defaults.menuItemOrder);
+  }
+  const validated = settings.validate({});
+  validated.menuItemOrder.reverse();
+  assert.deepEqual(settings.initial.menuItemOrder, settings.defaults.menuItemOrder);
+});
+
+test("menu visibility and order persist for reload without modifying active preferences or module overrides", () => {
+  const { settings, storage } = fixture();
+  const values = { ...settings.defaults, menuShowDownload: true, menuGroupChannelTools: false,
+    menuShowReport: false, menuItemOrder: ['share', ...settings.defaults.menuItemOrder.filter(item => item !== 'share')] };
+  const before = settings.overrides('watchLayoutCleaner', { relatedVideosHideBreakpointPx: 1400 });
+  assert.equal(settings.save(values).ok, true);
+  values.menuItemOrder.reverse();
+  assert.equal(settings.initial.menuShowDownload, false);
+  assert.equal(settings.initial.menuItemOrder[0], 'playNext');
+  const next = createSuiteSettings(() => storage, () => true);
+  assert.equal(next.initial.menuShowDownload, true);
+  assert.equal(next.initial.menuGroupChannelTools, false);
+  assert.equal(next.initial.menuShowReport, false);
+  assert.equal(next.initial.menuItemOrder[0], 'share');
+  assert.deepEqual(next.overrides('watchLayoutCleaner', { relatedVideosHideBreakpointPx: 1400 }), before);
+  for (const name of ['menuShowDownload', 'menuGroupChannelTools', 'menuShowAgeLimit',
+    'menuShowNotInterested', 'menuShowDontRecommend', 'menuShowReport']) {
+    assert.equal(settings.validate({ [name]: 'false' })[name], settings.defaults[name]);
+  }
+});
+
+test("RYD tooltip-bar preference validates booleans and applies only to the reloaded player configuration", () => {
+  const { settings, storage } = fixture();
+  for (const value of ["true", "false", "off", 0, 1, null, [], {}, "url(javascript:bad)"]) {
+    assert.equal(settings.validate({ showRydTooltipBar: value }).showRydTooltipBar, false);
+  }
+  assert.equal(settings.validate({ showRydTooltipBar: true }).showRydTooltipBar, true);
+  assert.equal(settings.save({ ...settings.defaults, showRydTooltipBar: true }).ok, true);
+  assert.equal(settings.initial.showRydTooltipBar, false);
+  assert.equal(settings.read().showRydTooltipBar, true);
+  const reloaded = createSuiteSettings(() => storage, () => true);
+  assert.equal(reloaded.overrides("playerPreferencesLite", { feedFilterProfiles: {} }).showRydTooltipBar, true);
+  assert.equal(reloaded.initial.showDeArrowTitleButton, false);
+  assert.deepEqual(reloaded.overrides("watchLayoutCleaner", { relatedVideosHideBreakpointPx: 1400 }), {
+    relatedVideosHideBreakpointPx: 1400, showDeArrowQueueButton: true,
+  });
+});
+
+test("DeArrow title icon defaults off while older records keep queue and existing preferences", () => {
+  const key = "yt-master-suite.settings.v1";
+  const { settings } = fixture({ [key]: JSON.stringify({ version: 1, values: {
+    showDeArrowQueueButton: false, viewerColour: "#ABCDEF", hideChat: false,
+  } }) });
+  assert.equal(settings.defaults.showDeArrowTitleButton, false);
+  assert.equal(settings.initial.showDeArrowTitleButton, false);
+  assert.equal(settings.initial.showDeArrowQueueButton, false);
+  assert.equal(settings.initial.viewerColour, "#ABCDEF");
+  assert.equal(settings.initial.hideChat, false);
+  assert.equal(settings.overrides("playerPreferencesLite", { feedFilterProfiles: {} }).showDeArrowTitleButton, false);
+});
+
+test("DeArrow title-icon preference accepts only booleans and stays separate from its queue icon", () => {
+  const { settings, storage } = fixture();
+  for (const value of ["true", "false", "off", 0, 1, null, [], {}, "url(javascript:bad)"]) {
+    assert.equal(settings.validate({ showDeArrowTitleButton: value }).showDeArrowTitleButton, false);
+  }
+  assert.equal(settings.validate({ showDeArrowTitleButton: true }).showDeArrowTitleButton, true);
+  assert.equal(settings.save({ ...settings.defaults, showDeArrowTitleButton: true, showDeArrowQueueButton: false }).ok, true);
+  assert.equal(settings.initial.showDeArrowTitleButton, false, "Saving must not mutate the running snapshot");
+  assert.equal(settings.read().showDeArrowTitleButton, true);
+  const reloaded = createSuiteSettings(() => storage, () => true);
+  assert.equal(reloaded.overrides("playerPreferencesLite", { feedFilterProfiles: {} }).showDeArrowTitleButton, true);
+  assert.deepEqual(reloaded.overrides("watchLayoutCleaner", { relatedVideosHideBreakpointPx: 1400 }), {
+    relatedVideosHideBreakpointPx: 1400, showDeArrowQueueButton: false,
+  });
+});
+
 test("DeArrow queue-logo preferences default on and migrate older records without changing existing settings", () => {
   const key = "yt-master-suite.settings.v1";
   const { settings } = fixture({ [key]: JSON.stringify({ version: 1, values: {

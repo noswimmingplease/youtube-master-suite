@@ -13,7 +13,13 @@ export function createSuiteSettings(getStorage, isDarkTheme) {
     hideEndScreens: true, fullscreenComments: true, disableTitleHashtagLinks: false, miniplayerEnabled: true,
     corner: "top-right", queueInfo: true,
     headerSettingsIcon: "colour", playerSettingsIcon: "monochrome",
+    showRydTooltipBar: false,
+    showDeArrowTitleButton: false,
     showDeArrowQueueButton: true,
+    menuShowDownload: false, menuGroupChannelTools: true, menuShowAgeLimit: true,
+    menuShowNotInterested: true, menuShowDontRecommend: true, menuShowReport: true,
+    menuItemOrder: Object.freeze(["playNext", "addToQueue", "watchLater", "savePlaylist", "download", "share",
+      "notInterested", "dontRecommend", "report", "channelAge", "channelTools"]),
   });
   const choices = Object.freeze({
     colourMode: ["default", "preset", "custom", "off"],
@@ -36,13 +42,18 @@ export function createSuiteSettings(getStorage, isDarkTheme) {
       ? "#" + value.trim().replace(/^#/, "").toUpperCase() : null;
   }
   function validate(input) {
-    const result = { ...defaults };
+    const result = { ...defaults, menuItemOrder: [...defaults.menuItemOrder] };
     if (!input || typeof input !== "object" || Array.isArray(input)) return result;
     for (const [name, fallback] of Object.entries(defaults)) {
       if (!Object.hasOwn(input, name)) continue;
       const value = input[name];
       if (typeof fallback === "boolean") {
         if (typeof value === "boolean") result[name] = value;
+      } else if (name === "menuItemOrder") {
+        if (Array.isArray(value) && value.length <= defaults.menuItemOrder.length) {
+          const order = [...new Set(value.filter(item => typeof item === "string" && defaults.menuItemOrder.includes(item)))];
+          result[name] = [...order, ...defaults.menuItemOrder.filter(item => !order.includes(item))];
+        }
       } else if (name === "viewerColour" || name === "ownerColour") {
         result[name] = normaliseHex(value) || fallback;
       } else if (choices[name]?.includes(value)) result[name] = value;
@@ -64,9 +75,11 @@ export function createSuiteSettings(getStorage, isDarkTheme) {
       const corner = storage.getItem(cornerKey);
       if (choices.corner.includes(corner)) values.corner = corner;
       return values;
-    } catch { return { ...defaults }; }
+    } catch { return { ...defaults, menuItemOrder: [...defaults.menuItemOrder] }; }
   }
-  const initial = Object.freeze(read());
+  const initialValues = read();
+  Object.freeze(initialValues.menuItemOrder);
+  const initial = Object.freeze(initialValues);
   function save(input) {
     if (input?.headerSettingsIcon === "off" && input?.playerSettingsIcon === "off") {
       return { ok: false, error: "Keep at least one settings button enabled." };
@@ -120,6 +133,8 @@ export function createSuiteSettings(getStorage, isDarkTheme) {
       hideChat: values.hideChat, hideInfoCards: values.hideInfoCards,
       hideEndScreenRecommendationGrid: values.hideEndScreens, enableFullscreenComments: values.fullscreenComments,
       disableTitleHashtagLinks: values.disableTitleHashtagLinks,
+      showRydTooltipBar: values.showRydTooltipBar,
+      showDeArrowTitleButton: values.showDeArrowTitleButton,
       feedFilterProfiles: Object.fromEntries(Object.entries(config.feedFilterProfiles).map(([route, profile]) => [route, {
         ...profile, watchedVideos: route === "history" ? false : values.hideWatchedVideos,
       }])),

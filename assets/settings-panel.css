@@ -1,14 +1,14 @@
 
-#ytms-settings-dialog, #ytms-settings-button {
+#ytms-settings-dialog, #ytms-settings-button, #ytms-age-dialog {
       color-scheme: dark;
       --page: #0f0f0f; --surface: #212121; --hover: #383838; --text: #f1f1f1;
-      --muted: #aaa; --line: #3f3f3f; --accent: #3ea6ff; --accent-text: #0f0f0f;
+      --muted: #aaa; --line: #3f3f3f; --accent: #ff0033; --accent-text: #0f0f0f; --link: #ff6b6b;
       --error: #ff9a9a; --field: #181818;
     }
-:root:not([dark]) #ytms-settings-dialog, :root:not([dark]) #ytms-settings-button {
+:root:not([dark]) #ytms-settings-dialog, :root:not([dark]) #ytms-settings-button, :root:not([dark]) #ytms-age-dialog {
       color-scheme: light;
       --page: #fff; --surface: #fff; --hover: #eee; --text: #0f0f0f;
-      --muted: #606060; --line: #d5d5d5; --accent: #065fd4; --accent-text: #fff;
+      --muted: #606060; --line: #d5d5d5; --accent: #c00; --accent-text: #fff; --link: #c00;
       --error: #b3261e; --field: #fafafa;
     }
 #ytms-settings-dialog * { box-sizing: border-box; }
@@ -32,9 +32,10 @@
 #ytms-settings-dialog .text-button { padding: 8px 14px; border-radius: 20px; font-weight: 600; white-space: nowrap; }
 #ytms-settings-dialog .text-button:hover { background: var(--hover); }
 #ytms-settings-dialog .primary { background: var(--accent); color: var(--accent-text); }
-#ytms-settings-dialog .primary:hover { filter: brightness(.92); background: var(--accent); }
+#ytms-settings-dialog .primary:hover:not(:disabled) { filter: brightness(.92); background: var(--accent); }
+#ytms-settings-dialog .primary:disabled { background: var(--line); color: var(--muted); opacity: 1; }
 #ytms-settings-dialog {
-      box-sizing: border-box; width: min(640px, calc(100vw - 24px)); height: min(720px, calc(100dvh - 24px)); max-height: calc(100dvh - 24px);
+      box-sizing: border-box; width: min(760px, calc(100vw - 24px)); height: min(720px, calc(100dvh - 24px)); max-height: calc(100dvh - 24px);
       padding: 0; border: 1px solid var(--line); border-radius: 12px;
       color: var(--text); background: var(--surface); box-shadow: 0 12px 48px #0008;
     }
@@ -43,13 +44,13 @@
 #ytms-settings-dialog .panel-header { display: flex; align-items: center; justify-content: space-between; padding: 12px 16px 4px 24px; flex-shrink: 0; }
 #ytms-settings-dialog .panel-header h2 { font-size: 20px; font-weight: 600; margin: 0; }
 #ytms-settings-dialog .panel-header .close { font-size: 28px; font-weight: 400; line-height: 1; }
-#ytms-settings-dialog .intro { margin: 0; padding: 0 24px 14px; color: var(--muted); font-size: 12px; flex-shrink: 0; }
 #ytms-settings-dialog nav { display: flex; gap: 8px; overflow-x: auto; padding: 0 24px; border-bottom: 1px solid var(--line); flex-shrink: 0; }
 #ytms-settings-dialog nav button { padding: 10px 4px; white-space: nowrap; color: var(--muted); border-bottom: 2px solid transparent; }
-#ytms-settings-dialog nav button[aria-selected="true"] { color: var(--text); border-color: var(--text); }
+#ytms-settings-dialog nav button[aria-selected="true"] { color: var(--text); border-color: var(--accent); }
 #ytms-settings-dialog .content { padding: 4px 24px 18px; overflow: auto; scrollbar-gutter: stable; min-height: 0; flex: 1; }
 #ytms-settings-dialog .row { display: flex; gap: 24px; justify-content: space-between; align-items: center; padding: 14px 0; border-bottom: 1px solid var(--line); }
 #ytms-settings-dialog .row > label { flex: 1; }
+#ytms-settings-dialog .row > .row-label { flex: 1; min-width: 0; }
 #ytms-settings-dialog .description { display: block; color: var(--muted); font-size: 12px; margin-top: 3px; }
 #ytms-settings-dialog .switch {
       appearance: none; width: 36px; height: 20px; border-radius: 12px; position: relative;
@@ -89,7 +90,9 @@
 #ytms-settings-dialog .section-note { font-size: 12px; color: var(--muted); margin: 16px 0 0; }
 #ytms-settings-dialog footer { border-top: 1px solid var(--line); padding: 12px 16px; display: flex; flex-wrap: wrap; gap: 8px; align-items: center; flex-shrink: 0; }
 #ytms-settings-dialog footer .spacer { flex: 1; }
-#ytms-settings-dialog #ytms-settings-status { color: var(--muted); margin: 10px 0; }
+#ytms-settings-dialog .footer-actions { display: flex; align-items: center; gap: 8px; min-width: 0; max-width: 100%; margin-left: auto; }
+#ytms-settings-dialog .footer-actions > button { flex: 0 0 auto; }
+#ytms-settings-dialog #ytms-settings-status { flex: 0 1 176px; max-width: 176px; min-width: 0; color: var(--muted); font-size: 12px; margin: 0; overflow-wrap: anywhere; }
 @media (max-width: 480px) {
 #ytms-settings-dialog .row { gap: 10px; }
 #ytms-settings-dialog nav,
@@ -109,7 +112,7 @@
 #ytms-settings-dialog .credits img { width: 96px; height: 96px; }
 #ytms-settings-dialog .credits h3 { margin: 0; font-size: 20px; font-weight: 600; }
 #ytms-settings-dialog .credits p { margin: 0; color: var(--muted); }
-#ytms-settings-dialog .credits a { color: var(--accent); text-decoration: none; border-radius: 4px; padding: 6px 8px; }
+#ytms-settings-dialog .credits a { color: var(--link); text-decoration: none; border-radius: 4px; padding: 6px 8px; }
 #ytms-settings-dialog .credits a:hover { text-decoration: underline; }
 #ytms-settings-dialog .credits a:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 #ytms-section-extensions > h3 { font-size: 16px; font-weight: 600; margin: 14px 0 0; }
@@ -120,11 +123,68 @@
 #ytms-settings-dialog .extension-details h4 { font-size: 14px; font-weight: 600; margin: 0 0 4px; }
 #ytms-settings-dialog .extension-details p { margin: 0 0 6px; overflow-wrap: anywhere; }
 #ytms-settings-dialog .extension-details .extension-note { font-size: 12px; color: var(--muted); }
-#ytms-settings-dialog .extension-link { display: inline-block; color: var(--accent); text-decoration: none; border-radius: 4px; }
+#ytms-settings-dialog .extension-link { display: inline-block; color: var(--link); text-decoration: none; border-radius: 4px; }
 #ytms-settings-dialog .extension-link:hover { text-decoration: underline; }
 #ytms-settings-dialog .extension-link:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
 #ytms-player-settings-button.ytp-button { display: inline-flex !important; align-items: center !important; justify-content: center !important; padding: 0 !important; margin: 0 !important; line-height: 0 !important; }
 #ytms-player-settings-button img { box-sizing: border-box !important; display: block !important; width: 36px !important; height: 36px !important; min-width: 36px !important; min-height: 36px !important; max-width: 36px !important; max-height: 36px !important; padding: 4px !important; pointer-events: none !important; }
 #ytms-player-settings-button:focus-visible { outline: 2px solid white; outline-offset: -2px; }
 #ytms-player-settings-tooltip { position: absolute !important; z-index: 1000 !important; display: flex !important; align-items: center !important; box-sizing: border-box !important; max-width: calc(100% - 16px) !important; padding: 5px 9px !important; border-radius: 2px !important; background: rgba(0, 0, 0, 0.9) !important; color: #eee !important; font: 500 12px/1.2 Roboto, Arial, sans-serif !important; text-shadow: none !important; pointer-events: none !important; }
+
+#ytms-settings-dialog .menu-order { margin-top: 20px; }
+#ytms-settings-dialog #ytms-video-menu-settings { margin: 20px 0 0; border: 1px solid var(--line); border-radius: 8px; padding: 0 12px; }
+#ytms-settings-dialog #ytms-video-menu-settings > summary { cursor: pointer; font-size: 16px; font-weight: 600; padding: 12px 0; }
+#ytms-settings-dialog #ytms-video-menu-settings > .menu-order { margin-bottom: 16px; }
+#ytms-settings-dialog .channel-filter-card { padding: 16px 0; border-bottom: 1px solid var(--line); }
+#ytms-settings-dialog .channel-filter-card h3 { font-size: 14px; font-weight: 600; margin: 0 0 6px; overflow-wrap: anywhere; }
+#ytms-settings-dialog .channel-filter-card p { margin: 4px 0; font-size: 12px; overflow-wrap: anywhere; }
+#ytms-settings-dialog .channel-filter-id { font-family: ui-monospace, monospace; color: var(--muted); }
+#ytms-settings-dialog .channel-filter-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
+#ytms-settings-dialog .channel-filter-help { display: inline-block; margin: 8px 0; font-size: 12px; color: var(--link); text-decoration: none; overflow-wrap: anywhere; }
+#ytms-settings-dialog .channel-filter-help:hover { text-decoration: underline; }
+#ytms-settings-dialog .channel-filter-help:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+#ytms-settings-dialog .menu-order h3 { font-size: 16px; margin: 0; }
+#ytms-settings-dialog .menu-order .section-note { margin: 6px 0 12px; }
+#ytms-settings-dialog #ytms-menu-order { padding: 0; margin: 0; list-style: none; }
+#ytms-settings-dialog #ytms-menu-order li { display: flex; gap: 8px; align-items: center; padding: 6px 0; border-bottom: 1px solid var(--line); }
+#ytms-settings-dialog #ytms-menu-order li > span { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+#ytms-settings-dialog .menu-order-move { width: 32px; height: 32px; padding: 0; border-radius: 50%; font-size: 18px; flex: 0 0 auto; }
+#ytms-settings-dialog .menu-order-move:hover:not(:disabled) { background: var(--hover); }
+#ytms-age-dialog { box-sizing: border-box; width: min(640px, calc(100vw - 24px)); height: min(720px, calc(100dvh - 24px)); max-height: calc(100dvh - 24px); margin: auto; padding: 0; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); color: var(--text); box-shadow: 0 12px 48px #0008; font: 14px/1.5 Roboto, Arial, sans-serif; }
+#ytms-age-dialog::backdrop { background: #0008; }
+#ytms-age-dialog * { box-sizing: border-box; }
+#ytms-age-dialog [hidden] { display: none !important; }
+#ytms-age-dialog .ytms-age-panel { display: flex; flex-direction: column; height: 100%; min-height: 0; }
+#ytms-age-dialog header { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 16px 4px 24px; flex-shrink: 0; }
+#ytms-age-dialog h2 { font-size: 20px; font-weight: 600; margin: 0; }
+#ytms-age-dialog button, #ytms-age-dialog input, #ytms-age-dialog select { font: inherit; }
+#ytms-age-dialog button { border: 0; background: transparent; color: inherit; cursor: pointer; }
+#ytms-age-dialog button:disabled { opacity: .5; cursor: default; }
+#ytms-age-dialog button:focus-visible, #ytms-age-dialog input:focus-visible, #ytms-age-dialog select:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+#ytms-age-dialog .ytms-age-close { flex: 0 0 40px; width: 40px; height: 40px; padding: 0; border-radius: 50%; font-size: 28px; line-height: 1; }
+#ytms-age-dialog .ytms-age-close:hover, #ytms-age-dialog .ytms-age-button:hover { background: var(--hover); }
+#ytms-age-dialog .ytms-age-content { min-height: 0; overflow: auto; flex: 1; padding: 0 24px 20px; scrollbar-gutter: stable; }
+#ytms-age-dialog .ytms-age-note { color: var(--muted); font-size: 12px; margin: 10px 0 14px; }
+#ytms-age-dialog .ytms-age-rule { display: flex; flex-direction: column; gap: 12px; padding: 16px 0; border-top: 1px solid var(--line); }
+#ytms-age-dialog .ytms-age-field { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+#ytms-age-dialog .ytms-age-field > span { color: var(--muted); font-size: 12px; }
+#ytms-age-dialog .ytms-age-field input, #ytms-age-dialog .ytms-age-field select { min-width: 0; width: 100%; background: var(--field); color: var(--text); border: 1px solid var(--line); border-radius: 6px; padding: 7px 9px; }
+#ytms-age-dialog .ytms-age-wide input { font-family: ui-monospace, monospace; font-size: 12px; }
+#ytms-age-dialog .ytms-age-limit { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 16px; }
+#ytms-age-dialog .ytms-age-actions { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+#ytms-age-dialog .ytms-age-actions label { display: flex; gap: 6px; align-items: center; }
+#ytms-age-dialog .ytms-age-blocked { display: flex; gap: 6px; align-items: flex-start; font-size: 12px; }
+#ytms-age-dialog input[type="checkbox"] { accent-color: var(--accent); }
+#ytms-age-dialog .ytms-age-button { padding: 8px 14px; border-radius: 20px; font-weight: 600; white-space: nowrap; }
+#ytms-age-dialog .ytms-age-primary, #ytms-age-dialog .ytms-age-primary:hover { background: var(--accent); color: var(--accent-text); }
+#ytms-age-dialog .ytms-age-primary:hover { filter: brightness(.92); }
+#ytms-age-dialog footer { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; border-top: 1px solid var(--line); padding: 12px 16px; flex-shrink: 0; }
+#ytms-age-dialog .ytms-age-status { width: 100%; margin: 0; font-size: 12px; color: var(--muted); overflow-wrap: anywhere; }
+#ytms-age-dialog .ytms-age-status.ytms-age-error { color: var(--error); }
+#ytms-age-dialog .ytms-age-spacer { flex: 1; }
+@media (max-width: 480px) {
+  #ytms-age-dialog header { padding-left: 16px; }
+  #ytms-age-dialog .ytms-age-content { padding-left: 16px; padding-right: 16px; }
+  #ytms-age-dialog h2 { font-size: 18px; }
+}
 

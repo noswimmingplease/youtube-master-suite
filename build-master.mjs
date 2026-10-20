@@ -4,9 +4,12 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createSuiteSettings } from "./sources/suite-settings.mjs";
 import { createSettingsDialog } from "./sources/settings-panel-dom.mjs";
+import { createChannelAgeService } from "./sources/channel-age.mjs";
+import { createChannelAgeDialog } from "./sources/channel-age-dialog.mjs";
+import { installVideoMenu } from "./sources/video-menu.mjs";
 import { rejectYouTubeOptionalCookies } from "./sources/youtube-cookie-consent.mjs";
 
-const MASTER_VERSION = "1.1.4";
+const MASTER_VERSION = "1.2.8";
 const suiteDirectory = dirname(fileURLToPath(import.meta.url));
 const outputPath = join(suiteDirectory, "youtube-master-suite.user.js");
 const releaseManifestPath = join(suiteDirectory, "release-manifest.json");
@@ -2267,6 +2270,7 @@ ${runtimeMutationCoverageHelpers}
   }
 
   const createSuiteSettings = ${createSuiteSettings.toString()};
+  const createChannelAgeService = ${createChannelAgeService.toString()};
   const suite = {
     version: MASTER_VERSION,
     SharedMutationObserver,
@@ -2276,6 +2280,9 @@ ${runtimeMutationCoverageHelpers}
     removeStyle,
     setStyle,
     settings: createSuiteSettings(() => window.localStorage, () => document.documentElement.hasAttribute("dark")),
+    channelAge: createChannelAgeService(() => window.localStorage),
+    createChannelAgeDialog: ${createChannelAgeDialog.toString()},
+    installVideoMenu: ${installVideoMenu.toString()},
     settingsAssets: ${JSON.stringify(settingsAssets)},
     createSettingsDialog: ${createSettingsDialog.toString()},
   };

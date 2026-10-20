@@ -67,20 +67,19 @@ export function createSettingsDialog(document) {
     toggle("hideCommentControls", "Hide comment controls", "Likes, dislikes, reply, action menu and composer. Existing replies remain readable."),
     note("Off changes name styling only. Comment-loading and navigation safeguards remain enabled."));
   return element("dialog", {
-    id: id("settings-dialog"), "aria-labelledby": id("panel-title"), "aria-describedby": id("panel-intro"),
+    id: id("settings-dialog"), lang: "en-GB", "aria-labelledby": id("panel-title"),
   }, element("div", { class: "panel" },
     element("div", { class: "panel-header" }, element("h2", { id: id("panel-title") }, "Suite settings"),
       button("close-panel", "×", "icon-button close", { "aria-label": "Close settings" })),
-    element("p", { class: "intro", id: id("panel-intro") },
-      "Save changes for this browser profile. Reload when ready to apply them; your video will restart."),
-    element("p", { id: id("settings-status"), class: "intro", role: "status", hidden: true }),
     element("nav", { role: "tablist", "aria-label": "Settings sections" }),
     element("div", { class: "content" }, comments,
-      ...["feed", "player", "layout", "miniplayer", "interface", "extensions", "credits"].map(name => element("section", {
+      ...["feed", "channels", "player", "layout", "miniplayer", "interface", "extensions", "credits"].map(name => element("section", {
         id: id(`section-${name}`), role: "tabpanel", "aria-labelledby": id(`tab-${name}`), hidden: true,
       })),
       element("p", { id: id("button-access-error"), class: "field-error", role: "alert", hidden: true }, "Keep at least one settings button enabled.")),
-    element("footer", {}, button("restore-defaults", "Restore defaults"), element("span", { class: "spacer" }),
-      button("cancel-panel", "Cancel"), button("save-preview", "Save", "text-button primary"),
-      button("reload-now", "Reload now", "text-button", { hidden: true }))));
+    element("footer", {}, button("restore-section-defaults", "Restore this section"),
+      button("restore-defaults", "Restore all settings"), element("span", { class: "spacer" }),
+      element("div", { class: "footer-actions" }, button("cancel-panel", "Cancel"),
+        element("p", { id: id("settings-status"), role: "status", hidden: true }),
+        button("save-preview", "Save", "text-button primary")))));
 }

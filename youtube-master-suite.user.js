@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         YouTube Master Suite
 // @namespace    youtube.master-suite
-// @version      1.1.4
+// @version      1.2.8
 // @description  Video mirroring, volume and quality controls, scrolling miniplayer, fullscreen comments, play next in queue, queue layout, feed and comment cleanup, colour settings, clean video links and optional-cookie rejection.
 // @author       Citizen
 // @license      GNU GPLv3
@@ -89,7 +89,7 @@
   // Consent pages need only the rejection action, not player/feed modules.
   if (window.location.hostname !== "www.youtube.com") return;
 
-  const MASTER_VERSION = "1.1.4";
+  const MASTER_VERSION = "1.2.8";
   const EXPECTED_MODULE_COUNT = 8;
   const HEALTH_ATTRIBUTE = "data-yt-master-suite";
   const ENABLED_MODULES = Object.freeze({
@@ -1161,7 +1161,13 @@
     hideEndScreens: true, fullscreenComments: true, disableTitleHashtagLinks: false, miniplayerEnabled: true,
     corner: "top-right", queueInfo: true,
     headerSettingsIcon: "colour", playerSettingsIcon: "monochrome",
+    showRydTooltipBar: false,
+    showDeArrowTitleButton: false,
     showDeArrowQueueButton: true,
+    menuShowDownload: false, menuGroupChannelTools: true, menuShowAgeLimit: true,
+    menuShowNotInterested: true, menuShowDontRecommend: true, menuShowReport: true,
+    menuItemOrder: Object.freeze(["playNext", "addToQueue", "watchLater", "savePlaylist", "download", "share",
+      "notInterested", "dontRecommend", "report", "channelAge", "channelTools"]),
   });
   const choices = Object.freeze({
     colourMode: ["default", "preset", "custom", "off"],
@@ -1184,13 +1190,18 @@
       ? "#" + value.trim().replace(/^#/, "").toUpperCase() : null;
   }
   function validate(input) {
-    const result = { ...defaults };
+    const result = { ...defaults, menuItemOrder: [...defaults.menuItemOrder] };
     if (!input || typeof input !== "object" || Array.isArray(input)) return result;
     for (const [name, fallback] of Object.entries(defaults)) {
       if (!Object.hasOwn(input, name)) continue;
       const value = input[name];
       if (typeof fallback === "boolean") {
         if (typeof value === "boolean") result[name] = value;
+      } else if (name === "menuItemOrder") {
+        if (Array.isArray(value) && value.length <= defaults.menuItemOrder.length) {
+          const order = [...new Set(value.filter(item => typeof item === "string" && defaults.menuItemOrder.includes(item)))];
+          result[name] = [...order, ...defaults.menuItemOrder.filter(item => !order.includes(item))];
+        }
       } else if (name === "viewerColour" || name === "ownerColour") {
         result[name] = normaliseHex(value) || fallback;
       } else if (choices[name]?.includes(value)) result[name] = value;
@@ -1212,9 +1223,11 @@
       const corner = storage.getItem(cornerKey);
       if (choices.corner.includes(corner)) values.corner = corner;
       return values;
-    } catch { return { ...defaults }; }
+    } catch { return { ...defaults, menuItemOrder: [...defaults.menuItemOrder] }; }
   }
-  const initial = Object.freeze(read());
+  const initialValues = read();
+  Object.freeze(initialValues.menuItemOrder);
+  const initial = Object.freeze(initialValues);
   function save(input) {
     if (input?.headerSettingsIcon === "off" && input?.playerSettingsIcon === "off") {
       return { ok: false, error: "Keep at least one settings button enabled." };
@@ -1268,6 +1281,8 @@
       hideChat: values.hideChat, hideInfoCards: values.hideInfoCards,
       hideEndScreenRecommendationGrid: values.hideEndScreens, enableFullscreenComments: values.fullscreenComments,
       disableTitleHashtagLinks: values.disableTitleHashtagLinks,
+      showRydTooltipBar: values.showRydTooltipBar,
+      showDeArrowTitleButton: values.showDeArrowTitleButton,
       feedFilterProfiles: Object.fromEntries(Object.entries(config.feedFilterProfiles).map(([route, profile]) => [route, {
         ...profile, watchedVideos: route === "history" ? false : values.hideWatchedVideos,
       }])),
@@ -1281,6 +1296,282 @@
   }
   return Object.freeze({ key, defaults, initial, read, save, validate, colours, normaliseHex, overrides });
 };
+  const createChannelAgeService = function createChannelAgeService(getStorage, now = () => Date.now()) {
+  const key = "yt-master-suite.channel-age.v1";
+  const idPattern = /^UC[A-Za-z0-9_-]{22}$/;
+  const day = 86400000;
+  const units = ["days", "weeks", "months", "years"];
+  let current = [];
+  let enabledRules = new Map();
+
+  function normaliseChannelId(input) {
+    if (typeof input !== "string") return null;
+    const value = input.trim();
+    if (idPattern.test(value)) return value;
+    const match = /^https:\/\/www\.youtube\.com\/channel\/(UC[A-Za-z0-9_-]{22})\/?$/.exec(value);
+    return match ? match[1] : null;
+  }
+
+  function label(input) {
+    return typeof input === "string"
+      ? input.replace(/[\u0000-\u001f\u007f<>]/g, "").replace(/\s+/g, " ").trim().slice(0, 100)
+      : "";
+  }
+
+  function validateRules(input) {
+    if (!Array.isArray(input)) return [];
+    const result = [];
+    const seen = new Set();
+    // Bound work even for a malformed manually edited storage record.
+    for (const value of input.slice(0, 100)) {
+      if (!value || typeof value !== "object" || Array.isArray(value)) continue;
+      const channelId = normaliseChannelId(value.channelId);
+      if (!channelId || seen.has(channelId) || !Number.isInteger(value.maxAge) || value.maxAge < 1 || value.maxAge > 1000 || !units.includes(value.unit)) continue;
+      if (value.enabled !== undefined && typeof value.enabled !== "boolean") continue;
+      if (value.blocked !== undefined && typeof value.blocked !== "boolean") continue;
+      seen.add(channelId);
+      result.push({ channelId, name: label(value.name), maxAge: value.maxAge, unit: value.unit, enabled: value.enabled !== false, blocked: value.blocked === true });
+    }
+    return result;
+  }
+
+  function snapshot(rules) {
+    return rules.map(rule => ({ ...rule }));
+  }
+
+  function setCurrent(rules) {
+    current = snapshot(rules);
+    enabledRules = new Map(current.filter(rule => rule.enabled).map(rule => [rule.channelId, rule]));
+  }
+
+  function storedRules(raw) {
+    const record = raw && raw.length <= 65536 ? JSON.parse(raw) : null;
+    return validateRules(record?.version === 1 ? record.rules : null);
+  }
+
+  function read() {
+    try {
+      setCurrent(storedRules(getStorage().getItem(key)));
+    } catch {
+      // Unavailable/corrupted storage must not hide any videos.
+      setCurrent([]);
+    }
+    return snapshot(current);
+  }
+
+  function save(input, expectedRules) {
+    let rules;
+    try { rules = validateRules(input); } catch { rules = []; }
+    if (!Array.isArray(input) || input.length > 100 || rules.length !== input.length) {
+      return { ok: false, error: "Use up to 100 unique channel IDs, each with a whole-number age from 1 to 1000 and a valid unit." };
+    }
+    let storage, previous;
+    try {
+      storage = getStorage();
+      previous = storage.getItem(key);
+      if (expectedRules !== undefined) {
+        let latest = [];
+        try { latest = storedRules(previous); } catch { /* A corrupt record follows read()'s empty-rule fallback. */ }
+        if (JSON.stringify(latest) !== JSON.stringify(expectedRules)) {
+          setCurrent(latest);
+          return { ok: false, error: 'Channel filters changed in another window. Your draft has been kept. Cancel and reopen before saving.' };
+        }
+      }
+      storage.setItem(key, JSON.stringify({ version: 1, rules }));
+      setCurrent(rules);
+      return { ok: true, rules: snapshot(rules) };
+    } catch {
+      // The live snapshot changes only after a successful complete write.
+      try {
+        if (previous === null) storage?.removeItem(key);
+        else if (previous !== undefined) storage?.setItem(key, previous);
+      } catch { /* Storage is unavailable; preserve the current in-memory rules. */ }
+      return { ok: false, error: "Channel filters could not be saved. Browser storage is unavailable or full." };
+    }
+  }
+
+  function getRules() {
+    return snapshot(current);
+  }
+
+  function hasEnabledRules() {
+    return enabledRules.size > 0;
+  }
+
+  function text(value) {
+    if (typeof value === "string") return value.slice(0, 500);
+    if (!value || typeof value !== "object") return "";
+    if (typeof value.simpleText === "string") return value.simpleText.slice(0, 500);
+    if (typeof value.content === "string") return value.content.slice(0, 500);
+    return Array.isArray(value.runs) ? value.runs.slice(0, 10).map(run => typeof run?.text === "string" ? run.text : "").join("").slice(0, 500) : "";
+  }
+
+  function records(card) {
+    const found = [];
+    const nodes = [card, ...Array.from(card?.querySelectorAll?.("ytd-rich-grid-media, yt-lockup-view-model, ytm-lockup-view-model") || []).slice(0, 4)];
+    for (const node of nodes) {
+      let controller, componentData;
+      try {
+        controller = node?.polymerController || (typeof node?.getPolymerController === "function" ? node.getPolymerController() : null);
+      } catch { /* An unavailable renderer controller must not prevent DOM identity checks. */ }
+      try {
+        if (typeof node?.componentProps?.data === "function") componentData = node.componentProps.data();
+      } catch { /* A detached current component retains the existing DOM/legacy fallback. */ }
+      for (const value of [node?.data, node?.__data?.data, controller?.data, controller?.__data?.data, componentData]) {
+        if (!value || typeof value !== "object") continue;
+        found.push(value);
+        for (const candidate of [value.videoRenderer, value.compactVideoRenderer, value.gridVideoRenderer, value.content?.videoRenderer, value.content?.richItemRenderer?.content?.videoRenderer, value.lockupViewModel]) {
+          if (candidate && typeof candidate === "object") found.push(candidate);
+        }
+      }
+    }
+    return found.slice(0, 30);
+  }
+
+  function metadataParts(record) {
+    const rows = record?.metadata?.lockupMetadataViewModel?.metadata?.contentMetadataViewModel?.metadataRows
+      || record?.metadata?.contentMetadataViewModel?.metadataRows;
+    return Array.isArray(rows) ? rows.slice(0, 4).flatMap(row => Array.isArray(row?.metadataParts) ? row.metadataParts.slice(0, 5) : []) : [];
+  }
+
+  function channelFromCard(card) {
+    if (!card?.querySelectorAll) return null;
+    const candidates = new Map();
+    function add(id, name) {
+      const channelId = normaliseChannelId(id);
+      if (!channelId) return;
+      candidates.set(channelId, candidates.get(channelId) || label(name));
+    }
+    const bylineSelector = [
+      "#channel-name a[href]", "#byline a[href]", "ytd-channel-name a[href]",
+      ".yt-content-metadata-view-model__metadata-text a[href]",
+      ".yt-content-metadata-view-model__metadata-row a[href]",
+      ".ytContentMetadataViewModelMetadataText a[href]",
+    ].join(",");
+    for (const anchor of Array.from(card.querySelectorAll(bylineSelector)).slice(0, 20)) {
+      const href = anchor.getAttribute("href") || "";
+      add(href.startsWith("/channel/") ? `https://www.youtube.com${href}` : href, anchor.textContent);
+    }
+    for (const record of records(card)) {
+      // Current History lockups keep the owner endpoint on the avatar, while
+      // their visible byline is plain text rather than a clickable channel link.
+      const avatar = record.metadata?.lockupMetadataViewModel?.image?.decoratedAvatarViewModel;
+      add(avatar?.rendererContext?.commandContext?.onTap?.innertubeCommand?.browseEndpoint?.browseId,
+        text(metadataParts(record)[0]?.text));
+      for (const byline of [record.ownerText, record.shortBylineText, record.longBylineText]) {
+        for (const run of Array.isArray(byline?.runs) ? byline.runs.slice(0, 5) : []) {
+          add(run?.navigationEndpoint?.browseEndpoint?.browseId, run?.text);
+        }
+      }
+      for (const part of metadataParts(record)) {
+        for (const run of Array.isArray(part?.text?.commandRuns) ? part.text.commandRuns.slice(0, 5) : []) {
+          const command = run?.onTap?.innertubeCommand || run?.onTap;
+          add(command?.browseEndpoint?.browseId, text(part.text));
+        }
+      }
+    }
+    if (candidates.size !== 1) return null;
+    const [channelId, name] = candidates.entries().next().value;
+    return { channelId, name: name || channelId };
+  }
+
+  function liveOrUpcoming(card, data) {
+    if (card.matches?.('[data-ytppl-upcoming-hidden="1"]') || card.querySelector('[overlay-style="LIVE"], [overlay-style="UPCOMING"], [data-ytppl-upcoming-hidden="1"]')) return true;
+    for (const element of Array.from(card.querySelectorAll("ytd-badge-supported-renderer, ytd-thumbnail-overlay-time-status-renderer, .yt-badge-shape__text, .ytBadgeShapeBadgeText")).slice(0, 20)) {
+      if (/^(?:live|live now|upcoming|premiere|scheduled)$/i.test(String(element.textContent || "").trim())) return true;
+    }
+    return data.some(record => record.isLiveNow === true || Boolean(record.upcomingEventData)
+      || (Array.isArray(record.badges) && record.badges.slice(0, 5).some(badge => /LIVE_NOW|UPCOMING/.test(badge?.metadataBadgeRenderer?.style || "")))
+      || (Array.isArray(record.thumbnailOverlays) && record.thumbnailOverlays.slice(0, 5).some(overlay => /^(?:LIVE|UPCOMING)$/.test(overlay?.thumbnailOverlayTimeStatusRenderer?.style || ""))));
+  }
+
+  function subtractMonths(timestamp, count) {
+    const date = new Date(timestamp);
+    const originalDay = date.getUTCDate();
+    date.setUTCDate(1);
+    date.setUTCMonth(date.getUTCMonth() - count);
+    const lastDay = new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth() + 1, 0)).getUTCDate();
+    date.setUTCDate(Math.min(originalDay, lastDay));
+    return date.getTime();
+  }
+
+  function cutoff(rule, timestamp) {
+    if (rule.unit === "months" || rule.unit === "years") return subtractMonths(timestamp, rule.maxAge * (rule.unit === "years" ? 12 : 1));
+    return timestamp - rule.maxAge * (rule.unit === "weeks" ? 7 : 1) * day;
+  }
+
+  function latestPublication(value, timestamp) {
+    const source = String(value || "").replace(/\s+/g, " ").trim();
+    const relative = /^(?:(?:streamed|premiered)\s+)?(\d{1,4})\s+(second|minute|hour|day|week|month|year)s?\s+ago$/i.exec(source);
+    if (relative) {
+      const number = Number(relative[1]);
+      if (!number || number > 1000) return null;
+      // YouTube rounds relative labels. Use the youngest possible date, never
+      // a midpoint. Months use 28 days so short calendar months remain safe.
+      const minimumMs = { second: 1000, minute: 60000, hour: 3600000, day, week: 7 * day, month: 28 * day, year: 365 * day }[relative[2].toLowerCase()];
+      return timestamp - number * minimumMs;
+    }
+    if (/^(?:today|yesterday|just now)$/i.test(source)) return timestamp;
+    if (/^\d{4}-\d{2}-\d{2}(?:T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z)?$/.test(source)) {
+      const result = Date.parse(source);
+      if (!Number.isFinite(result)) return null;
+      // Reject date overflow such as February 31 rather than normalising it.
+      if (new Date(result).toISOString().slice(0, 10) !== source.slice(0, 10)) return null;
+      return source.length === 10 ? result + day - 1 : result;
+    }
+    const months = { jan: 0, feb: 1, mar: 2, apr: 3, may: 4, jun: 5, jul: 6, aug: 7, sep: 8, oct: 9, nov: 10, dec: 11 };
+    const absolute = /^(?:(?:streamed|premiered)\s+(?:on\s+)?)?([A-Za-z]{3,9})\s+(\d{1,2}),\s+(\d{4})$/i.exec(source)
+      || /^(\d{1,2})\s+([A-Za-z]{3,9})\s+(\d{4})$/.exec(source);
+    if (!absolute) return null;
+    const monthFirst = /^[A-Za-z]/.test(absolute[1]);
+    const month = months[(monthFirst ? absolute[1] : absolute[2]).slice(0, 3).toLowerCase()];
+    const date = Number(monthFirst ? absolute[2] : absolute[1]);
+    const year = Number(absolute[3]);
+    if (month === undefined || year < 2005 || year > 9999 || date < 1 || date > 31) return null;
+    const result = new Date(Date.UTC(year, month, date));
+    if (result.getUTCMonth() !== month || result.getUTCDate() !== date) return null;
+    return result.getTime() + day - 1;
+  }
+
+  function isOlderThanRule(card, rule) {
+    const timestamp = Number(now());
+    if (!Number.isFinite(timestamp)) return false;
+    const data = records(card);
+    if (liveOrUpcoming(card, data)) return false;
+    const dates = [];
+    for (const record of data) {
+      dates.push(text(record.publishedTimeText));
+      for (const part of metadataParts(record)) dates.push(text(part.text));
+    }
+    const selector = '#metadata-line > span, #metadata-line > yt-formatted-string, #metadata > span, .yt-content-metadata-view-model__metadata-text, .ytContentMetadataViewModelMetadataText, time[datetime]';
+    for (const element of Array.from(card.querySelectorAll(selector)).slice(0, 20)) {
+      dates.push(element.getAttribute("datetime") || element.textContent);
+    }
+    const publications = dates.map(value => latestPublication(value, timestamp)).filter(value => value !== null);
+    // A fresh DOM date alongside stale renderer data must keep the card visible
+    // while YouTube recycles it. Ambiguous dates therefore fail open.
+    return publications.length > 0 && Math.max(...publications) < cutoff(rule, timestamp);
+  }
+
+  function cardFilterReason(card) {
+    if (!enabledRules.size || !card?.querySelectorAll) return null;
+    const owner = channelFromCard(card);
+    const rule = owner && enabledRules.get(owner.channelId);
+    if (!rule) return null;
+    // Suite-owned blocks are not YouTube recommendation-feedback history.
+    // Deliberately hide all uploads, including undated/live cards, but only
+    // on the feed surfaces selected by the caller.
+    if (rule.blocked) return "Channel hidden";
+    return isOlderThanRule(card, rule) ? "Channel age" : null;
+  }
+
+  function isCardTooOld(card) {
+    return cardFilterReason(card) === "Channel age";
+  }
+
+  read();
+  return { key, normaliseChannelId, validateRules, read, save, getRules, hasEnabledRules, channelFromCard, cardFilterReason, isCardTooOld };
+};
   const suite = {
     version: MASTER_VERSION,
     SharedMutationObserver,
@@ -1290,7 +1581,641 @@
     removeStyle,
     setStyle,
     settings: createSuiteSettings(() => window.localStorage, () => document.documentElement.hasAttribute("dark")),
-    settingsAssets: {"css":"\n#ytms-settings-dialog, #ytms-settings-button {\n      color-scheme: dark;\n      --page: #0f0f0f; --surface: #212121; --hover: #383838; --text: #f1f1f1;\n      --muted: #aaa; --line: #3f3f3f; --accent: #3ea6ff; --accent-text: #0f0f0f;\n      --error: #ff9a9a; --field: #181818;\n    }\n:root:not([dark]) #ytms-settings-dialog, :root:not([dark]) #ytms-settings-button {\n      color-scheme: light;\n      --page: #fff; --surface: #fff; --hover: #eee; --text: #0f0f0f;\n      --muted: #606060; --line: #d5d5d5; --accent: #065fd4; --accent-text: #fff;\n      --error: #b3261e; --field: #fafafa;\n    }\n#ytms-settings-dialog * { box-sizing: border-box; }\n#ytms-settings-dialog [hidden] { display: none !important; }\n#ytms-settings-dialog button,\n#ytms-settings-dialog input,\n#ytms-settings-dialog select { font: inherit; }\n#ytms-settings-dialog button { border: 0; color: inherit; background: transparent; cursor: pointer; }\n#ytms-settings-dialog button:disabled { opacity: .5; cursor: default; }\n#ytms-settings-dialog button:focus-visible,\n#ytms-settings-dialog input:focus-visible,\n#ytms-settings-dialog select:focus-visible,\n#ytms-settings-dialog summary:focus-visible {\n      outline: 2px solid var(--accent); outline-offset: 3px;\n    }\n#ytms-settings-dialog .icon-button { display: grid; place-items: center; width: 40px; height: 40px; border-radius: 50%; flex: 0 0 auto; }\n#ytms-settings-dialog .icon-button:hover { background: var(--hover); }\n#ytms-settings-dialog .icon-button svg,\n#ytms-settings-dialog .icon-button img { width: 24px; height: 24px; }\n#ytms-settings-dialog .icon-button img { display: block; pointer-events: none; }\n#ytms-settings-dialog .text-button { padding: 8px 14px; border-radius: 20px; font-weight: 600; white-space: nowrap; }\n#ytms-settings-dialog .text-button:hover { background: var(--hover); }\n#ytms-settings-dialog .primary { background: var(--accent); color: var(--accent-text); }\n#ytms-settings-dialog .primary:hover { filter: brightness(.92); background: var(--accent); }\n#ytms-settings-dialog {\n      box-sizing: border-box; width: min(640px, calc(100vw - 24px)); height: min(720px, calc(100dvh - 24px)); max-height: calc(100dvh - 24px);\n      padding: 0; border: 1px solid var(--line); border-radius: 12px;\n      color: var(--text); background: var(--surface); box-shadow: 0 12px 48px #0008;\n    }\n#ytms-settings-dialog::backdrop { background: #0008; }\n#ytms-settings-dialog .panel { display: flex; flex-direction: column; height: 100%; min-height: 0; }\n#ytms-settings-dialog .panel-header { display: flex; align-items: center; justify-content: space-between; padding: 12px 16px 4px 24px; flex-shrink: 0; }\n#ytms-settings-dialog .panel-header h2 { font-size: 20px; font-weight: 600; margin: 0; }\n#ytms-settings-dialog .panel-header .close { font-size: 28px; font-weight: 400; line-height: 1; }\n#ytms-settings-dialog .intro { margin: 0; padding: 0 24px 14px; color: var(--muted); font-size: 12px; flex-shrink: 0; }\n#ytms-settings-dialog nav { display: flex; gap: 8px; overflow-x: auto; padding: 0 24px; border-bottom: 1px solid var(--line); flex-shrink: 0; }\n#ytms-settings-dialog nav button { padding: 10px 4px; white-space: nowrap; color: var(--muted); border-bottom: 2px solid transparent; }\n#ytms-settings-dialog nav button[aria-selected=\"true\"] { color: var(--text); border-color: var(--text); }\n#ytms-settings-dialog .content { padding: 4px 24px 18px; overflow: auto; scrollbar-gutter: stable; min-height: 0; flex: 1; }\n#ytms-settings-dialog .row { display: flex; gap: 24px; justify-content: space-between; align-items: center; padding: 14px 0; border-bottom: 1px solid var(--line); }\n#ytms-settings-dialog .row > label { flex: 1; }\n#ytms-settings-dialog .description { display: block; color: var(--muted); font-size: 12px; margin-top: 3px; }\n#ytms-settings-dialog .switch {\n      appearance: none; width: 36px; height: 20px; border-radius: 12px; position: relative;\n      margin: 0 2px; background: #717171; cursor: pointer; flex: 0 0 auto;\n    }\n#ytms-settings-dialog .switch::after { content: \"\"; position: absolute; width: 16px; height: 16px; border-radius: 50%; top: 2px; left: 2px; background: white; }\n#ytms-settings-dialog .switch:checked { background: var(--accent); }\n#ytms-settings-dialog .switch:checked::after { left: 18px; }\n#ytms-settings-dialog select,\n#ytms-settings-dialog .hex { background: var(--field); color: var(--text); border: 1px solid var(--line); border-radius: 6px; padding: 7px 9px; max-width: 190px; }\n#ytms-settings-dialog .hex { width: 108px; font-family: ui-monospace, monospace; text-transform: uppercase; }\n#ytms-settings-dialog .hex[aria-invalid=\"true\"] { border-color: var(--error); }\n#ytms-settings-dialog .colour-rows { padding-top: 8px; }\n#ytms-settings-dialog .colour-row { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin: 12px 0; }\n#ytms-settings-dialog .colour-row label { flex: 1; min-width: 145px; }\n#ytms-settings-dialog .swatch { width: 36px; height: 32px; border: 1px solid var(--line); border-radius: 6px; background: var(--swatch); }\n#ytms-settings-dialog .swatch:hover { outline: 2px solid var(--accent); outline-offset: 2px; }\n#ytms-settings-dialog .field-error { color: var(--error); font-size: 12px; width: 100%; margin: 0; }\n#ytms-settings-dialog .picker { background: var(--field); border: 1px solid var(--line); border-radius: 8px; padding: 14px; margin: 12px 0; }\n#ytms-settings-dialog .picker-heading { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }\n#ytms-settings-dialog .picker h3 { margin: 0; font-size: 14px; font-weight: 500; }\n#ytms-settings-dialog .channel { display: grid; grid-template-columns: 42px 1fr 36px; gap: 12px; align-items: center; margin: 10px 0; }\n#ytms-settings-dialog .channel output { text-align: right; font-size: 12px; font-variant-numeric: tabular-nums; }\n#ytms-settings-dialog input[type=\"range\"] { appearance: none; width: 100%; height: 6px; border-radius: 4px; margin: 8px 0; cursor: pointer; }\n#ytms-settings-dialog input[type=\"range\"]::-moz-range-thumb { width: 14px; height: 14px; background: #fff; border: 1px solid #666; border-radius: 50%; }\n#ytms-settings-dialog input[type=\"range\"]::-webkit-slider-thumb { appearance: none; width: 14px; height: 14px; background: #fff; border: 1px solid #666; border-radius: 50%; }\n#ytms-settings-dialog .preview { background: var(--page); border: 1px solid var(--line); border-radius: 8px; padding: 14px; margin-top: 16px; }\n#ytms-settings-dialog .preview p { margin: 4px 0 12px; }\n#ytms-settings-dialog .preview p:last-child { margin-bottom: 0; }\n#ytms-settings-dialog .preview .name { font-weight: 700; }\n#ytms-settings-dialog .preview time { color: var(--muted); margin-left: 10px; font-size: 12px; }\n#ytms-settings-dialog .preview .pin { color: var(--owner-colour, var(--muted)); font-size: 12px; margin-bottom: 6px; }\n#ytms-settings-dialog .preview .owner { color: var(--owner-colour, var(--text)); }\n#ytms-settings-dialog .preview .viewer { color: var(--viewer-colour, var(--text)); }\n#ytms-settings-dialog .preview[data-mode=\"off\"] .name { font-weight: 500; }\n#ytms-settings-dialog .warning { color: var(--error); font-size: 12px; margin: 10px 0 0; }\n#ytms-settings-dialog .section-note { font-size: 12px; color: var(--muted); margin: 16px 0 0; }\n#ytms-settings-dialog footer { border-top: 1px solid var(--line); padding: 12px 16px; display: flex; flex-wrap: wrap; gap: 8px; align-items: center; flex-shrink: 0; }\n#ytms-settings-dialog footer .spacer { flex: 1; }\n#ytms-settings-dialog #ytms-settings-status { color: var(--muted); margin: 10px 0; }\n@media (max-width: 480px) {\n#ytms-settings-dialog .row { gap: 10px; }\n#ytms-settings-dialog nav,\n#ytms-settings-dialog .content { padding-left: 16px; padding-right: 16px; }\n#ytms-settings-dialog footer .spacer { display: none; }\n#ytms-settings-dialog footer .text-button { padding: 8px 10px; }\n#ytms-settings-dialog select { max-width: 145px; }\n    }\n#ytms-settings-dialog { font: 14px/1.5 Roboto, Arial, sans-serif; margin: auto; }\n#ytms-settings-dialog button { line-height: 1.5; }\n#ytms-settings-button { display: inline-grid; place-items: center; flex: 0 0 40px; width: 40px; height: 40px; padding: 0; margin: 0 8px 0 0; border: 0; border-radius: 50%; background: transparent; cursor: pointer; }\n#ytms-settings-button:hover { background: var(--hover); }\n#ytms-settings-button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }\n#ytms-settings-button img { display: block; width: 32px; height: 32px; pointer-events: none; }\n:root:not([dark]) #ytms-settings-button[data-icon=\"monochrome\"] img { filter: brightness(0); }\n#ytms-settings-dialog .credits { display: flex; flex-direction: column; align-items: center; gap: 12px; padding: 24px 0; text-align: center; }\n#ytms-settings-dialog .credits img { width: 96px; height: 96px; }\n#ytms-settings-dialog .credits h3 { margin: 0; font-size: 20px; font-weight: 600; }\n#ytms-settings-dialog .credits p { margin: 0; color: var(--muted); }\n#ytms-settings-dialog .credits a { color: var(--accent); text-decoration: none; border-radius: 4px; padding: 6px 8px; }\n#ytms-settings-dialog .credits a:hover { text-decoration: underline; }\n#ytms-settings-dialog .credits a:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }\n#ytms-section-extensions > h3 { font-size: 16px; font-weight: 600; margin: 14px 0 0; }\n#ytms-section-extensions > .section-note { margin-top: 6px; }\n#ytms-settings-dialog .extension-card { display: flex; gap: 16px; padding: 18px 0; border-bottom: 1px solid var(--line); }\n#ytms-settings-dialog .extension-card > img { display: block; width: 40px; height: 40px; object-fit: contain; flex: 0 0 40px; }\n#ytms-settings-dialog .extension-details { min-width: 0; flex: 1; }\n#ytms-settings-dialog .extension-details h4 { font-size: 14px; font-weight: 600; margin: 0 0 4px; }\n#ytms-settings-dialog .extension-details p { margin: 0 0 6px; overflow-wrap: anywhere; }\n#ytms-settings-dialog .extension-details .extension-note { font-size: 12px; color: var(--muted); }\n#ytms-settings-dialog .extension-link { display: inline-block; color: var(--accent); text-decoration: none; border-radius: 4px; }\n#ytms-settings-dialog .extension-link:hover { text-decoration: underline; }\n#ytms-settings-dialog .extension-link:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }\n#ytms-player-settings-button.ytp-button { display: inline-flex !important; align-items: center !important; justify-content: center !important; padding: 0 !important; margin: 0 !important; line-height: 0 !important; }\n#ytms-player-settings-button img { box-sizing: border-box !important; display: block !important; width: 36px !important; height: 36px !important; min-width: 36px !important; min-height: 36px !important; max-width: 36px !important; max-height: 36px !important; padding: 4px !important; pointer-events: none !important; }\n#ytms-player-settings-button:focus-visible { outline: 2px solid white; outline-offset: -2px; }\n#ytms-player-settings-tooltip { position: absolute !important; z-index: 1000 !important; display: flex !important; align-items: center !important; box-sizing: border-box !important; max-width: calc(100% - 16px) !important; padding: 5px 9px !important; border-radius: 2px !important; background: rgba(0, 0, 0, 0.9) !important; color: #eee !important; font: 500 12px/1.2 Roboto, Arial, sans-serif !important; text-shadow: none !important; pointer-events: none !important; }\n\n","logo":"data:image/svg+xml;base64,PD94bWwgdmVyc2lvbj0iMS4wIiBlbmNvZGluZz0iVVRGLTgiPz4KPHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIxMDI0IiBoZWlnaHQ9IjEwMjQiIHZpZXdCb3g9IjAgMCAxMDI0IDEwMjQiIHJvbGU9ImltZyIgYXJpYS1sYWJlbGxlZGJ5PSJsb2dvLXRpdGxlIGxvZ28tZGVzY3JpcHRpb24iPgogIDx0aXRsZSBpZD0ibG9nby10aXRsZSI+WW91VHViZSBNYXN0ZXIgU3VpdGUgbG9nbzwvdGl0bGU+CiAgPGRlc2MgaWQ9ImxvZ28tZGVzY3JpcHRpb24iPkEgcmVkIGNvZyB3aXRoIGFuIG9mZi13aGl0ZSB2aWRlbyBwYW5lbCBhbmQgYSByZWQgcGxheSB0cmlhbmdsZS48L2Rlc2M+CiAgPCEtLSBPcmlnaW5hbCBjb2cgYW5kIHZpZGVvLXBhbmVsIGdlb21ldHJ5IGZyb20gU1ZHIFJlcG8uIC0tPgogIDxwYXRoIGlkPSJjb2ciIGZpbGw9IiNmNjAwMDIiIHRyYW5zZm9ybT0ibWF0cml4KDgzLjg0MjEzOCAwIDAgODMuODQyMTM4IC0xNTguNTI4MjExIC0xNTguNTI4MjExKSIgZD0iTTYuODIzMiwybC0yLjIxNjguOTE0NC41MTUyLDEuMjQ4OGE0Ljc0Mjg2LDQuNzQyODYsMCwwLDAtLjk0OTYuOTQ0OEwyLjkyNDgsNC41ODk2LDIuMDAzMiw2LjgwMjRsMS4yNDcyLjUxOTJhNC44Miw0LjgyLDAsMCwwLS4wMDI0LDEuMzRMMiw5LjE3NmwuOTEzNiwyLjIxNzYsMS4yNDg4LS41MTQ0YTQuODI0NDUsNC44MjQ0NSwwLDAsMCwuOTQ0OC45NDg4bC0uNTE4NCwxLjI0NzIsMi4yMTQ0LjkyMDguNTE4NC0xLjI0NjRhNC42Nzk1Miw0LjY3OTUyLDAsMCwwLC42NzQ0LjA0OCw0LjczOTcyLDQuNzM5NzIsMCwwLDAsLjY2NTYtLjA0NjRMOS4xNzYsMTRsMi4yMTc2LS45MTM2LS41MTQ0LTEuMjQ4OGE0LjgyODIyLDQuODI4MjIsMCwwLDAsLjk0OTYtLjk0NDhsMS4yNDU2LjUxODQuOTIxNi0yLjIxNDQtMS4yNDcyLS41MTg0YTQuNzI5ODQsNC43Mjk4NCwwLDAsMCwuMDAyNC0xLjM0TDE0LDYuODI0bC0uOTE0NC0yLjIxNzYtMS4yNDg4LjUxNDRhNC43Mzg5MSw0LjczODkxLDAsMCwwLS45NDQ4LS45NDg4bC41MTg0LTEuMjQ2NEw5LjE5NzYsMi4wMDQsOC42Nzg0LDMuMjUxMmE0LjcxNCw0LjcxNCwwLDAsMC0uNjc2OC0uMDQ4OCw0LjgwOCw0LjgwOCwwLDAsMC0uNjYyNC4wNDY0WiIvPgogIDxwYXRoIGlkPSJ2aWRlby1wYW5lbCIgZmlsbD0iI2Y2ZjZmNiIgdHJhbnNmb3JtPSJzY2FsZSgxNC4yMjIyMjIyMjIyKSIgZD0iTTU5LjUyLDI2LjMzNDE2MjcgQzU5LjUyLDI2LjMzNDE2MjcgNTkuMDUwNSwyMy4wMDMxOTkgNTcuNjEyLDIxLjUzNjM2NjUgQzU1Ljc4NjUsMTkuNjEwMjk5IDUzLjc0MDUsMTkuNjAxMjM1MiA1Mi44MDMsMTkuNDg5NDQ3NyBDNDYuMDg2LDE5IDM2LjAxMDUsMTkgMzYuMDEwNSwxOSBMMzUuOTg5NSwxOSBDMzUuOTg5NSwxOSAyNS45MTQsMTkgMTkuMTk3LDE5LjQ4OTQ0NzcgQzE4LjI1OCwxOS42MDEyMzUyIDE2LjIxMzUsMTkuNjEwMjk5IDE0LjM4NjUsMjEuNTM2MzY2NSBDMTIuOTQ4LDIzLjAwMzE5OSAxMi40OCwyNi4zMzQxNjI3IDEyLjQ4LDI2LjMzNDE2MjcgQzEyLjQ4LDI2LjMzNDE2MjcgMTIsMzAuMjQ2NzIzMiAxMiwzNC4xNTc3NzMxIEwxMiwzNy44MjU2MDk4IEMxMiw0MS43MzgxNzAzIDEyLjQ4LDQ1LjY0OTIyMDIgMTIuNDgsNDUuNjQ5MjIwMiBDMTIuNDgsNDUuNjQ5MjIwMiAxMi45NDgsNDguOTgwMTgzOSAxNC4zODY1LDUwLjQ0NzAxNjUgQzE2LjIxMzUsNTIuMzczMDgzOSAxOC42MTIsNTIuMzEyNjU4MyAxOS42OCw1Mi41MTM1NzM2IEMyMy41Miw1Mi44ODUxOTEzIDM2LDUzIDM2LDUzIEMzNiw1MyA0Ni4wODYsNTIuOTg0ODkzNiA1Mi44MDMsNTIuNDk1NDQ1OSBDNTMuNzQwNSw1Mi4zODIxNDc4IDU1Ljc4NjUsNTIuMzczMDgzOSA1Ny42MTIsNTAuNDQ3MDE2NSBDNTkuMDUwNSw0OC45ODAxODM5IDU5LjUyLDQ1LjY0OTIyMDIgNTkuNTIsNDUuNjQ5MjIwMiBDNTkuNTIsNDUuNjQ5MjIwMiA2MCw0MS43MzgxNzAzIDYwLDM3LjgyNTYwOTggTDYwLDM0LjE1Nzc3MzEgQzYwLDMwLjI0NjcyMzIgNTkuNTIsMjYuMzM0MTYyNyA1OS41MiwyNi4zMzQxNjI3IEw1OS41MiwyNi4zMzQxNjI3IFoiLz4KICA8cGF0aCBpZD0icGxheS10cmlhbmdsZSIgZmlsbD0iI2Y2MDAwMiIgdHJhbnNmb3JtPSJzY2FsZSgxNC4yMjIyMjIyMjIyKSIgZD0iTTMxLjA0NCw0Mi4yNjk5MTYgTDMxLjA0MjUsMjguNjg3NzQxNiBMNDQuMDExNSwzNS41MDIyNDM3IEwzMS4wNDQsNDIuMjY5OTE2IFoiLz4KPC9zdmc+Cg==","playerLogo":"data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIzNiIgaGVpZ2h0PSIzNiIgdmlld0JveD0iMCAwIDEwMjQgMTAyNCI+CiAgPCEtLSBNb25vY2hyb21lIHZhcmlhbnQgb2YgdGhlIG9yaWdpbmFsIHN1aXRlIGxvZ287IHRyYW5zcGFyZW50IHBhbmVsIHdpdGggd2hpdGUgcGxheSB0cmlhbmdsZS4gLS0+CiAgPGRlZnM+CiAgICA8bWFzayBpZD0ic3VpdGUtbG9nby1tYXNrIiBtYXNrVW5pdHM9InVzZXJTcGFjZU9uVXNlIiB4PSIwIiB5PSIwIiB3aWR0aD0iMTAyNCIgaGVpZ2h0PSIxMDI0IiBzdHlsZT0ibWFzay10eXBlOmx1bWluYW5jZSI+CiAgICAgIDxwYXRoIGlkPSJjb2ciIGZpbGw9IiNmZmYiIHRyYW5zZm9ybT0ibWF0cml4KDgzLjg0MjEzOCAwIDAgODMuODQyMTM4IC0xNTguNTI4MjExIC0xNTguNTI4MjExKSIgZD0iTTYuODIzMiwybC0yLjIxNjguOTE0NC41MTUyLDEuMjQ4OGE0Ljc0Mjg2LDQuNzQyODYsMCwwLDAtLjk0OTYuOTQ0OEwyLjkyNDgsNC41ODk2LDIuMDAzMiw2LjgwMjRsMS4yNDcyLjUxOTJhNC44Miw0LjgyLDAsMCwwLS4wMDI0LDEuMzRMMiw5LjE3NmwuOTEzNiwyLjIxNzYsMS4yNDg4LS41MTQ0YTQuODI0NDUsNC44MjQ0NSwwLDAsMCwuOTQ0OC45NDg4bC0uNTE4NCwxLjI0NzIsMi4yMTQ0LjkyMDguNTE4NC0xLjI0NjRhNC42Nzk1Miw0LjY3OTUyLDAsMCwwLC42NzQ0LjA0OCw0LjczOTcyLDQuNzM5NzIsMCwwLDAsLjY2NTYtLjA0NjRMOS4xNzYsMTRsMi4yMTc2LS45MTM2LS41MTQ0LTEuMjQ4OGE0LjgyODIyLDQuODI4MjIsMCwwLDAsLjk0OTYtLjk0NDhsMS4yNDU2LjUxODQuOTIxNi0yLjIxNDQtMS4yNDcyLS41MTg0YTQuNzI5ODQsNC43Mjk4NCwwLDAsMCwuMDAyNC0xLjM0TDE0LDYuODI0bC0uOTE0NC0yLjIxNzYtMS4yNDg4LjUxNDRhNC43Mzg5MSw0LjczODkxLDAsMCwwLS45NDQ4LS45NDg4bC41MTg0LTEuMjQ2NEw5LjE5NzYsMi4wMDQsOC42Nzg0LDMuMjUxMmE0LjcxNCw0LjcxNCwwLDAsMC0uNjc2OC0uMDQ4OCw0LjgwOCw0LjgwOCwwLDAsMC0uNjYyNC4wNDY0WiIvPgogICAgICA8cGF0aCBpZD0idmlkZW8tcGFuZWwiIGZpbGw9IiMwMDAiIHRyYW5zZm9ybT0ic2NhbGUoMTQuMjIyMjIyMjIyMikiIGQ9Ik01OS41MiwyNi4zMzQxNjI3IEM1OS41MiwyNi4zMzQxNjI3IDU5LjA1MDUsMjMuMDAzMTk5IDU3LjYxMiwyMS41MzYzNjY1IEM1NS43ODY1LDE5LjYxMDI5OSA1My43NDA1LDE5LjYwMTIzNTIgNTIuODAzLDE5LjQ4OTQ0NzcgQzQ2LjA4NiwxOSAzNi4wMTA1LDE5IDM2LjAxMDUsMTkgTDM1Ljk4OTUsMTkgQzM1Ljk4OTUsMTkgMjUuOTE0LDE5IDE5LjE5NywxOS40ODk0NDc3IEMxOC4yNTgsMTkuNjAxMjM1MiAxNi4yMTM1LDE5LjYxMDI5OSAxNC4zODY1LDIxLjUzNjM2NjUgQzEyLjk0OCwyMy4wMDMxOTkgMTIuNDgsMjYuMzM0MTYyNyAxMi40OCwyNi4zMzQxNjI3IEMxMi40OCwyNi4zMzQxNjI3IDEyLDMwLjI0NjcyMzIgMTIsMzQuMTU3NzczMSBMMTIsMzcuODI1NjA5OCBDMTIsNDEuNzM4MTcwMyAxMi40OCw0NS42NDkyMjAyIDEyLjQ4LDQ1LjY0OTIyMDIgQzEyLjQ4LDQ1LjY0OTIyMDIgMTIuOTQ4LDQ4Ljk4MDE4MzkgMTQuMzg2NSw1MC40NDcwMTY1IEMxNi4yMTM1LDUyLjM3MzA4MzkgMTguNjEyLDUyLjMxMjY1ODMgMTkuNjgsNTIuNTEzNTczNiBDMjMuNTIsNTIuODg1MTkxMyAzNiw1MyAzNiw1MyBDMzYsNTMgNDYuMDg2LDUyLjk4NDg5MzYgNTIuODAzLDUyLjQ5NTQ0NTkgQzUzLjc0MDUsNTIuMzgyMTQ3OCA1NS43ODY1LDUyLjM3MzA4MzkgNTcuNjEyLDUwLjQ0NzAxNjUgQzU5LjA1MDUsNDguOTgwMTgzOSA1OS41Miw0NS42NDkyMjAyIDU5LjUyLDQ1LjY0OTIyMDIgQzU5LjUyLDQ1LjY0OTIyMDIgNjAsNDEuNzM4MTcwMyA2MCwzNy44MjU2MDk4IEw2MCwzNC4xNTc3NzMxIEM2MCwzMC4yNDY3MjMyIDU5LjUyLDI2LjMzNDE2MjcgNTkuNTIsMjYuMzM0MTYyNyBMNTkuNTIsMjYuMzM0MTYyNyBaIi8+CiAgICAgIDxwYXRoIGlkPSJwbGF5LXRyaWFuZ2xlIiBmaWxsPSIjZmZmIiB0cmFuc2Zvcm09InNjYWxlKDE0LjIyMjIyMjIyMjIpIiBkPSJNMzEuMDQ0LDQyLjI2OTkxNiBMMzEuMDQyNSwyOC42ODc3NDE2IEw0NC4wMTE1LDM1LjUwMjI0MzcgTDMxLjA0NCw0Mi4yNjk5MTYgWiIvPgogICAgPC9tYXNrPgogIDwvZGVmcz4KICA8cmVjdCB3aWR0aD0iMTAyNCIgaGVpZ2h0PSIxMDI0IiBmaWxsPSIjZmZmIiBtYXNrPSJ1cmwoI3N1aXRlLWxvZ28tbWFzaykiLz4KPC9zdmc+Cg==","recommendedExtensions":[{"id":"ryd","name":"Return YouTube Dislike","description":"Shows estimated dislike counts beside YouTube’s dislike button.","note":"Counts are estimates from community data, not an official live YouTube count.","url":"https://returnyoutubedislike.com/install","logo":"data:image/png;base64,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"},{"id":"sponsorblock","name":"SponsorBlock","description":"Skips community-marked sponsor segments, intros and other optional categories.","note":"Complements the Suite without replacing its player or queue controls.","url":"https://sponsor.ajay.app/","logo":"data:image/png;base64,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MSsbKvE0cURRNcoXci4rnLc4q9U6a9+TvzBU0FaWuU5rBEksYglpiJBRRwVVWIjSrpFiIkPnCQ//sONPk0smVwWMHAuoQYXk+MH/4PdszeJUzE0KJYDAi21/jAHBXaDVsO3vY9tunQD+Z+BK6/hrTWD2k/RGR4scAQPbwMV1R5P3gMsdYOhJlwzJkfy0hGIReD+jb8oDg7dA35o7t/Y5Th+ALM0qdQMcHALjJcpe93h3b/fc/u1pz+8H2GFyz+LdPtoAAA14aVRYdFhNTDpjb20uYWRvYmUueG1wAAAAAAA8P3hwYWNrZXQgYmVnaW49Iu+7vyIgaWQ9Ilc1TTBNcENlaGlIenJlU3pOVGN6a2M5ZCI/Pgo8eDp4bXBtZXRhIHhtbG5zOng9ImFkb2JlOm5zOm1ldGEvIiB4OnhtcHRrPSJYTVAgQ29yZSA0LjQuMC1FeGl2MiI+CiA8cmRmOlJERiB4bWxuczpyZGY9Imh0dHA6Ly93d3cudzMub3JnLzE5OTkvMDIvMjItcmRmLXN5bnRheC1ucyMiPgogIDxyZGY6RGVzY3JpcHRpb24gcmRmOmFib3V0PSIiCiAgICB4bWxuczp4bXBNTT0iaHR0cDovL25zLmFkb2JlLmNvbS94YXAvMS4wL21tLyIKICAgIHhtbG5zOnN0RXZ0PSJodHRwOi8vbnMuYWRvYmUuY29tL3hhcC8xLjAvc1R5cGUvUmVzb3VyY2VFdmVudCMiCiAgICB4bWxuczpkYz0iaHR0cDovL3B1cmwub3JnL2RjL2VsZW1lbnRzLzEuMS8iCiAgICB4bWxuczpHSU1QPSJodHRwOi8vd3d3LmdpbXAub3JnL3htcC8iCiAgICB4bWxuczp0aWZmPSJodHRwOi8vbnMuYWRvYmUuY29tL3RpZmYvMS4wLyIKICAgIHhtbG5zOnhtcD0iaHR0cDovL25zLmFkb2JlLmNvbS94YXAvMS4wLyIKICAgeG1wTU06RG9jdW1lbnRJRD0iZ2ltcDpkb2NpZDpnaW1wOjIyOGI2NTU1LTQ4MjctNGQ4OS04YTkwLWFhMDAwZjFiNzQ2MSIKICAgeG1wTU06SW5zdGFuY2VJRD0ieG1wLmlpZDo0YTM0NGNlNS1kODIyLTQyNDItYTc5Zi02NjRjNTRiZjRlNmEiCiAgIHhtcE1NOk9yaWdpbmFsRG9jdW1lbnRJRD0ieG1wLmRpZDplMTMwMTAwYi1jYzMxLTQ0ZTUtYTdhOC02Y2E4ZjViMDY2YWQiCiAgIGRjOkZvcm1hdD0iaW1hZ2UvcG5nIgogICBHSU1QOkFQST0iMi4wIgogICBHSU1QOlBsYXRmb3JtPSJMaW51eCIKICAgR0lNUDpUaW1lU3RhbXA9IjE2NzUxNDQzNTk0MDk3MjAiCiAgIEdJTVA6VmVyc2lvbj0iMi4xMC4zMiIKICAgdGlmZjpPcmllbnRhdGlvbj0iMSIKICAgeG1wOkNyZWF0b3JUb29sPSJHSU1QIDIuMTAiCiAgIHhtcDpNZXRhZGF0YURhdGU9IjIwMjM6MDE6MzFUMDA6NTI6MzctMDU6MDAiCiAgIHhtcDpNb2RpZnlEYXRlPSIyMDIzOjAxOjMxVDAwOjUyOjM3LTA1OjAwIj4KICAgPHhtcE1NOkhpc3Rvcnk+CiAgICA8cmRmOlNlcT4KICAgICA8cmRmOmxpCiAgICAgIHN0RXZ0OmFjdGlvbj0ic2F2ZWQiCiAgICAgIHN0RXZ0OmNoYW5nZWQ9Ii8iCiAgICAgIHN0RXZ0Omluc3RhbmNlSUQ9InhtcC5paWQ6MDhkMjkzMzYtZjMyNC00ZDBlLWI4YTQtMDM5ZGEyMGJmODQ5IgogICAgICBzdEV2dDpzb2Z0d2FyZUFnZW50PSJHaW1wIDIuMTAgKExpbnV4KSIKICAgICAgc3RFdnQ6d2hlbj0iMjAyMy0wMS0zMVQwMDo1MjozOS0wNTowMCIvPgogICAgPC9yZGY6U2VxPgogICA8L3htcE1NOkhpc3Rvcnk+CiAgPC9yZGY6RGVzY3JpcHRpb24+CiA8L3JkZjpSREY+CjwveDp4bXBtZXRhPgogICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgCiAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAKICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgIAogICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgCiAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAKICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgIAogICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgCiAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAKICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgIAogICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgCiAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAKICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgIAogICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgCiAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAKICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgIAogICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgCiAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAKICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgIAogICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgCiAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAg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"},{"id":"dearrow","name":"DeArrow","description":"Replaces sensational titles and thumbnails with community alternatives.","note":"Optional: changes titles and thumbnails. Check the project website for activation and pricing.","url":"https://dearrow.ajay.app/","logo":"data:image/png;base64,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"},{"id":"ublock","name":"uBlock Origin","description":"Blocks adverts, trackers and unwanted requests using filter lists.","note":"Works best on Firefox and Firefox-based browsers. Full uBlock Origin is no longer available in Chrome; uBlock Origin Lite is a separate project.","url":"https://github.com/gorhill/uBlock","logo":"data:image/svg+xml;base64,PD94bWwgdmVyc2lvbj0iMS4wIiBlbmNvZGluZz0iVVRGLTgiIHN0YW5kYWxvbmU9Im5vIj8+CjxzdmcKICAgeG1sbnM6ZGM9Imh0dHA6Ly9wdXJsLm9yZy9kYy9lbGVtZW50cy8xLjEvIgogICB4bWxuczpjYz0iaHR0cDovL2NyZWF0aXZlY29tbW9ucy5vcmcvbnMjIgogICB4bWxuczpyZGY9Imh0dHA6Ly93d3cudzMub3JnLzE5OTkvMDIvMjItcmRmLXN5bnRheC1ucyMiCiAgIHhtbG5zOnN2Zz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciCiAgIHhtbG5zPSJodHRwOi8vd3d3LnczLm9yZy8yMDAwL3N2ZyIKICAgeG1sbnM6eGxpbms9Imh0dHA6Ly93d3cudzMub3JnLzE5OTkveGxpbmsiCiAgIHZlcnNpb249IjEuMSIKICAgdmlld0JveD0iMCAwIDEyOCAxMjgiCiAgIGhlaWdodD0iMTI4IgogICB3aWR0aD0iMTI4Ij4KICA8ZwogICAgIHN0eWxlPSJkaXNwbGF5OmlubGluZTtvcGFjaXR5OjEiPgogICAgPGcKICAgICAgIHN0eWxlPSJmaWxsOiM4MDAwMDA7ZmlsbC1vcGFjaXR5OjE7c3Ryb2tlOiNmZmZmZmY7c3Ryb2tlLXdpZHRoOjEuNjIxMDA3NDQ7c3Ryb2tlLWxpbmVjYXA6cm91bmQ7c3Ryb2tlLW1pdGVybGltaXQ6NDtzdHJva2Utb3BhY2l0eToxO3N0cm9rZS1kYXNoYXJyYXk6bm9uZTtkaXNwbGF5OmlubGluZSIKICAgICAgIHRyYW5zZm9ybT0ibWF0cml4KDAuNjc3ODY1NCwwLDAsMC41NjE0MTgyOCwtMjQxLjA3NTM3LC0yNDcuMjc3MTIpIiAvPgogICAgPGcKICAgICAgIHRyYW5zZm9ybT0ibWF0cml4KC0wLjY5NDUyMDMsMCwwLDAuNTYxMDk2ODcsMzc1LjAyOTY0LC0yNDcuNDI5NDcpIgogICAgICAgc3R5bGU9ImZpbGw6IzgwMDAwMDtmaWxsLW9wYWNpdHk6MTtzdHJva2U6I2ZmZmZmZjtzdHJva2Utd2lkdGg6MS42MDE5MTE3ODAwMDAwMDAwMTtzdHJva2UtbGluZWNhcDpyb3VuZDtzdHJva2UtbWl0ZXJsaW1pdDo0O3N0cm9rZS1vcGFjaXR5OjE7c3Ryb2tlLWRhc2hhcnJheTpub25lO2Rpc3BsYXk6aW5saW5lO3N0cm9rZS1saW5lam9pbjpyb3VuZCI+CiAgICAgIDxwYXRoCiAgICAgICAgIGQ9Im0gNDQ3LjgzMzc2LDY2OS4wOTkyMSBjIC04MC42MzExOSwtNTcuMDMxMTUgLTgwLjYzMTE5LC01Ny4wMzExNSAtODAuNjMxMTksLTE5OS42MDkwMyAzNC41NTYyMywwIDQ2LjA3NDk3LDAgODAuNjMxMTksLTI4LjUxNTU4IG0gMCwyMjguMTI0NjEgYyA4MC42MzEyLC01Ny4wMzExNSA4MC42MzEyLC01Ny4wMzExNSA4MC42MzEyLC0xOTkuNjA5MDMgLTM0LjU1NjIzLDAgLTQ2LjA3NDk3LDAgLTgwLjYzMTIsLTI4LjUxNTU4IgogICAgICAgICBzdHlsZT0iZmlsbDojODAwMDAwO2ZpbGwtb3BhY2l0eToxO2ZpbGwtcnVsZTpub256ZXJvO3N0cm9rZTojZmZmZmZmO3N0cm9rZS13aWR0aDoxLjYwMTkxMTc4O3N0cm9rZS1saW5lY2FwOnJvdW5kO3N0cm9rZS1saW5lam9pbjpyb3VuZDtzdHJva2UtbWl0ZXJsaW1pdDo0O3N0cm9rZS1vcGFjaXR5OjE7c3Ryb2tlLWRhc2hhcnJheTpub25lIiAvPgogICAgPC9nPgogIDwvZz4KICA8ZwogICAgIHRyYW5zZm9ybT0idHJhbnNsYXRlKC0xNy44NzI1NDgsLTE3LjMyNTM1KSIKICAgICBzdHlsZT0iZGlzcGxheTppbmxpbmUiPgogICAgPGVsbGlwc2UKICAgICAgIHRyYW5zZm9ybT0ibWF0cml4KDEuMzMzMzMzNSwwLDAsMS4zMzMzMzM0LC00Mi4yOTA4NjIsLTMxLjEwODQ2MSkiCiAgICAgICByeT0iMTIiCiAgICAgICByeD0iMTEuOTk5OTk5IgogICAgICAgY3k9IjgxLjMyNTM1NiIKICAgICAgIGN4PSIxMDIuMTIyNTQiCiAgICAgICBzdHlsZT0iZmlsbDpub25lO3N0cm9rZTojZmZmZmZmO3N0cm9rZS13aWR0aDo1Ljk5OTk5OTUyO3N0cm9rZS1taXRlcmxpbWl0OjQ7c3Ryb2tlLW9wYWNpdHk6MTtzdHJva2UtZGFzaGFycmF5Om5vbmU7ZGlzcGxheTppbmxpbmU7IiAvPgogICAgPGcKICAgICAgIHN0eWxlPSJmaWxsOiNmZmZmZmY7ZmlsbC1vcGFjaXR5OjE7c3Ryb2tlOiNmZmZmZmY7c3Ryb2tlLXdpZHRoOjEuOTk5OTk5OTY5OTk5OTk5OTY7c3Ryb2tlLW1pdGVybGltaXQ6NDtzdHJva2Utb3BhY2l0eToxO3N0cm9rZS1kYXNoYXJyYXk6bm9uZSIKICAgICAgIHRyYW5zZm9ybT0ic2NhbGUoMS4wMDE4MDI2LDAuOTk4MjAwNjcpIj4KICAgICAgPHBhdGgKICAgICAgICAgZD0ibSA4MS43MjUyMyw4MS40NzE5NDUgYyAwLDExLjAxOTgyOCAtNC45OTEwMDMsMTYuMDI4ODQxIC0xNS45NzEyMSwxNi4wMjg4NDEgLTEwLjk4MDIwNywwIC0xNS45NzEyMSwtNS4wMDkwMTMgLTE1Ljk3MTIxLC0xNi4wMjg4NDEgbCAwLC0yNC4wNDMyNjIgNy45ODU2MDUsMCAwLDI0LjA0MzI2MiBjIDAsNy4wMTI2MTggMC45OTgyLDguMDE0NDIxIDcuOTg1NjA1LDguMDE0NDIxIDYuOTg3NDA0LDAgNy45ODU2MDUsLTEuMDAxODAzIDcuOTg1NjA1LC04LjAxNDQyMSBsIDAsLTI0LjA0MzI2MiA3Ljk4NTYwNSwwIHoiCiAgICAgICAgIHN0eWxlPSJmaWxsOiNmZmZmZmY7c3Ryb2tlOiNmZmZmZmY7c3Ryb2tlLXdpZHRoOjA7c3Ryb2tlLWxpbmVjYXA6c3F1YXJlO3N0cm9rZS1saW5lam9pbjptaXRlcjtzdHJva2UtbWl0ZXJsaW1pdDo0O3N0cm9rZS1kYXNoYXJyYXk6bm9uZTsiIC8+CiAgICA8L2c+CiAgPC9nPgo8L3N2Zz4K"}]},
+    channelAge: createChannelAgeService(() => window.localStorage),
+    createChannelAgeDialog: function createChannelAgeDialog(document, service) {
+  function element(tag, attributes = {}, ...children) {
+    const node = document.createElement(tag);
+    for (const [name, value] of Object.entries(attributes)) {
+      if (value === true) node.setAttribute(name, '');
+      else if (value !== false && value != null) node.setAttribute(name, String(value));
+    }
+    node.append(...children);
+    return node;
+  }
+  const button = (id, text, className = 'ytms-age-button') =>
+    element('button', { id, type: 'button', class: className }, text);
+  const title = element('h2', { id: 'ytms-age-title' }, 'Channel upload filters');
+  const closeButton = button('ytms-age-close', '×', 'ytms-age-close');
+  closeButton.setAttribute('aria-label', 'Close channel upload filters');
+  const intro = element('p', { id: 'ytms-age-intro', class: 'ytms-age-note' },
+    'Hide older uploads or block all uploads from selected channels in feeds and search. Watched-video filtering remains separate. Queues, saved playlists, Watch History and directly opened videos are left unchanged.');
+  const instructions = element('p', { class: 'ytms-age-note' },
+    'Use a UC channel ID or a youtube.com/channel/ URL, not a handle. Each age limit moves forwards automatically; uncertain dates stay visible unless the whole channel is blocked. These Suite filters are separate from YouTube’s Don’t recommend channel choices.');
+  const list = element('div', { id: 'ytms-age-list', role: 'list', 'aria-label': 'Channel upload filters' });
+  const empty = element('p', { class: 'ytms-age-note', id: 'ytms-age-empty' }, 'No channel upload filters. Channels are unaffected until you add and save a rule.');
+  const addButton = button('ytms-age-add', 'Add channel');
+  const status = element('p', { id: 'ytms-age-status', class: 'ytms-age-status', role: 'status', hidden: true });
+  const cancel = button('ytms-age-cancel', 'Cancel');
+  const save = button('ytms-age-save', 'Save filters', 'ytms-age-button ytms-age-primary');
+  const content = element('div', { class: 'ytms-age-content' }, intro, instructions, list, empty, addButton);
+  const dialog = element('dialog', {
+    id: 'ytms-age-dialog', lang: 'en-GB', 'aria-labelledby': title.id, 'aria-describedby': intro.id,
+  }, element('div', { class: 'ytms-age-panel' },
+    element('header', {}, title, closeButton), content,
+    element('footer', {}, status, element('span', { class: 'ytms-age-spacer' }), cancel, save)));
+  document.body.append(dialog);
+  let saved = [];
+  let draft = [];
+  let rowSequence = 0;
+
+  function markChanged() {
+    status.hidden = true;
+    status.classList.remove('ytms-age-error');
+  }
+  function showStatus(message, error = false) {
+    status.textContent = message;
+    status.classList.toggle('ytms-age-error', error);
+    status.hidden = false;
+  }
+  function render(focusRule) {
+    list.replaceChildren();
+    empty.hidden = draft.length !== 0;
+    addButton.disabled = draft.length >= 100;
+    for (const rule of draft) {
+      const sequence = ++rowSequence;
+      const card = element('div', { class: 'ytms-age-rule', role: 'listitem' });
+      const labelField = (labelText, input, className = '') => {
+        const label = element('span', { id: `${input.id}-label` }, labelText);
+        input.setAttribute('aria-labelledby', label.id);
+        return element('label', { class: `ytms-age-field ${className}`, for: input.id }, label, input);
+      };
+      const name = element('input', {
+        id: `ytms-age-name-${sequence}`, type: 'text', maxlength: 120,
+        autocomplete: 'off', value: rule.name, placeholder: 'Optional display name',
+      });
+      name.addEventListener('input', () => { rule.name = name.value; markChanged(); });
+      const channel = element('input', {
+        id: `ytms-age-channel-${sequence}`, type: 'text', maxlength: 256,
+        autocomplete: 'off', spellcheck: 'false', value: rule.channelId,
+        placeholder: 'UC… or https://www.youtube.com/channel/UC…',
+      });
+      channel.addEventListener('input', () => { rule.channelId = channel.value; markChanged(); });
+      const maxAge = element('input', {
+        id: `ytms-age-value-${sequence}`, type: 'number', min: 1, max: 1000, step: 1,
+        inputmode: 'numeric', value: rule.maxAge,
+      });
+      maxAge.addEventListener('input', () => { rule.maxAge = Number(maxAge.value); markChanged(); });
+      const unit = element('select', { id: `ytms-age-unit-${sequence}` },
+        ...[['days', 'Days'], ['weeks', 'Weeks'], ['months', 'Months'], ['years', 'Years']]
+          .map(([value, text]) => element('option', { value }, text)));
+      unit.value = rule.unit;
+      unit.addEventListener('change', () => { rule.unit = unit.value; markChanged(); });
+      const enabled = element('input', { id: `ytms-age-enabled-${sequence}`, type: 'checkbox' });
+      enabled.checked = rule.enabled;
+      enabled.addEventListener('change', () => { rule.enabled = enabled.checked; markChanged(); });
+      const blocked = element('input', { id: `ytms-age-blocked-${sequence}`, type: 'checkbox' });
+      blocked.checked = rule.blocked === true;
+      maxAge.disabled = unit.disabled = blocked.checked;
+      blocked.addEventListener('change', () => {
+        rule.blocked = blocked.checked; maxAge.disabled = unit.disabled = blocked.checked; markChanged();
+      });
+      const remove = button(`ytms-age-remove-${sequence}`, 'Remove');
+      remove.setAttribute('aria-label', `Remove ${rule.name || rule.channelId || 'channel rule'}`);
+      remove.addEventListener('click', () => {
+        const index = draft.indexOf(rule);
+        draft.splice(index, 1); markChanged(); render(draft[Math.min(index, draft.length - 1)]);
+        if (!draft.length) addButton.focus();
+      });
+      card.append(labelField('Channel name', name), labelField('Channel ID or channel URL', channel, 'ytms-age-wide'),
+        element('div', { class: 'ytms-age-limit' }, labelField('Maximum age', maxAge), labelField('Unit', unit)),
+        element('label', { class: 'ytms-age-blocked', for: blocked.id }, blocked, ' Hide this channel — all uploads'),
+        element('div', { class: 'ytms-age-actions' }, element('label', { for: enabled.id }, enabled, ' Enabled'), remove));
+      list.append(card);
+      if (rule === focusRule) channel.focus();
+    }
+  }
+  function appendRule(channel = {}) {
+    if (draft.length >= 100) {
+      showStatus('You can save up to 100 channel rules. Remove an existing rule before adding another.', true);
+      return null;
+    }
+    const rule = { channelId: channel.channelId || '', name: channel.name || '', maxAge: 1, unit: 'weeks', enabled: true, blocked: channel.blocked === true };
+    draft.push(rule); markChanged(); render(rule);
+    return rule;
+  }
+  addButton.addEventListener('click', () => appendRule());
+  function close() { if (dialog.open) dialog.close(); }
+  closeButton.addEventListener('click', close);
+  cancel.addEventListener('click', close);
+  dialog.addEventListener('keydown', event => event.stopPropagation());
+  dialog.addEventListener('click', event => {
+    if (event.target !== dialog) return;
+    const bounds = dialog.getBoundingClientRect();
+    if (event.clientX < bounds.left || event.clientX > bounds.right || event.clientY < bounds.top || event.clientY > bounds.bottom) close();
+  });
+  save.addEventListener('click', () => {
+    const ids = new Set();
+    const invalidIndex = draft.findIndex(rule => {
+      const id = service.normaliseChannelId(rule.channelId);
+      const invalid = !id || ids.has(id) || !Number.isSafeInteger(rule.maxAge) || rule.maxAge < 1 || rule.maxAge > 1000 ||
+        !['days', 'weeks', 'months', 'years'].includes(rule.unit) || typeof rule.name !== 'string' || typeof rule.enabled !== 'boolean' ||
+        (rule.blocked !== undefined && typeof rule.blocked !== 'boolean');
+      ids.add(id);
+      return invalid;
+    });
+    if (invalidIndex >= 0) {
+      showStatus(`Rule ${invalidIndex + 1}: enter a unique UC channel ID or channel URL and a whole-number age from 1 to 1,000. Each channel can have one rule.`, true);
+      return;
+    }
+    let result;
+    try { result = service.save(draft, saved); }
+    catch { showStatus('Could not save channel upload filters. Your previous filters are unchanged.', true); return; }
+    if (!result?.ok) {
+      showStatus(result?.error || 'Could not save channel upload filters. Your previous filters are unchanged.', true);
+      return;
+    }
+    saved = service.getRules();
+    draft = saved.map(rule => ({ ...rule }));
+    render(); showStatus('Saved. Channel upload filters now apply; no reload is needed.');
+    document.defaultView.dispatchEvent(new document.defaultView.CustomEvent('yt-master-channel-age-changed'));
+  });
+  return {
+    open(channel) {
+      if (!dialog.open) {
+        saved = service.read();
+        draft = saved.map(rule => ({ ...rule }));
+        markChanged(); render(); dialog.showModal(); content.scrollTop = 0;
+      }
+      const channelId = channel && service.normaliseChannelId(channel.channelId);
+      if (channelId) {
+        const existing = draft.find(rule => service.normaliseChannelId(rule.channelId) === channelId);
+        if (channel.remove === true) {
+          if (existing) {
+            draft.splice(draft.indexOf(existing), 1); render();
+            showStatus(`${existing.name || channelId} removed from this draft. Choose Save filters to apply it.`);
+            save.focus();
+          } else showStatus('This channel is not in the current filter draft. Nothing has been removed.');
+        } else if (existing) render(existing);
+        else appendRule({ channelId, name: typeof channel.name === 'string' ? channel.name : '', blocked: channel.blocked });
+      } else if (!draft.length) addButton.focus();
+      else closeButton.focus();
+    },
+    close,
+  };
+},
+    installVideoMenu: function installVideoMenu(suite) {
+  const preferences = suite.settings.initial;
+  const cardSelector = 'ytd-video-renderer, ytd-grid-video-renderer, ytd-rich-item-renderer, ytd-compact-video-renderer, yt-lockup-view-model, ytd-playlist-video-renderer, ytd-playlist-panel-video-renderer, yt-playlist-panel-video-renderer';
+  const popupSelector = 'ytd-menu-popup-renderer, yt-sheet-view-model';
+  const rowSelector = 'ytd-menu-service-item-renderer, ytd-menu-navigation-item-renderer, ytd-menu-service-item-download-renderer, yt-list-item-view-model, yt-download-list-item-view-model';
+  const defaultOrder = ['playNext', 'addToQueue', 'watchLater', 'savePlaylist', 'download', 'share', 'notInterested', 'dontRecommend', 'report', 'channelAge', 'channelTools'];
+  const order = [...new Set([...(Array.isArray(preferences.menuItemOrder) ? preferences.menuItemOrder.filter(id => defaultOrder.includes(id)) : []), ...defaultOrder])];
+  const controller = element => element?.polymerController || element?.getPolymerController?.() || element;
+  let trigger = null;
+  let active = null;
+  let waiting = null;
+  let firstFrame = 0;
+  let secondFrame = 0;
+  let refitFrame = 0;
+  let style = null;
+  let disposed = false;
+  let triggerReason = 'missing-trigger';
+
+  function diagnostic(reason) {
+    // Fixed reason codes only: never expose titles, channel IDs, URLs or account data.
+    const root = document.documentElement;
+    if (root?.getAttribute?.('data-ytms-video-menu-status') !== reason) root?.setAttribute?.('data-ytms-video-menu-status', reason);
+    return false;
+  }
+
+  function endpointFor(item) {
+    const model = item?.menuServiceItemRenderer || item?.menuNavigationItemRenderer || item?.menuServiceItemDownloadRenderer || item?.listItemViewModel;
+    return model?.serviceEndpoint || model?.navigationEndpoint || model?.rendererContext?.commandContext?.onTap?.innertubeCommand;
+  }
+
+  function queuedVideoId(item) {
+    const actions = endpointFor(item)?.signalServiceEndpoint?.actions;
+    if (!Array.isArray(actions) || actions.length !== 1) return null;
+    const command = actions[0]?.addToPlaylistCommand;
+    const ids = command?.videoIds || [command?.videoId];
+    return command?.listType === 'PLAYLIST_EDIT_LIST_TYPE_QUEUE' && Array.isArray(ids) && ids.length === 1 &&
+      typeof ids[0] === 'string' && /^[\w-]{11}$/.test(ids[0]) &&
+      (command.videoId === undefined || command.videoId === ids[0]) ? ids[0] : null;
+  }
+
+  function identify(item, selection) {
+    if (item?.downloadListItemViewModel) return 'download';
+    const model = item?.menuServiceItemRenderer || item?.menuNavigationItemRenderer || item?.menuServiceItemDownloadRenderer || item?.listItemViewModel;
+    const icon = String(model?.icon?.iconType || model?.leadingImage?.sources?.[0]?.clientResource?.imageName || '').toUpperCase();
+    if (['QUEUE_PLAY_NEXT', 'ADD_TO_QUEUE_HEAD'].includes(icon) || model?.targetId === 'yt-master-play-next') return 'playNext';
+    if (queuedVideoId(item)) return 'addToQueue';
+    if (['WATCH_LATER', 'WATCH_LATER_OUTLINE'].includes(icon)) return 'watchLater';
+    if (['PLAYLIST_ADD', 'ADD_TO_PLAYLIST', 'PLAYLIST_ADD_OUTLINE', 'BOOKMARK_BORDER'].includes(icon)) return 'savePlaylist';
+    if (['DOWNLOAD', 'OFFLINE_DOWNLOAD', 'FILE_DOWNLOAD'].includes(icon) || item?.menuServiceItemDownloadRenderer) return 'download';
+    if (['SHARE', 'SHARE_OUTLINE'].includes(icon)) return 'share';
+    const library = location.pathname === '/feed/history' || location.pathname === '/playlist' ||
+      selection.card.matches('ytd-playlist-video-renderer, ytd-playlist-panel-video-renderer, yt-playlist-panel-video-renderer');
+    if (['NOT_INTERESTED', 'NOT_INTERESTED_OUTLINE'].includes(icon) || (!library && icon === 'HIDE')) return 'notInterested';
+    if (icon === 'DONT_RECOMMEND_CHANNEL' || (!library && ['REMOVE', 'DO_NOT_DISTURB_ON', 'BLOCK'].includes(icon) && endpointFor(item)?.feedbackEndpoint)) return 'dontRecommend';
+    if (['FLAG', 'FLAG_OUTLINE', 'REPORT'].includes(icon)) return 'report';
+    return null; // Unrecognised actions retain their native position and behaviour.
+  }
+
+  function videoIdFromCard(card) {
+    const ids = new Set();
+    for (const anchor of card.querySelectorAll('a[href]')) {
+      try {
+        const url = new URL(anchor.getAttribute('href'), location.origin);
+        if (url.origin !== location.origin) continue;
+        const id = url.pathname === '/watch' ? url.searchParams.get('v') : /^\/shorts\/([\w-]{11})\/?$/.exec(url.pathname)?.[1];
+        if (typeof id === 'string' && /^[\w-]{11}$/.test(id)) ids.add(id);
+      } catch { /* Malformed links cannot identify a menu target. */ }
+    }
+    if (ids.size !== 1) return null;
+    const id = [...ids][0];
+    try {
+      const model = typeof card.componentProps?.data === 'function' ? card.componentProps.data() : controller(card)?.data;
+      if (model?.contentType && model.contentType !== 'LOCKUP_CONTENT_TYPE_VIDEO') return null;
+      if (model?.videoId && model.videoId !== id) return null;
+      if (model?.contentType === 'LOCKUP_CONTENT_TYPE_VIDEO' && model.contentId && model.contentId !== id) return null;
+    } catch { return null; }
+    return id;
+  }
+
+  function menuSignature(items) {
+    if (!Array.isArray(items) || !items.length || items.length > 60) return null;
+    try {
+      let fields = 0;
+      const value = JSON.stringify(items, (_key, entry) => {
+        if (++fields > 4000 || (typeof entry === 'string' && entry.length > 16384)) throw new Error('Menu model exceeds its bound');
+        return entry;
+      });
+      return value.length <= 131072 ? value : null;
+    } catch { return null; }
+  }
+
+  function nativeMenuSignature(button, card) {
+    // Some queue/library menus have no Add to queue command. Require their
+    // exact native model instead; a trusted click alone cannot bind a popup.
+    const host = button.closest('ytd-menu-renderer');
+    if (!host || !card.contains(host)) return null;
+    try {
+      const items = controller(host)?.data?.items;
+      return Array.isArray(items) && !items.some(queuedVideoId) ? menuSignature(items) : null;
+    } catch { return null; }
+  }
+
+  function matchesNativeMenu(items, selection) {
+    return Boolean(selection.nativeSignature) && menuSignature(items) === selection.nativeSignature;
+  }
+
+  function captureTrigger(event) {
+    if (!event.isTrusted || (event.type === 'keydown' && !['Enter', ' ', 'ArrowDown'].includes(event.key))) return;
+    const button = event.target?.closest?.('button, tp-yt-paper-icon-button, yt-icon-button, [role="button"]');
+    const card = button?.closest(cardSelector);
+    if (!card || !button.closest('ytd-menu-renderer, .ytLockupMetadataViewModelMenuButton, [aria-haspopup="menu"], [aria-haspopup="true"]') ||
+        card.closest('#movie_player')) {
+      if (!active?.popup.contains(event.target)) {
+        trigger = null;
+        triggerReason = card ? 'unsupported-trigger' : 'missing-trigger';
+        if (waiting) reset();
+      }
+      return;
+    }
+    reset();
+    const videoId = videoIdFromCard(card);
+    if (!videoId) { trigger = null; triggerReason = 'card-identity'; diagnostic(triggerReason); return; }
+    trigger = { button, card, videoId, time: performance.now(), nativeSignature: nativeMenuSignature(button, card) };
+    triggerReason = 'captured-trigger';
+    diagnostic(triggerReason);
+    startDiscovery(trigger);
+  }
+
+  function ensureStyle() {
+    if (style?.isConnected) return;
+    style = document.createElement('style');
+    style.textContent = `
+      .ytms-video-menu-action { box-sizing: border-box; border: 0; border-radius: 0; background: transparent;
+        color: var(--yt-sys-color-baseline--text-primary, var(--yt-spec-text-primary, inherit)); cursor: pointer; display: flex; align-items: center; gap: 12px;
+        min-height: 40px; width: 100%; padding: 8px 16px; text-align: start; font: 400 14px/20px Roboto, Arial, sans-serif; }
+      ytd-menu-popup-renderer .ytms-video-menu-action { min-height: 36px; padding-block: 6px; }
+      .ytms-video-menu-action:hover, .ytms-video-menu-action:focus-visible { background: var(--yt-spec-badge-chip-background, #8883); }
+      .ytms-video-menu-action:focus-visible { outline: 2px solid var(--yt-spec-call-to-action, #3ea6ff); outline-offset: -2px; }
+      .ytms-video-menu-action[aria-disabled="true"] { opacity: .55; cursor: default; }
+      .ytms-video-menu-action svg { width: 24px; height: 24px; flex: 0 0 24px; fill: currentColor; }
+      .ytms-video-menu-action small { display: block; white-space: normal; max-width: 240px; font-size: 12px; line-height: 16px; margin-top: 3px; }
+      .ytms-video-menu-action[hidden] { display: none !important; }
+    `;
+    (document.head || document.documentElement).append(style);
+  }
+
+  function customAction(id, label, path) {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'ytms-video-menu-action';
+    button.dataset.ytmsMenuAction = id;
+    button.setAttribute('role', 'menuitem');
+    const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    svg.setAttribute('viewBox', '0 0 24 24');
+    svg.setAttribute('aria-hidden', 'true');
+    const shape = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+    shape.setAttribute('d', path);
+    svg.append(shape);
+    const text = document.createElement('span');
+    text.textContent = label;
+    button.append(svg, text);
+    return button;
+  }
+
+  function focusable(row) {
+    return row.matches('button, [tabindex]') ? row : row.querySelector('button, [role="menuitem"], [tabindex]') || row;
+  }
+
+  function refit() {
+    const current = active;
+    if (!current) return;
+    const resize = () => {
+      if (active !== current || !visiblePopup(current.popup)) return;
+      try { controller(current.popup.closest('tp-yt-iron-dropdown'))?.refit?.(); } catch { /* A dismissed popup may no longer have a native controller. */ }
+    };
+    resize();
+    if (refitFrame) cancelAnimationFrame(refitFrame);
+    // Legacy popup rows settle after their first native measurement. One
+    // coalesced frame avoids retaining the submenu's stale size constraints.
+    refitFrame = requestAnimationFrame(() => { refitFrame = 0; resize(); });
+  }
+
+  function restoreRow(row, saved) {
+    if (saved.value) row.style.setProperty('display', saved.value, saved.priority);
+    else row.style.removeProperty('display');
+  }
+
+  function setPage(tools, focus = true) {
+    const current = active;
+    if (!current || !current.popup.isConnected) return;
+    current.tools = tools;
+    for (const entry of current.entries) {
+      const show = entry.enabled && (tools ? entry.grouped : !entry.grouped);
+      if (show) restoreRow(entry.row, entry.display);
+      else entry.row.style.setProperty('display', 'none', 'important');
+    }
+    current.back.hidden = !tools;
+    current.group.hidden = tools || !current.entries.some(entry => entry.enabled && entry.grouped);
+    current.group.setAttribute('aria-expanded', String(tools));
+    refit();
+    if (focus) focusable(tools ? current.back : current.group).focus();
+  }
+
+  function reset() {
+    if (waiting) {
+      waiting.observer.disconnect();
+      clearTimeout(waiting.timer);
+      waiting = null;
+    }
+    if (firstFrame) cancelAnimationFrame(firstFrame);
+    if (secondFrame) cancelAnimationFrame(secondFrame);
+    if (refitFrame) cancelAnimationFrame(refitFrame);
+    refitFrame = 0;
+    firstFrame = secondFrame = 0;
+    if (!active) return;
+    const current = active;
+    active = null;
+    current.back.remove();
+    current.group.remove();
+    current.age?.remove();
+    for (const entry of current.entries) {
+      if (!entry.custom) restoreRow(entry.row, entry.display);
+    }
+    // Only restore a still-owned, fully stamped list. Do not resurrect detached native rows.
+    if (current.original.every(row => row.parentElement === current.parent)) {
+      current.parent.append(...current.original);
+    }
+    if (current.popup.getAttribute('data-ytms-video-menu') === '1') current.popup.removeAttribute('data-ytms-video-menu');
+  }
+
+  function decorate(popup, selection) {
+    if (disposed || trigger !== selection || !selection.card.isConnected || !popup.isConnected ||
+        performance.now() - selection.time > 5000 || videoIdFromCard(selection.card) !== selection.videoId) return diagnostic('stale-target');
+    const sheet = popup.matches('yt-sheet-view-model');
+    let data;
+    try { data = sheet ? popup.componentProps?.data?.() : controller(popup)?.data; } catch { return diagnostic('unavailable-model'); }
+    const items = sheet ? data?.content?.listViewModel?.listItems : data?.items;
+    if (!Array.isArray(items) || !items.length || items.length > 60) return diagnostic('unsupported-model');
+    const queueIds = items.map(queuedVideoId).filter(Boolean);
+    if (!queueIds.length && !matchesNativeMenu(items, selection)) return diagnostic('no-queue-action');
+    if (queueIds.length && !queueIds.includes(selection.videoId)) return diagnostic('queue-target-mismatch');
+    // Native Download is an outer action host containing its own list-item row.
+    // Keep that original host and handler intact; do not count or move its child.
+    const rows = [...popup.querySelectorAll(rowSelector)].filter(row => {
+      const downloadHost = row.closest('yt-download-list-item-view-model');
+      return !downloadHost || row === downloadHost;
+    });
+    if (rows.length !== items.length) return diagnostic('row-count');
+    if (rows.some(row => row.parentElement !== rows[0].parentElement)) return diagnostic('row-parent');
+    const parent = rows[0].parentElement;
+    if (sheet && rows.some((row, index) => items[index]?.downloadListItemViewModel
+      ? !row.matches('yt-download-list-item-view-model')
+      : !items[index]?.listItemViewModel || !row.matches('yt-list-item-view-model'))) return diagnostic('row-binding');
+    if (rows.some(row => !popup.contains(row)) || rows.some((row, index) => {
+      if (sheet) return false;
+      const model = items[index].menuServiceItemRenderer || items[index].menuNavigationItemRenderer || items[index].menuServiceItemDownloadRenderer;
+      return !model || typeof model !== 'object' || controller(row)?.data !== model;
+    })) return diagnostic('row-binding');
+    const ids = items.map(item => identify(item, selection));
+    // Ambiguous duplicate recognised actions and mismatched native lists remain untouched.
+    if (ids.some((id, index) => id && ids.indexOf(id) !== index)) return diagnostic('duplicate-actions');
+    let channel = null;
+    try { channel = suite.channelAge?.channelFromCard(selection.card) || null; } catch { /* A missing stable ID leaves manual settings available. */ }
+    ensureStyle();
+    const grouped = preferences.menuGroupChannelTools !== false;
+    const isEnabled = id => id === 'download' ? preferences.menuShowDownload === true :
+      id === 'notInterested' ? preferences.menuShowNotInterested !== false :
+      id === 'dontRecommend' ? preferences.menuShowDontRecommend !== false :
+      id === 'report' ? preferences.menuShowReport !== false : true;
+    const entries = rows.map((row, index) => ({ row, id: ids[index], enabled: isEnabled(ids[index]),
+      grouped: grouped && ['dontRecommend', 'report'].includes(ids[index]),
+      display: { value: row.style.getPropertyValue('display'), priority: row.style.getPropertyPriority('display') } }));
+    let age = null;
+    if (preferences.menuShowAgeLimit !== false) {
+      age = customAction('channelAge', 'Filter channel uploads…', 'M7 2v2H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V6a2 2 0 0 0-2-2h-2V2h-2v2H9V2H7zm12 8v10H5V10h14zM5 6h14v2H5V6zm6 6v5h5v-2h-3v-3h-2z');
+      if (!channel?.channelId) {
+        age.setAttribute('aria-disabled', 'true');
+        const note = document.createElement('small');
+        note.textContent = 'Channel ID unavailable; add it manually in Channels settings.';
+        age.lastElementChild.append(note);
+      }
+      entries.push({ row: age, id: 'channelAge', enabled: true, grouped, custom: true, display: { value: '', priority: '' } });
+    }
+    const group = customAction('channelTools', 'Channel tools', 'M9 5l7 7-7 7-1.4-1.4 5.6-5.6-5.6-5.6L9 5z');
+    group.setAttribute('aria-haspopup', 'menu');
+    const back = customAction('back', 'Back', 'M15 5l-7 7 7 7 1.4-1.4-5.6-5.6 5.6-5.6L15 5z');
+    // Keep unknown rows in their original slots; reorder only recognised action slots.
+    const sorted = entries.filter(entry => entry.id).sort((a, b) => order.indexOf(a.id) - order.indexOf(b.id));
+    let index = 0;
+    const arranged = entries.map(entry => entry.id ? sorted[index++] : entry);
+    const groupRank = order.indexOf('channelTools');
+    const beforeGroup = arranged.findIndex(entry => entry.id && order.indexOf(entry.id) > groupRank);
+    const nodes = arranged.map(entry => entry.row);
+    nodes.splice(beforeGroup < 0 ? nodes.length : beforeGroup, 0, group);
+    active = { popup, parent, original: rows, entries, age, group, back, channel, card: selection.card, videoId: selection.videoId,
+      trigger: selection.button, tools: false };
+    parent.append(back, ...nodes);
+    popup.setAttribute('data-ytms-video-menu', '1');
+    setPage(false, false);
+    diagnostic('ready');
+    return true;
+  }
+
+  function visiblePopup(popup) {
+    if (!popup.isConnected || !popup.getClientRects().length) return false;
+    for (let element = popup; element; element = element.parentElement) {
+      if (element.hidden || element.getAttribute('aria-hidden') === 'true') return false;
+      const css = getComputedStyle(element);
+      if (css.display === 'none' || ['hidden', 'collapse'].includes(css.visibility)) return false;
+    }
+    return true;
+  }
+
+  function matchesSelection(popup, selection) {
+    try {
+      const data = popup.matches('yt-sheet-view-model') ? popup.componentProps?.data?.() : controller(popup)?.data;
+      const items = popup.matches('yt-sheet-view-model') ? data?.content?.listViewModel?.listItems : data?.items;
+      if (!Array.isArray(items) || items.length > 60) return false;
+      const queueIds = items.map(queuedVideoId).filter(Boolean);
+      return queueIds.length ? queueIds.includes(selection.videoId) : matchesNativeMenu(items, selection);
+    } catch { return false; }
+  }
+
+  function startDiscovery(selection, eventPopup = null) {
+    reset();
+    const containers = [...document.querySelectorAll('ytd-popup-container')];
+    const existing = eventPopup ? [eventPopup] : [...document.querySelectorAll(popupSelector)];
+    const roots = containers.length ? containers : [...new Set(existing.map(popup => popup.closest('tp-yt-iron-dropdown') || popup))];
+    diagnostic('waiting-for-menu');
+    let request;
+    function attempt() {
+      secondFrame = 0;
+      if (waiting !== request || trigger !== selection) return;
+      try {
+        const visible = [...document.querySelectorAll(popupSelector)].filter(popup =>
+          roots.some(root => root === popup || root.contains(popup)) && visiblePopup(popup));
+        const matching = visible.filter(popup => matchesSelection(popup, selection));
+        if (matching.length > 1 || (visible.length > 1 && matching.length !== 1)) {
+          diagnostic('ambiguous-popup'); return;
+        }
+        const popup = matching[0] || (visible.length === 1 ? visible[0] : null);
+        if (!popup) { diagnostic('waiting-for-visible-popup'); return; }
+        // A visible old menu for another video is not owned by this request.
+        request.popup = matching.length === 1 ? popup : null;
+        if (decorate(popup, selection) && waiting === request) {
+          request.observer.disconnect();
+          clearTimeout(request.timer);
+          waiting = null;
+        }
+      } catch { reset(); }
+    }
+    // YouTube reuses cached sheets without another yt-popup-opened event. Watch
+    // only known popup containers after this trusted activation, never the page.
+    const observer = new MutationObserver(() => {
+      if (waiting === request && !firstFrame && !secondFrame) secondFrame = requestAnimationFrame(attempt);
+    });
+    for (const root of roots) observer.observe(root, { childList: true, subtree: true,
+      attributes: true, attributeFilter: ['hidden', 'style', 'aria-hidden', 'opened'] });
+    request = { popup: eventPopup && matchesSelection(eventPopup, selection) ? eventPopup : null, roots, observer, timer: setTimeout(() => {
+      if (waiting === request) {
+        observer.disconnect(); waiting = null;
+        if (trigger === selection) trigger = null;
+        if (firstFrame) cancelAnimationFrame(firstFrame);
+        if (secondFrame) cancelAnimationFrame(secondFrame);
+        firstFrame = secondFrame = 0;
+      }
+    }, 1500) };
+    waiting = request;
+    // Play next first rebinds the native model; the second frame sees its stamped rows.
+    firstFrame = requestAnimationFrame(() => {
+      firstFrame = 0;
+      secondFrame = requestAnimationFrame(attempt);
+    });
+  }
+
+  function opened(event) {
+    const popup = event.target;
+    if (!popup?.matches?.(popupSelector)) return;
+    if (!trigger) { diagnostic(triggerReason); return; }
+    startDiscovery(trigger, popup);
+  }
+
+  function activate(event) {
+    const current = active;
+    if (!current) return;
+    if (!current.popup.contains(event.target)) {
+      // Automatic theatre-mode and other native helpers use synthetic clicks.
+      // They must not cancel a menu that the user has just opened.
+      if (event.isTrusted) { reset(); trigger = null; }
+      return;
+    }
+    const action = event.target.closest?.('[data-ytms-menu-action]')?.dataset.ytmsMenuAction;
+    if (!action) return;
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    if (!event.isTrusted) return;
+    if (action === 'channelTools') setPage(true);
+    else if (action === 'back') setPage(false);
+    else if (action === 'channelAge' && current.channel?.channelId) {
+      let channel;
+      try { channel = suite.channelAge?.channelFromCard(current.card); } catch { return; }
+      if (!current.card.isConnected || videoIdFromCard(current.card) !== current.videoId || channel?.channelId !== current.channel.channelId) return;
+      try { current.popup.closest('tp-yt-iron-dropdown')?.close?.(); } catch { /* Settings can still open if the native dropdown has already closed. */ }
+      reset(); trigger = null;
+      suite.openChannelAgeSettings?.(channel);
+    }
+  }
+
+  function keyboard(event) {
+    const current = active;
+    if (!current || !current.popup.contains(event.target) || !event.isTrusted) return;
+    if ((event.key === 'ArrowRight' && event.target.closest?.('[data-ytms-menu-action="channelTools"]')) ||
+        ((event.key === 'ArrowLeft' || event.key === 'Escape') && current.tools)) {
+      event.preventDefault(); event.stopImmediatePropagation();
+      setPage(!current.tools); return;
+    }
+    if (event.key === 'Escape') { reset(); trigger = null; return; }
+    if (!['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) return;
+    const rows = [...current.parent.children].filter(row => row === current.back ? current.tools :
+      row === current.group ? !current.group.hidden :
+        current.entries.some(entry => entry.row === row && entry.enabled && (current.tools ? entry.grouped : !entry.grouped)));
+    if (!rows.length) return;
+    const focused = rows.findIndex(row => row === event.target || row.contains(event.target));
+    const next = event.key === 'Home' ? 0 : event.key === 'End' ? rows.length - 1 :
+      (focused + (event.key === 'ArrowDown' ? 1 : -1) + rows.length) % rows.length;
+    event.preventDefault(); event.stopImmediatePropagation();
+    focusable(rows[next]).focus();
+  }
+
+  function closed(event) {
+    const popup = active?.popup || waiting?.popup;
+    if ((popup && (event.target === popup || event.target?.contains?.(popup))) ||
+        (!active && waiting?.roots.some(root => root === event.target))) {
+      reset(); trigger = null;
+    }
+  }
+
+  function navigated() { reset(); trigger = null; }
+  document.addEventListener('click', captureTrigger, true);
+  document.addEventListener('keydown', captureTrigger, true);
+  document.addEventListener('click', activate, true);
+  document.addEventListener('keydown', keyboard, true);
+  window.addEventListener('yt-popup-opened', opened, true);
+  const closeEvents = ['yt-popup-closed', 'iron-overlay-closed'];
+  closeEvents.forEach(type => window.addEventListener(type, closed, true));
+  const resetEvents = ['yt-navigate-start', 'pagehide'];
+  resetEvents.forEach(type => window.addEventListener(type, navigated, true));
+  diagnostic('idle');
+  return function disposeVideoMenu() {
+    disposed = true;
+    navigated();
+    style?.remove(); style = null;
+    document.removeEventListener('click', captureTrigger, true);
+    document.removeEventListener('keydown', captureTrigger, true);
+    document.removeEventListener('click', activate, true);
+    document.removeEventListener('keydown', keyboard, true);
+    window.removeEventListener('yt-popup-opened', opened, true);
+    closeEvents.forEach(type => window.removeEventListener(type, closed, true));
+    resetEvents.forEach(type => window.removeEventListener(type, navigated, true));
+    diagnostic('disposed');
+  };
+},
+    settingsAssets: {"css":"\n#ytms-settings-dialog, #ytms-settings-button, #ytms-age-dialog {\n      color-scheme: dark;\n      --page: #0f0f0f; --surface: #212121; --hover: #383838; --text: #f1f1f1;\n      --muted: #aaa; --line: #3f3f3f; --accent: #ff0033; --accent-text: #0f0f0f; --link: #ff6b6b;\n      --error: #ff9a9a; --field: #181818;\n    }\n:root:not([dark]) #ytms-settings-dialog, :root:not([dark]) #ytms-settings-button, :root:not([dark]) #ytms-age-dialog {\n      color-scheme: light;\n      --page: #fff; --surface: #fff; --hover: #eee; --text: #0f0f0f;\n      --muted: #606060; --line: #d5d5d5; --accent: #c00; --accent-text: #fff; --link: #c00;\n      --error: #b3261e; --field: #fafafa;\n    }\n#ytms-settings-dialog * { box-sizing: border-box; }\n#ytms-settings-dialog [hidden] { display: none !important; }\n#ytms-settings-dialog button,\n#ytms-settings-dialog input,\n#ytms-settings-dialog select { font: inherit; }\n#ytms-settings-dialog button { border: 0; color: inherit; background: transparent; cursor: pointer; }\n#ytms-settings-dialog button:disabled { opacity: .5; cursor: default; }\n#ytms-settings-dialog button:focus-visible,\n#ytms-settings-dialog input:focus-visible,\n#ytms-settings-dialog select:focus-visible,\n#ytms-settings-dialog summary:focus-visible {\n      outline: 2px solid var(--accent); outline-offset: 3px;\n    }\n#ytms-settings-dialog .icon-button { display: grid; place-items: center; width: 40px; height: 40px; border-radius: 50%; flex: 0 0 auto; }\n#ytms-settings-dialog .icon-button:hover { background: var(--hover); }\n#ytms-settings-dialog .icon-button svg,\n#ytms-settings-dialog .icon-button img { width: 24px; height: 24px; }\n#ytms-settings-dialog .icon-button img { display: block; pointer-events: none; }\n#ytms-settings-dialog .text-button { padding: 8px 14px; border-radius: 20px; font-weight: 600; white-space: nowrap; }\n#ytms-settings-dialog .text-button:hover { background: var(--hover); }\n#ytms-settings-dialog .primary { background: var(--accent); color: var(--accent-text); }\n#ytms-settings-dialog .primary:hover:not(:disabled) { filter: brightness(.92); background: var(--accent); }\n#ytms-settings-dialog .primary:disabled { background: var(--line); color: var(--muted); opacity: 1; }\n#ytms-settings-dialog {\n      box-sizing: border-box; width: min(760px, calc(100vw - 24px)); height: min(720px, calc(100dvh - 24px)); max-height: calc(100dvh - 24px);\n      padding: 0; border: 1px solid var(--line); border-radius: 12px;\n      color: var(--text); background: var(--surface); box-shadow: 0 12px 48px #0008;\n    }\n#ytms-settings-dialog::backdrop { background: #0008; }\n#ytms-settings-dialog .panel { display: flex; flex-direction: column; height: 100%; min-height: 0; }\n#ytms-settings-dialog .panel-header { display: flex; align-items: center; justify-content: space-between; padding: 12px 16px 4px 24px; flex-shrink: 0; }\n#ytms-settings-dialog .panel-header h2 { font-size: 20px; font-weight: 600; margin: 0; }\n#ytms-settings-dialog .panel-header .close { font-size: 28px; font-weight: 400; line-height: 1; }\n#ytms-settings-dialog nav { display: flex; gap: 8px; overflow-x: auto; padding: 0 24px; border-bottom: 1px solid var(--line); flex-shrink: 0; }\n#ytms-settings-dialog nav button { padding: 10px 4px; white-space: nowrap; color: var(--muted); border-bottom: 2px solid transparent; }\n#ytms-settings-dialog nav button[aria-selected=\"true\"] { color: var(--text); border-color: var(--accent); }\n#ytms-settings-dialog .content { padding: 4px 24px 18px; overflow: auto; scrollbar-gutter: stable; min-height: 0; flex: 1; }\n#ytms-settings-dialog .row { display: flex; gap: 24px; justify-content: space-between; align-items: center; padding: 14px 0; border-bottom: 1px solid var(--line); }\n#ytms-settings-dialog .row > label { flex: 1; }\n#ytms-settings-dialog .row > .row-label { flex: 1; min-width: 0; }\n#ytms-settings-dialog .description { display: block; color: var(--muted); font-size: 12px; margin-top: 3px; }\n#ytms-settings-dialog .switch {\n      appearance: none; width: 36px; height: 20px; border-radius: 12px; position: relative;\n      margin: 0 2px; background: #717171; cursor: pointer; flex: 0 0 auto;\n    }\n#ytms-settings-dialog .switch::after { content: \"\"; position: absolute; width: 16px; height: 16px; border-radius: 50%; top: 2px; left: 2px; background: white; }\n#ytms-settings-dialog .switch:checked { background: var(--accent); }\n#ytms-settings-dialog .switch:checked::after { left: 18px; }\n#ytms-settings-dialog select,\n#ytms-settings-dialog .hex { background: var(--field); color: var(--text); border: 1px solid var(--line); border-radius: 6px; padding: 7px 9px; max-width: 190px; }\n#ytms-settings-dialog .hex { width: 108px; font-family: ui-monospace, monospace; text-transform: uppercase; }\n#ytms-settings-dialog .hex[aria-invalid=\"true\"] { border-color: var(--error); }\n#ytms-settings-dialog .colour-rows { padding-top: 8px; }\n#ytms-settings-dialog .colour-row { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin: 12px 0; }\n#ytms-settings-dialog .colour-row label { flex: 1; min-width: 145px; }\n#ytms-settings-dialog .swatch { width: 36px; height: 32px; border: 1px solid var(--line); border-radius: 6px; background: var(--swatch); }\n#ytms-settings-dialog .swatch:hover { outline: 2px solid var(--accent); outline-offset: 2px; }\n#ytms-settings-dialog .field-error { color: var(--error); font-size: 12px; width: 100%; margin: 0; }\n#ytms-settings-dialog .picker { background: var(--field); border: 1px solid var(--line); border-radius: 8px; padding: 14px; margin: 12px 0; }\n#ytms-settings-dialog .picker-heading { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }\n#ytms-settings-dialog .picker h3 { margin: 0; font-size: 14px; font-weight: 500; }\n#ytms-settings-dialog .channel { display: grid; grid-template-columns: 42px 1fr 36px; gap: 12px; align-items: center; margin: 10px 0; }\n#ytms-settings-dialog .channel output { text-align: right; font-size: 12px; font-variant-numeric: tabular-nums; }\n#ytms-settings-dialog input[type=\"range\"] { appearance: none; width: 100%; height: 6px; border-radius: 4px; margin: 8px 0; cursor: pointer; }\n#ytms-settings-dialog input[type=\"range\"]::-moz-range-thumb { width: 14px; height: 14px; background: #fff; border: 1px solid #666; border-radius: 50%; }\n#ytms-settings-dialog input[type=\"range\"]::-webkit-slider-thumb { appearance: none; width: 14px; height: 14px; background: #fff; border: 1px solid #666; border-radius: 50%; }\n#ytms-settings-dialog .preview { background: var(--page); border: 1px solid var(--line); border-radius: 8px; padding: 14px; margin-top: 16px; }\n#ytms-settings-dialog .preview p { margin: 4px 0 12px; }\n#ytms-settings-dialog .preview p:last-child { margin-bottom: 0; }\n#ytms-settings-dialog .preview .name { font-weight: 700; }\n#ytms-settings-dialog .preview time { color: var(--muted); margin-left: 10px; font-size: 12px; }\n#ytms-settings-dialog .preview .pin { color: var(--owner-colour, var(--muted)); font-size: 12px; margin-bottom: 6px; }\n#ytms-settings-dialog .preview .owner { color: var(--owner-colour, var(--text)); }\n#ytms-settings-dialog .preview .viewer { color: var(--viewer-colour, var(--text)); }\n#ytms-settings-dialog .preview[data-mode=\"off\"] .name { font-weight: 500; }\n#ytms-settings-dialog .warning { color: var(--error); font-size: 12px; margin: 10px 0 0; }\n#ytms-settings-dialog .section-note { font-size: 12px; color: var(--muted); margin: 16px 0 0; }\n#ytms-settings-dialog footer { border-top: 1px solid var(--line); padding: 12px 16px; display: flex; flex-wrap: wrap; gap: 8px; align-items: center; flex-shrink: 0; }\n#ytms-settings-dialog footer .spacer { flex: 1; }\n#ytms-settings-dialog .footer-actions { display: flex; align-items: center; gap: 8px; min-width: 0; max-width: 100%; margin-left: auto; }\n#ytms-settings-dialog .footer-actions > button { flex: 0 0 auto; }\n#ytms-settings-dialog #ytms-settings-status { flex: 0 1 176px; max-width: 176px; min-width: 0; color: var(--muted); font-size: 12px; margin: 0; overflow-wrap: anywhere; }\n@media (max-width: 480px) {\n#ytms-settings-dialog .row { gap: 10px; }\n#ytms-settings-dialog nav,\n#ytms-settings-dialog .content { padding-left: 16px; padding-right: 16px; }\n#ytms-settings-dialog footer .spacer { display: none; }\n#ytms-settings-dialog footer .text-button { padding: 8px 10px; }\n#ytms-settings-dialog select { max-width: 145px; }\n    }\n#ytms-settings-dialog { font: 14px/1.5 Roboto, Arial, sans-serif; margin: auto; }\n#ytms-settings-dialog button { line-height: 1.5; }\n#ytms-settings-button { display: inline-grid; place-items: center; flex: 0 0 40px; width: 40px; height: 40px; padding: 0; margin: 0 8px 0 0; border: 0; border-radius: 50%; background: transparent; cursor: pointer; }\n#ytms-settings-button:hover { background: var(--hover); }\n#ytms-settings-button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }\n#ytms-settings-button img { display: block; width: 32px; height: 32px; pointer-events: none; }\n:root:not([dark]) #ytms-settings-button[data-icon=\"monochrome\"] img { filter: brightness(0); }\n#ytms-settings-dialog .credits { display: flex; flex-direction: column; align-items: center; gap: 12px; padding: 24px 0; text-align: center; }\n#ytms-settings-dialog .credits img { width: 96px; height: 96px; }\n#ytms-settings-dialog .credits h3 { margin: 0; font-size: 20px; font-weight: 600; }\n#ytms-settings-dialog .credits p { margin: 0; color: var(--muted); }\n#ytms-settings-dialog .credits a { color: var(--link); text-decoration: none; border-radius: 4px; padding: 6px 8px; }\n#ytms-settings-dialog .credits a:hover { text-decoration: underline; }\n#ytms-settings-dialog .credits a:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }\n#ytms-section-extensions > h3 { font-size: 16px; font-weight: 600; margin: 14px 0 0; }\n#ytms-section-extensions > .section-note { margin-top: 6px; }\n#ytms-settings-dialog .extension-card { display: flex; gap: 16px; padding: 18px 0; border-bottom: 1px solid var(--line); }\n#ytms-settings-dialog .extension-card > img { display: block; width: 40px; height: 40px; object-fit: contain; flex: 0 0 40px; }\n#ytms-settings-dialog .extension-details { min-width: 0; flex: 1; }\n#ytms-settings-dialog .extension-details h4 { font-size: 14px; font-weight: 600; margin: 0 0 4px; }\n#ytms-settings-dialog .extension-details p { margin: 0 0 6px; overflow-wrap: anywhere; }\n#ytms-settings-dialog .extension-details .extension-note { font-size: 12px; color: var(--muted); }\n#ytms-settings-dialog .extension-link { display: inline-block; color: var(--link); text-decoration: none; border-radius: 4px; }\n#ytms-settings-dialog .extension-link:hover { text-decoration: underline; }\n#ytms-settings-dialog .extension-link:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }\n#ytms-player-settings-button.ytp-button { display: inline-flex !important; align-items: center !important; justify-content: center !important; padding: 0 !important; margin: 0 !important; line-height: 0 !important; }\n#ytms-player-settings-button img { box-sizing: border-box !important; display: block !important; width: 36px !important; height: 36px !important; min-width: 36px !important; min-height: 36px !important; max-width: 36px !important; max-height: 36px !important; padding: 4px !important; pointer-events: none !important; }\n#ytms-player-settings-button:focus-visible { outline: 2px solid white; outline-offset: -2px; }\n#ytms-player-settings-tooltip { position: absolute !important; z-index: 1000 !important; display: flex !important; align-items: center !important; box-sizing: border-box !important; max-width: calc(100% - 16px) !important; padding: 5px 9px !important; border-radius: 2px !important; background: rgba(0, 0, 0, 0.9) !important; color: #eee !important; font: 500 12px/1.2 Roboto, Arial, sans-serif !important; text-shadow: none !important; pointer-events: none !important; }\n\n#ytms-settings-dialog .menu-order { margin-top: 20px; }\n#ytms-settings-dialog #ytms-video-menu-settings { margin: 20px 0 0; border: 1px solid var(--line); border-radius: 8px; padding: 0 12px; }\n#ytms-settings-dialog #ytms-video-menu-settings > summary { cursor: pointer; font-size: 16px; font-weight: 600; padding: 12px 0; }\n#ytms-settings-dialog #ytms-video-menu-settings > .menu-order { margin-bottom: 16px; }\n#ytms-settings-dialog .channel-filter-card { padding: 16px 0; border-bottom: 1px solid var(--line); }\n#ytms-settings-dialog .channel-filter-card h3 { font-size: 14px; font-weight: 600; margin: 0 0 6px; overflow-wrap: anywhere; }\n#ytms-settings-dialog .channel-filter-card p { margin: 4px 0; font-size: 12px; overflow-wrap: anywhere; }\n#ytms-settings-dialog .channel-filter-id { font-family: ui-monospace, monospace; color: var(--muted); }\n#ytms-settings-dialog .channel-filter-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }\n#ytms-settings-dialog .channel-filter-help { display: inline-block; margin: 8px 0; font-size: 12px; color: var(--link); text-decoration: none; overflow-wrap: anywhere; }\n#ytms-settings-dialog .channel-filter-help:hover { text-decoration: underline; }\n#ytms-settings-dialog .channel-filter-help:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }\n#ytms-settings-dialog .menu-order h3 { font-size: 16px; margin: 0; }\n#ytms-settings-dialog .menu-order .section-note { margin: 6px 0 12px; }\n#ytms-settings-dialog #ytms-menu-order { padding: 0; margin: 0; list-style: none; }\n#ytms-settings-dialog #ytms-menu-order li { display: flex; gap: 8px; align-items: center; padding: 6px 0; border-bottom: 1px solid var(--line); }\n#ytms-settings-dialog #ytms-menu-order li > span { flex: 1; min-width: 0; overflow-wrap: anywhere; }\n#ytms-settings-dialog .menu-order-move { width: 32px; height: 32px; padding: 0; border-radius: 50%; font-size: 18px; flex: 0 0 auto; }\n#ytms-settings-dialog .menu-order-move:hover:not(:disabled) { background: var(--hover); }\n#ytms-age-dialog { box-sizing: border-box; width: min(640px, calc(100vw - 24px)); height: min(720px, calc(100dvh - 24px)); max-height: calc(100dvh - 24px); margin: auto; padding: 0; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); color: var(--text); box-shadow: 0 12px 48px #0008; font: 14px/1.5 Roboto, Arial, sans-serif; }\n#ytms-age-dialog::backdrop { background: #0008; }\n#ytms-age-dialog * { box-sizing: border-box; }\n#ytms-age-dialog [hidden] { display: none !important; }\n#ytms-age-dialog .ytms-age-panel { display: flex; flex-direction: column; height: 100%; min-height: 0; }\n#ytms-age-dialog header { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 16px 4px 24px; flex-shrink: 0; }\n#ytms-age-dialog h2 { font-size: 20px; font-weight: 600; margin: 0; }\n#ytms-age-dialog button, #ytms-age-dialog input, #ytms-age-dialog select { font: inherit; }\n#ytms-age-dialog button { border: 0; background: transparent; color: inherit; cursor: pointer; }\n#ytms-age-dialog button:disabled { opacity: .5; cursor: default; }\n#ytms-age-dialog button:focus-visible, #ytms-age-dialog input:focus-visible, #ytms-age-dialog select:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }\n#ytms-age-dialog .ytms-age-close { flex: 0 0 40px; width: 40px; height: 40px; padding: 0; border-radius: 50%; font-size: 28px; line-height: 1; }\n#ytms-age-dialog .ytms-age-close:hover, #ytms-age-dialog .ytms-age-button:hover { background: var(--hover); }\n#ytms-age-dialog .ytms-age-content { min-height: 0; overflow: auto; flex: 1; padding: 0 24px 20px; scrollbar-gutter: stable; }\n#ytms-age-dialog .ytms-age-note { color: var(--muted); font-size: 12px; margin: 10px 0 14px; }\n#ytms-age-dialog .ytms-age-rule { display: flex; flex-direction: column; gap: 12px; padding: 16px 0; border-top: 1px solid var(--line); }\n#ytms-age-dialog .ytms-age-field { display: flex; flex-direction: column; gap: 4px; min-width: 0; }\n#ytms-age-dialog .ytms-age-field > span { color: var(--muted); font-size: 12px; }\n#ytms-age-dialog .ytms-age-field input, #ytms-age-dialog .ytms-age-field select { min-width: 0; width: 100%; background: var(--field); color: var(--text); border: 1px solid var(--line); border-radius: 6px; padding: 7px 9px; }\n#ytms-age-dialog .ytms-age-wide input { font-family: ui-monospace, monospace; font-size: 12px; }\n#ytms-age-dialog .ytms-age-limit { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 16px; }\n#ytms-age-dialog .ytms-age-actions { display: flex; align-items: center; justify-content: space-between; gap: 16px; }\n#ytms-age-dialog .ytms-age-actions label { display: flex; gap: 6px; align-items: center; }\n#ytms-age-dialog .ytms-age-blocked { display: flex; gap: 6px; align-items: flex-start; font-size: 12px; }\n#ytms-age-dialog input[type=\"checkbox\"] { accent-color: var(--accent); }\n#ytms-age-dialog .ytms-age-button { padding: 8px 14px; border-radius: 20px; font-weight: 600; white-space: nowrap; }\n#ytms-age-dialog .ytms-age-primary, #ytms-age-dialog .ytms-age-primary:hover { background: var(--accent); color: var(--accent-text); }\n#ytms-age-dialog .ytms-age-primary:hover { filter: brightness(.92); }\n#ytms-age-dialog footer { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; border-top: 1px solid var(--line); padding: 12px 16px; flex-shrink: 0; }\n#ytms-age-dialog .ytms-age-status { width: 100%; margin: 0; font-size: 12px; color: var(--muted); overflow-wrap: anywhere; }\n#ytms-age-dialog .ytms-age-status.ytms-age-error { color: var(--error); }\n#ytms-age-dialog .ytms-age-spacer { flex: 1; }\n@media (max-width: 480px) {\n  #ytms-age-dialog header { padding-left: 16px; }\n  #ytms-age-dialog .ytms-age-content { padding-left: 16px; padding-right: 16px; }\n  #ytms-age-dialog h2 { font-size: 18px; }\n}\n\n","logo":"data:image/svg+xml;base64,PD94bWwgdmVyc2lvbj0iMS4wIiBlbmNvZGluZz0iVVRGLTgiPz4KPHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIxMDI0IiBoZWlnaHQ9IjEwMjQiIHZpZXdCb3g9IjAgMCAxMDI0IDEwMjQiIHJvbGU9ImltZyIgYXJpYS1sYWJlbGxlZGJ5PSJsb2dvLXRpdGxlIGxvZ28tZGVzY3JpcHRpb24iPgogIDx0aXRsZSBpZD0ibG9nby10aXRsZSI+WW91VHViZSBNYXN0ZXIgU3VpdGUgbG9nbzwvdGl0bGU+CiAgPGRlc2MgaWQ9ImxvZ28tZGVzY3JpcHRpb24iPkEgcmVkIGNvZyB3aXRoIGFuIG9mZi13aGl0ZSB2aWRlbyBwYW5lbCBhbmQgYSByZWQgcGxheSB0cmlhbmdsZS48L2Rlc2M+CiAgPCEtLSBPcmlnaW5hbCBjb2cgYW5kIHZpZGVvLXBhbmVsIGdlb21ldHJ5IGZyb20gU1ZHIFJlcG8uIC0tPgogIDxwYXRoIGlkPSJjb2ciIGZpbGw9IiNmNjAwMDIiIHRyYW5zZm9ybT0ibWF0cml4KDgzLjg0MjEzOCAwIDAgODMuODQyMTM4IC0xNTguNTI4MjExIC0xNTguNTI4MjExKSIgZD0iTTYuODIzMiwybC0yLjIxNjguOTE0NC41MTUyLDEuMjQ4OGE0Ljc0Mjg2LDQuNzQyODYsMCwwLDAtLjk0OTYuOTQ0OEwyLjkyNDgsNC41ODk2LDIuMDAzMiw2LjgwMjRsMS4yNDcyLjUxOTJhNC44Miw0LjgyLDAsMCwwLS4wMDI0LDEuMzRMMiw5LjE3NmwuOTEzNiwyLjIxNzYsMS4yNDg4LS41MTQ0YTQuODI0NDUsNC44MjQ0NSwwLDAsMCwuOTQ0OC45NDg4bC0uNTE4NCwxLjI0NzIsMi4yMTQ0LjkyMDguNTE4NC0xLjI0NjRhNC42Nzk1Miw0LjY3OTUyLDAsMCwwLC42NzQ0LjA0OCw0LjczOTcyLDQuNzM5NzIsMCwwLDAsLjY2NTYtLjA0NjRMOS4xNzYsMTRsMi4yMTc2LS45MTM2LS41MTQ0LTEuMjQ4OGE0LjgyODIyLDQuODI4MjIsMCwwLDAsLjk0OTYtLjk0NDhsMS4yNDU2LjUxODQuOTIxNi0yLjIxNDQtMS4yNDcyLS41MTg0YTQuNzI5ODQsNC43Mjk4NCwwLDAsMCwuMDAyNC0xLjM0TDE0LDYuODI0bC0uOTE0NC0yLjIxNzYtMS4yNDg4LjUxNDRhNC43Mzg5MSw0LjczODkxLDAsMCwwLS45NDQ4LS45NDg4bC41MTg0LTEuMjQ2NEw5LjE5NzYsMi4wMDQsOC42Nzg0LDMuMjUxMmE0LjcxNCw0LjcxNCwwLDAsMC0uNjc2OC0uMDQ4OCw0LjgwOCw0LjgwOCwwLDAsMC0uNjYyNC4wNDY0WiIvPgogIDxwYXRoIGlkPSJ2aWRlby1wYW5lbCIgZmlsbD0iI2Y2ZjZmNiIgdHJhbnNmb3JtPSJzY2FsZSgxNC4yMjIyMjIyMjIyKSIgZD0iTTU5LjUyLDI2LjMzNDE2MjcgQzU5LjUyLDI2LjMzNDE2MjcgNTkuMDUwNSwyMy4wMDMxOTkgNTcuNjEyLDIxLjUzNjM2NjUgQzU1Ljc4NjUsMTkuNjEwMjk5IDUzLjc0MDUsMTkuNjAxMjM1MiA1Mi44MDMsMTkuNDg5NDQ3NyBDNDYuMDg2LDE5IDM2LjAxMDUsMTkgMzYuMDEwNSwxOSBMMzUuOTg5NSwxOSBDMzUuOTg5NSwxOSAyNS45MTQsMTkgMTkuMTk3LDE5LjQ4OTQ0NzcgQzE4LjI1OCwxOS42MDEyMzUyIDE2LjIxMzUsMTkuNjEwMjk5IDE0LjM4NjUsMjEuNTM2MzY2NSBDMTIuOTQ4LDIzLjAwMzE5OSAxMi40OCwyNi4zMzQxNjI3IDEyLjQ4LDI2LjMzNDE2MjcgQzEyLjQ4LDI2LjMzNDE2MjcgMTIsMzAuMjQ2NzIzMiAxMiwzNC4xNTc3NzMxIEwxMiwzNy44MjU2MDk4IEMxMiw0MS43MzgxNzAzIDEyLjQ4LDQ1LjY0OTIyMDIgMTIuNDgsNDUuNjQ5MjIwMiBDMTIuNDgsNDUuNjQ5MjIwMiAxMi45NDgsNDguOTgwMTgzOSAxNC4zODY1LDUwLjQ0NzAxNjUgQzE2LjIxMzUsNTIuMzczMDgzOSAxOC42MTIsNTIuMzEyNjU4MyAxOS42OCw1Mi41MTM1NzM2IEMyMy41Miw1Mi44ODUxOTEzIDM2LDUzIDM2LDUzIEMzNiw1MyA0Ni4wODYsNTIuOTg0ODkzNiA1Mi44MDMsNTIuNDk1NDQ1OSBDNTMuNzQwNSw1Mi4zODIxNDc4IDU1Ljc4NjUsNTIuMzczMDgzOSA1Ny42MTIsNTAuNDQ3MDE2NSBDNTkuMDUwNSw0OC45ODAxODM5IDU5LjUyLDQ1LjY0OTIyMDIgNTkuNTIsNDUuNjQ5MjIwMiBDNTkuNTIsNDUuNjQ5MjIwMiA2MCw0MS43MzgxNzAzIDYwLDM3LjgyNTYwOTggTDYwLDM0LjE1Nzc3MzEgQzYwLDMwLjI0NjcyMzIgNTkuNTIsMjYuMzM0MTYyNyA1OS41MiwyNi4zMzQxNjI3IEw1OS41MiwyNi4zMzQxNjI3IFoiLz4KICA8cGF0aCBpZD0icGxheS10cmlhbmdsZSIgZmlsbD0iI2Y2MDAwMiIgdHJhbnNmb3JtPSJzY2FsZSgxNC4yMjIyMjIyMjIyKSIgZD0iTTMxLjA0NCw0Mi4yNjk5MTYgTDMxLjA0MjUsMjguNjg3NzQxNiBMNDQuMDExNSwzNS41MDIyNDM3IEwzMS4wNDQsNDIuMjY5OTE2IFoiLz4KPC9zdmc+Cg==","playerLogo":"data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIzNiIgaGVpZ2h0PSIzNiIgdmlld0JveD0iMCAwIDEwMjQgMTAyNCI+CiAgPCEtLSBNb25vY2hyb21lIHZhcmlhbnQgb2YgdGhlIG9yaWdpbmFsIHN1aXRlIGxvZ287IHRyYW5zcGFyZW50IHBhbmVsIHdpdGggd2hpdGUgcGxheSB0cmlhbmdsZS4gLS0+CiAgPGRlZnM+CiAgICA8bWFzayBpZD0ic3VpdGUtbG9nby1tYXNrIiBtYXNrVW5pdHM9InVzZXJTcGFjZU9uVXNlIiB4PSIwIiB5PSIwIiB3aWR0aD0iMTAyNCIgaGVpZ2h0PSIxMDI0IiBzdHlsZT0ibWFzay10eXBlOmx1bWluYW5jZSI+CiAgICAgIDxwYXRoIGlkPSJjb2ciIGZpbGw9IiNmZmYiIHRyYW5zZm9ybT0ibWF0cml4KDgzLjg0MjEzOCAwIDAgODMuODQyMTM4IC0xNTguNTI4MjExIC0xNTguNTI4MjExKSIgZD0iTTYuODIzMiwybC0yLjIxNjguOTE0NC41MTUyLDEuMjQ4OGE0Ljc0Mjg2LDQuNzQyODYsMCwwLDAtLjk0OTYuOTQ0OEwyLjkyNDgsNC41ODk2LDIuMDAzMiw2LjgwMjRsMS4yNDcyLjUxOTJhNC44Miw0LjgyLDAsMCwwLS4wMDI0LDEuMzRMMiw5LjE3NmwuOTEzNiwyLjIxNzYsMS4yNDg4LS41MTQ0YTQuODI0NDUsNC44MjQ0NSwwLDAsMCwuOTQ0OC45NDg4bC0uNTE4NCwxLjI0NzIsMi4yMTQ0LjkyMDguNTE4NC0xLjI0NjRhNC42Nzk1Miw0LjY3OTUyLDAsMCwwLC42NzQ0LjA0OCw0LjczOTcyLDQuNzM5NzIsMCwwLDAsLjY2NTYtLjA0NjRMOS4xNzYsMTRsMi4yMTc2LS45MTM2LS41MTQ0LTEuMjQ4OGE0LjgyODIyLDQuODI4MjIsMCwwLDAsLjk0OTYtLjk0NDhsMS4yNDU2LjUxODQuOTIxNi0yLjIxNDQtMS4yNDcyLS41MTg0YTQuNzI5ODQsNC43Mjk4NCwwLDAsMCwuMDAyNC0xLjM0TDE0LDYuODI0bC0uOTE0NC0yLjIxNzYtMS4yNDg4LjUxNDRhNC43Mzg5MSw0LjczODkxLDAsMCwwLS45NDQ4LS45NDg4bC41MTg0LTEuMjQ2NEw5LjE5NzYsMi4wMDQsOC42Nzg0LDMuMjUxMmE0LjcxNCw0LjcxNCwwLDAsMC0uNjc2OC0uMDQ4OCw0LjgwOCw0LjgwOCwwLDAsMC0uNjYyNC4wNDY0WiIvPgogICAgICA8cGF0aCBpZD0idmlkZW8tcGFuZWwiIGZpbGw9IiMwMDAiIHRyYW5zZm9ybT0ic2NhbGUoMTQuMjIyMjIyMjIyMikiIGQ9Ik01OS41MiwyNi4zMzQxNjI3IEM1OS41MiwyNi4zMzQxNjI3IDU5LjA1MDUsMjMuMDAzMTk5IDU3LjYxMiwyMS41MzYzNjY1IEM1NS43ODY1LDE5LjYxMDI5OSA1My43NDA1LDE5LjYwMTIzNTIgNTIuODAzLDE5LjQ4OTQ0NzcgQzQ2LjA4NiwxOSAzNi4wMTA1LDE5IDM2LjAxMDUsMTkgTDM1Ljk4OTUsMTkgQzM1Ljk4OTUsMTkgMjUuOTE0LDE5IDE5LjE5NywxOS40ODk0NDc3IEMxOC4yNTgsMTkuNjAxMjM1MiAxNi4yMTM1LDE5LjYxMDI5OSAxNC4zODY1LDIxLjUzNjM2NjUgQzEyLjk0OCwyMy4wMDMxOTkgMTIuNDgsMjYuMzM0MTYyNyAxMi40OCwyNi4zMzQxNjI3IEMxMi40OCwyNi4zMzQxNjI3IDEyLDMwLjI0NjcyMzIgMTIsMzQuMTU3NzczMSBMMTIsMzcuODI1NjA5OCBDMTIsNDEuNzM4MTcwMyAxMi40OCw0NS42NDkyMjAyIDEyLjQ4LDQ1LjY0OTIyMDIgQzEyLjQ4LDQ1LjY0OTIyMDIgMTIuOTQ4LDQ4Ljk4MDE4MzkgMTQuMzg2NSw1MC40NDcwMTY1IEMxNi4yMTM1LDUyLjM3MzA4MzkgMTguNjEyLDUyLjMxMjY1ODMgMTkuNjgsNTIuNTEzNTczNiBDMjMuNTIsNTIuODg1MTkxMyAzNiw1MyAzNiw1MyBDMzYsNTMgNDYuMDg2LDUyLjk4NDg5MzYgNTIuODAzLDUyLjQ5NTQ0NTkgQzUzLjc0MDUsNTIuMzgyMTQ3OCA1NS43ODY1LDUyLjM3MzA4MzkgNTcuNjEyLDUwLjQ0NzAxNjUgQzU5LjA1MDUsNDguOTgwMTgzOSA1OS41Miw0NS42NDkyMjAyIDU5LjUyLDQ1LjY0OTIyMDIgQzU5LjUyLDQ1LjY0OTIyMDIgNjAsNDEuNzM4MTcwMyA2MCwzNy44MjU2MDk4IEw2MCwzNC4xNTc3NzMxIEM2MCwzMC4yNDY3MjMyIDU5LjUyLDI2LjMzNDE2MjcgNTkuNTIsMjYuMzM0MTYyNyBMNTkuNTIsMjYuMzM0MTYyNyBaIi8+CiAgICAgIDxwYXRoIGlkPSJwbGF5LXRyaWFuZ2xlIiBmaWxsPSIjZmZmIiB0cmFuc2Zvcm09InNjYWxlKDE0LjIyMjIyMjIyMjIpIiBkPSJNMzEuMDQ0LDQyLjI2OTkxNiBMMzEuMDQyNSwyOC42ODc3NDE2IEw0NC4wMTE1LDM1LjUwMjI0MzcgTDMxLjA0NCw0Mi4yNjk5MTYgWiIvPgogICAgPC9tYXNrPgogIDwvZGVmcz4KICA8cmVjdCB3aWR0aD0iMTAyNCIgaGVpZ2h0PSIxMDI0IiBmaWxsPSIjZmZmIiBtYXNrPSJ1cmwoI3N1aXRlLWxvZ28tbWFzaykiLz4KPC9zdmc+Cg==","recommendedExtensions":[{"id":"ryd","name":"Return YouTube Dislike","description":"Shows estimated dislike counts beside YouTube’s dislike button.","note":"Counts are estimates from community data, not an official live YouTube count.","url":"https://returnyoutubedislike.com/install","logo":"data:image/png;base64,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"},{"id":"sponsorblock","name":"SponsorBlock","description":"Skips community-marked sponsor segments, intros and other optional categories.","note":"Complements the Suite without replacing its player or queue controls.","url":"https://sponsor.ajay.app/","logo":"data:image/png;base64,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MSsbKvE0cURRNcoXci4rnLc4q9U6a9+TvzBU0FaWuU5rBEksYglpiJBRRwVVWIjSrpFiIkPnCQ//sONPk0smVwWMHAuoQYXk+MH/4PdszeJUzE0KJYDAi21/jAHBXaDVsO3vY9tunQD+Z+BK6/hrTWD2k/RGR4scAQPbwMV1R5P3gMsdYOhJlwzJkfy0hGIReD+jb8oDg7dA35o7t/Y5Th+ALM0qdQMcHALjJcpe93h3b/fc/u1pz+8H2GFyz+LdPtoAAA14aVRYdFhNTDpjb20uYWRvYmUueG1wAAAAAAA8P3hwYWNrZXQgYmVnaW49Iu+7vyIgaWQ9Ilc1TTBNcENlaGlIenJlU3pOVGN6a2M5ZCI/Pgo8eDp4bXBtZXRhIHhtbG5zOng9ImFkb2JlOm5zOm1ldGEvIiB4OnhtcHRrPSJYTVAgQ29yZSA0LjQuMC1FeGl2MiI+CiA8cmRmOlJERiB4bWxuczpyZGY9Imh0dHA6Ly93d3cudzMub3JnLzE5OTkvMDIvMjItcmRmLXN5bnRheC1ucyMiPgogIDxyZGY6RGVzY3JpcHRpb24gcmRmOmFib3V0PSIiCiAgICB4bWxuczp4bXBNTT0iaHR0cDovL25zLmFkb2JlLmNvbS94YXAvMS4wL21tLyIKICAgIHhtbG5zOnN0RXZ0PSJodHRwOi8vbnMuYWRvYmUuY29tL3hhcC8xLjAvc1R5cGUvUmVzb3VyY2VFdmVudCMiCiAgICB4bWxuczpkYz0iaHR0cDovL3B1cmwub3JnL2RjL2VsZW1lbnRzLzEuMS8iCiAgICB4bWxuczpHSU1QPSJodHRwOi8vd3d3LmdpbXAub3JnL3htcC8iCiAgICB4bWxuczp0aWZmPSJodHRwOi8vbnMuYWRvYmUuY29tL3RpZmYvMS4wLyIKICAgIHhtbG5zOnhtcD0iaHR0cDovL25zLmFkb2JlLmNvbS94YXAvMS4wLyIKICAgeG1wTU06RG9jdW1lbnRJRD0iZ2ltcDpkb2NpZDpnaW1wOjIyOGI2NTU1LTQ4MjctNGQ4OS04YTkwLWFhMDAwZjFiNzQ2MSIKICAgeG1wTU06SW5zdGFuY2VJRD0ieG1wLmlpZDo0YTM0NGNlNS1kODIyLTQyNDItYTc5Zi02NjRjNTRiZjRlNmEiCiAgIHhtcE1NOk9yaWdpbmFsRG9jdW1lbnRJRD0ieG1wLmRpZDplMTMwMTAwYi1jYzMxLTQ0ZTUtYTdhOC02Y2E4ZjViMDY2YWQiCiAgIGRjOkZvcm1hdD0iaW1hZ2UvcG5nIgogICBHSU1QOkFQST0iMi4wIgogICBHSU1QOlBsYXRmb3JtPSJMaW51eCIKICAgR0lNUDpUaW1lU3RhbXA9IjE2NzUxNDQzNTk0MDk3MjAiCiAgIEdJTVA6VmVyc2lvbj0iMi4xMC4zMiIKICAgdGlmZjpPcmllbnRhdGlvbj0iMSIKICAgeG1wOkNyZWF0b3JUb29sPSJHSU1QIDIuMTAiCiAgIHhtcDpNZXRhZGF0YURhdGU9IjIwMjM6MDE6MzFUMDA6NTI6MzctMDU6MDAiCiAgIHhtcDpNb2RpZnlEYXRlPSIyMDIzOjAxOjMxVDAwOjUyOjM3LTA1OjAwIj4KICAgPHhtcE1NOkhpc3Rvcnk+CiAgICA8cmRmOlNlcT4KICAgICA8cmRmOmxpCiAgICAgIHN0RXZ0OmFjdGlvbj0ic2F2ZWQiCiAgICAgIHN0RXZ0OmNoYW5nZWQ9Ii8iCiAgICAgIHN0RXZ0Omluc3RhbmNlSUQ9InhtcC5paWQ6MDhkMjkzMzYtZjMyNC00ZDBlLWI4YTQtMDM5ZGEyMGJmODQ5IgogICAgICBzdEV2dDpzb2Z0d2FyZUFnZW50PSJHaW1wIDIuMTAgKExpbnV4KSIKICAgICAgc3RFdnQ6d2hlbj0iMjAyMy0wMS0zMVQwMDo1MjozOS0wNTowMCIvPgogICAgPC9yZGY6U2VxPgogICA8L3htcE1NOkhpc3Rvcnk+CiAgPC9yZGY6RGVzY3JpcHRpb24+CiA8L3JkZjpSREY+CjwveDp4bXBtZXRhPgogICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgCiAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAKICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgIAogICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgCiAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAKICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgIAogICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgCiAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAKICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgIAogICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgCiAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAKICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgIAogICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgCiAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAKICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgIAogICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgCiAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAKICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgIAogICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgCiAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAg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"},{"id":"dearrow","name":"DeArrow","description":"Replaces sensational titles and thumbnails with community alternatives.","note":"Optional: changes titles and thumbnails. Check the project website for activation and pricing.","url":"https://dearrow.ajay.app/","logo":"data:image/png;base64,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"},{"id":"ublock","name":"uBlock Origin","description":"Blocks adverts, trackers and unwanted requests using filter lists.","note":"Works best on Firefox and Firefox-based browsers. Full uBlock Origin is no longer available in Chrome; uBlock Origin Lite is a separate project.","url":"https://github.com/gorhill/uBlock","logo":"data:image/svg+xml;base64,PD94bWwgdmVyc2lvbj0iMS4wIiBlbmNvZGluZz0iVVRGLTgiIHN0YW5kYWxvbmU9Im5vIj8+CjxzdmcKICAgeG1sbnM6ZGM9Imh0dHA6Ly9wdXJsLm9yZy9kYy9lbGVtZW50cy8xLjEvIgogICB4bWxuczpjYz0iaHR0cDovL2NyZWF0aXZlY29tbW9ucy5vcmcvbnMjIgogICB4bWxuczpyZGY9Imh0dHA6Ly93d3cudzMub3JnLzE5OTkvMDIvMjItcmRmLXN5bnRheC1ucyMiCiAgIHhtbG5zOnN2Zz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciCiAgIHhtbG5zPSJodHRwOi8vd3d3LnczLm9yZy8yMDAwL3N2ZyIKICAgeG1sbnM6eGxpbms9Imh0dHA6Ly93d3cudzMub3JnLzE5OTkveGxpbmsiCiAgIHZlcnNpb249IjEuMSIKICAgdmlld0JveD0iMCAwIDEyOCAxMjgiCiAgIGhlaWdodD0iMTI4IgogICB3aWR0aD0iMTI4Ij4KICA8ZwogICAgIHN0eWxlPSJkaXNwbGF5OmlubGluZTtvcGFjaXR5OjEiPgogICAgPGcKICAgICAgIHN0eWxlPSJmaWxsOiM4MDAwMDA7ZmlsbC1vcGFjaXR5OjE7c3Ryb2tlOiNmZmZmZmY7c3Ryb2tlLXdpZHRoOjEuNjIxMDA3NDQ7c3Ryb2tlLWxpbmVjYXA6cm91bmQ7c3Ryb2tlLW1pdGVybGltaXQ6NDtzdHJva2Utb3BhY2l0eToxO3N0cm9rZS1kYXNoYXJyYXk6bm9uZTtkaXNwbGF5OmlubGluZSIKICAgICAgIHRyYW5zZm9ybT0ibWF0cml4KDAuNjc3ODY1NCwwLDAsMC41NjE0MTgyOCwtMjQxLjA3NTM3LC0yNDcuMjc3MTIpIiAvPgogICAgPGcKICAgICAgIHRyYW5zZm9ybT0ibWF0cml4KC0wLjY5NDUyMDMsMCwwLDAuNTYxMDk2ODcsMzc1LjAyOTY0LC0yNDcuNDI5NDcpIgogICAgICAgc3R5bGU9ImZpbGw6IzgwMDAwMDtmaWxsLW9wYWNpdHk6MTtzdHJva2U6I2ZmZmZmZjtzdHJva2Utd2lkdGg6MS42MDE5MTE3ODAwMDAwMDAwMTtzdHJva2UtbGluZWNhcDpyb3VuZDtzdHJva2UtbWl0ZXJsaW1pdDo0O3N0cm9rZS1vcGFjaXR5OjE7c3Ryb2tlLWRhc2hhcnJheTpub25lO2Rpc3BsYXk6aW5saW5lO3N0cm9rZS1saW5lam9pbjpyb3VuZCI+CiAgICAgIDxwYXRoCiAgICAgICAgIGQ9Im0gNDQ3LjgzMzc2LDY2OS4wOTkyMSBjIC04MC42MzExOSwtNTcuMDMxMTUgLTgwLjYzMTE5LC01Ny4wMzExNSAtODAuNjMxMTksLTE5OS42MDkwMyAzNC41NTYyMywwIDQ2LjA3NDk3LDAgODAuNjMxMTksLTI4LjUxNTU4IG0gMCwyMjguMTI0NjEgYyA4MC42MzEyLC01Ny4wMzExNSA4MC42MzEyLC01Ny4wMzExNSA4MC42MzEyLC0xOTkuNjA5MDMgLTM0LjU1NjIzLDAgLTQ2LjA3NDk3LDAgLTgwLjYzMTIsLTI4LjUxNTU4IgogICAgICAgICBzdHlsZT0iZmlsbDojODAwMDAwO2ZpbGwtb3BhY2l0eToxO2ZpbGwtcnVsZTpub256ZXJvO3N0cm9rZTojZmZmZmZmO3N0cm9rZS13aWR0aDoxLjYwMTkxMTc4O3N0cm9rZS1saW5lY2FwOnJvdW5kO3N0cm9rZS1saW5lam9pbjpyb3VuZDtzdHJva2UtbWl0ZXJsaW1pdDo0O3N0cm9rZS1vcGFjaXR5OjE7c3Ryb2tlLWRhc2hhcnJheTpub25lIiAvPgogICAgPC9nPgogIDwvZz4KICA8ZwogICAgIHRyYW5zZm9ybT0idHJhbnNsYXRlKC0xNy44NzI1NDgsLTE3LjMyNTM1KSIKICAgICBzdHlsZT0iZGlzcGxheTppbmxpbmUiPgogICAgPGVsbGlwc2UKICAgICAgIHRyYW5zZm9ybT0ibWF0cml4KDEuMzMzMzMzNSwwLDAsMS4zMzMzMzM0LC00Mi4yOTA4NjIsLTMxLjEwODQ2MSkiCiAgICAgICByeT0iMTIiCiAgICAgICByeD0iMTEuOTk5OTk5IgogICAgICAgY3k9IjgxLjMyNTM1NiIKICAgICAgIGN4PSIxMDIuMTIyNTQiCiAgICAgICBzdHlsZT0iZmlsbDpub25lO3N0cm9rZTojZmZmZmZmO3N0cm9rZS13aWR0aDo1Ljk5OTk5OTUyO3N0cm9rZS1taXRlcmxpbWl0OjQ7c3Ryb2tlLW9wYWNpdHk6MTtzdHJva2UtZGFzaGFycmF5Om5vbmU7ZGlzcGxheTppbmxpbmU7IiAvPgogICAgPGcKICAgICAgIHN0eWxlPSJmaWxsOiNmZmZmZmY7ZmlsbC1vcGFjaXR5OjE7c3Ryb2tlOiNmZmZmZmY7c3Ryb2tlLXdpZHRoOjEuOTk5OTk5OTY5OTk5OTk5OTY7c3Ryb2tlLW1pdGVybGltaXQ6NDtzdHJva2Utb3BhY2l0eToxO3N0cm9rZS1kYXNoYXJyYXk6bm9uZSIKICAgICAgIHRyYW5zZm9ybT0ic2NhbGUoMS4wMDE4MDI2LDAuOTk4MjAwNjcpIj4KICAgICAgPHBhdGgKICAgICAgICAgZD0ibSA4MS43MjUyMyw4MS40NzE5NDUgYyAwLDExLjAxOTgyOCAtNC45OTEwMDMsMTYuMDI4ODQxIC0xNS45NzEyMSwxNi4wMjg4NDEgLTEwLjk4MDIwNywwIC0xNS45NzEyMSwtNS4wMDkwMTMgLTE1Ljk3MTIxLC0xNi4wMjg4NDEgbCAwLC0yNC4wNDMyNjIgNy45ODU2MDUsMCAwLDI0LjA0MzI2MiBjIDAsNy4wMTI2MTggMC45OTgyLDguMDE0NDIxIDcuOTg1NjA1LDguMDE0NDIxIDYuOTg3NDA0LDAgNy45ODU2MDUsLTEuMDAxODAzIDcuOTg1NjA1LC04LjAxNDQyMSBsIDAsLTI0LjA0MzI2MiA3Ljk4NTYwNSwwIHoiCiAgICAgICAgIHN0eWxlPSJmaWxsOiNmZmZmZmY7c3Ryb2tlOiNmZmZmZmY7c3Ryb2tlLXdpZHRoOjA7c3Ryb2tlLWxpbmVjYXA6c3F1YXJlO3N0cm9rZS1saW5lam9pbjptaXRlcjtzdHJva2UtbWl0ZXJsaW1pdDo0O3N0cm9rZS1kYXNoYXJyYXk6bm9uZTsiIC8+CiAgICA8L2c+CiAgPC9nPgo8L3N2Zz4K"}]},
     createSettingsDialog: function createSettingsDialog(document) {
   function element(tag, attributes = {}, ...children) {
     const node = document.createElement(tag);
@@ -1358,22 +2283,21 @@
     toggle("hideCommentControls", "Hide comment controls", "Likes, dislikes, reply, action menu and composer. Existing replies remain readable."),
     note("Off changes name styling only. Comment-loading and navigation safeguards remain enabled."));
   return element("dialog", {
-    id: id("settings-dialog"), "aria-labelledby": id("panel-title"), "aria-describedby": id("panel-intro"),
+    id: id("settings-dialog"), lang: "en-GB", "aria-labelledby": id("panel-title"),
   }, element("div", { class: "panel" },
     element("div", { class: "panel-header" }, element("h2", { id: id("panel-title") }, "Suite settings"),
       button("close-panel", "×", "icon-button close", { "aria-label": "Close settings" })),
-    element("p", { class: "intro", id: id("panel-intro") },
-      "Save changes for this browser profile. Reload when ready to apply them; your video will restart."),
-    element("p", { id: id("settings-status"), class: "intro", role: "status", hidden: true }),
     element("nav", { role: "tablist", "aria-label": "Settings sections" }),
     element("div", { class: "content" }, comments,
-      ...["feed", "player", "layout", "miniplayer", "interface", "extensions", "credits"].map(name => element("section", {
+      ...["feed", "channels", "player", "layout", "miniplayer", "interface", "extensions", "credits"].map(name => element("section", {
         id: id(`section-${name}`), role: "tabpanel", "aria-labelledby": id(`tab-${name}`), hidden: true,
       })),
       element("p", { id: id("button-access-error"), class: "field-error", role: "alert", hidden: true }, "Keep at least one settings button enabled.")),
-    element("footer", {}, button("restore-defaults", "Restore defaults"), element("span", { class: "spacer" }),
-      button("cancel-panel", "Cancel"), button("save-preview", "Save", "text-button primary"),
-      button("reload-now", "Reload now", "text-button", { hidden: true }))));
+    element("footer", {}, button("restore-section-defaults", "Restore this section"),
+      button("restore-defaults", "Restore all settings"), element("span", { class: "spacer" }),
+      element("div", { class: "footer-actions" }, button("cancel-panel", "Cancel"),
+        element("p", { id: id("settings-status"), role: "status", hidden: true }),
+        button("save-preview", "Save", "text-button primary")))));
 },
   };
 
@@ -2571,7 +3495,7 @@
 
   suite.registerModule(
     "feedUiCleaner",
-    "Feed UI Cleaner v2.7",
+    "Feed UI Cleaner v2.10",
     "document-idle",
     () => {
       const MutationObserver = suite.SharedMutationObserver;
@@ -2592,6 +3516,9 @@
           showTemporaryRevealControl: true,
         };
         Object.assign(CONFIG, suite.settings.overrides("feedUiCleaner", CONFIG));
+
+        // Standalone module installs have no shared age service and fail open.
+        const channelAge = typeof suite !== 'undefined' ? suite.channelAge : null;
 
         const STATIC_HIDE_SELECTORS = [
           'ytd-guide-section-renderer.ytd-guide-renderer.style-scope:nth-of-type(2)',
@@ -2747,7 +3674,19 @@
           );
         }
 
+        function isChannelAgeFeedRoute() {
+          return location.pathname === '/' || location.pathname === '/feed/recommended' ||
+            location.pathname === '/feed/subscriptions' || location.pathname === '/results' ||
+            /^\/(?:channel\/UC[A-Za-z0-9_-]{22}|@[^/]+|c\/[^/]+|user\/[^/]+)(?:\/(?:videos|streams|featured))?\/?$/.test(location.pathname);
+        }
+
         const CARD_FILTERS = [
+          {
+            key: 'channelAge',
+            reason: 'Channel age',
+            selector: `${OUTER_CONTAINER_SELECTORS},${INNER_CONTAINER_SELECTORS}`,
+            matches: (el) => channelAge && isChannelAgeFeedRoute() && channelAge.cardFilterReason(getCardContainer(el)),
+          },
           {
             key: 'mixes',
             reason: 'Mix',
@@ -2780,6 +3719,13 @@
           PODCAST_LINK_SELECTOR,
           `[${HIDDEN_FLAG}]`,
           `[${PERMANENT_HIDDEN_FLAG}]`,
+        ].join(',');
+        const AGE_MUTATION_TRIGGER_SELECTOR = [
+          '#metadata-line',
+          '#metadata',
+          '.yt-content-metadata-view-model__metadata-text',
+          '.ytContentMetadataViewModelMetadataText',
+          'time[datetime]',
         ].join(',');
 
         function buildHideCss(selectors) {
@@ -2866,7 +3812,9 @@
         }
 
         function addContainerMatch(matchesByContainer, el, filter) {
-          if (isInsideExcludedSurface(el) || !filter.matches(el)) return;
+          if (isInsideExcludedSurface(el)) return;
+          const match = filter.matches(el);
+          if (!match) return;
 
           const container = getCardContainer(el);
           if (!container || isInsideExcludedSurface(container)) return;
@@ -2876,7 +3824,7 @@
             reasons: new Set(),
           };
           current.permanent ||= Boolean(filter.permanent);
-          current.reasons.add(filter.reason);
+          current.reasons.add(typeof match === 'string' ? match : filter.reason);
           matchesByContainer.set(container, current);
         }
 
@@ -2900,6 +3848,7 @@
 
           CARD_FILTERS.forEach((filter) => {
             if (!filter.permanent && profile[filter.key] === false) return;
+            if (filter.key === 'channelAge' && !channelAge?.hasEnabledRules()) return;
 
             collectMatchingElements(root, filter.selector).forEach((el) =>
               addContainerMatch(matchesByContainer, el, filter),
@@ -3118,12 +4067,14 @@
 
           if (
             mutation.type === 'attributes' &&
-            mutation.attributeName?.startsWith('data-ytppl-')
+            (mutation.attributeName?.startsWith('data-ytppl-') ||
+              (channelAge?.hasEnabledRules() && ['href', 'datetime', 'overlay-style'].includes(mutation.attributeName)))
           ) {
             return true;
           }
 
-          return Boolean(element.closest(FILTER_MUTATION_TRIGGER_SELECTOR));
+          return Boolean(element.closest(FILTER_MUTATION_TRIGGER_SELECTOR) ||
+            (channelAge?.hasEnabledRules() && element.closest(AGE_MUTATION_TRIGGER_SELECTOR)));
         }
 
         GM_addStyle(buildCss());
@@ -3153,6 +4104,8 @@
         const OBSERVER_OPTIONS = {
           attributeFilter: [
             'href',
+            'datetime',
+            'overlay-style',
             'data-ytppl-upcoming-hidden',
             'data-ytppl-pay-to-watch-hidden',
             'data-ytppl-watched-hidden',
@@ -3204,6 +4157,10 @@
         }, true);
         suite.addWindowListener('yt-navigate-finish', reconcileRoute, true);
         suite.addWindowListener('yt-page-data-updated', reconcileRoute, true);
+        suite.addWindowListener('yt-master-channel-age-changed', () => {
+          channelAge?.read();
+          if (isRuntimeFeedRoute()) scheduleCleanUp(document);
+        });
         suite.addWindowListener('pagehide', () => {
           stopMutationObservation();
           resetScheduledWork();
@@ -4689,7 +5646,7 @@
 
   suite.registerModule(
     "playerPreferencesLite",
-    "Player Preferences Lite v1.68",
+    "Player Preferences Lite v1.70",
     "document-idle",
     () => {
       const MutationObserver = suite.SharedMutationObserver;
@@ -4707,6 +5664,8 @@
           watchedVideoThresholdPercent: 90,
           hideRelatedVideos: true,
           hideAskButton: true,
+          showRydTooltipBar: false,
+          showDeArrowTitleButton: false,
           hideThanksButton: true,
           hideShareButton: true,
           hideInlineSaveButton: false,
@@ -6823,6 +7782,30 @@
 
         function buildWatchCleanupCss() {
           const rules = [];
+          if (!CONFIG.showRydTooltipBar) {
+            // RYD can attach its tooltip outside the watch-page container.
+            rules.push(`
+              .ryd-tooltip-bar-container {
+                display: none !important;
+              }
+            `);
+          }
+          if (CONFIG.hideAskButton) {
+            rules.push(`
+              ytd-menu-renderer .you-chat-entrypoint-button,
+              .you-chat-entrypoint-button.ytd-menu-renderer {
+                display: none !important;
+              }
+            `);
+          }
+          if (!CONFIG.showDeArrowTitleButton) {
+            // Hide only DeArrow's watch-title button container, never title content.
+            rules.push(`
+              ytd-watch-flexy .cbTitleButtonContainer {
+                display: none !important;
+              }
+            `);
+          }
           if (CONFIG.hideRelatedVideos) {
             rules.push(`
               ytd-watch-flexy #secondary #related {
@@ -12700,7 +13683,7 @@
 
   suite.registerModule(
     "suiteSettings",
-    "Suite Settings v1.13",
+    "Suite Settings v1.25",
     "document-idle",
     () => {
       const MutationObserver = suite.SharedMutationObserver;
@@ -12725,6 +13708,19 @@
         let playerTooltip = null;
         let playerTarget = null;
         let watchedPlayerBranch = [];
+        let channelAgeDialog = null;
+
+        suite.openChannelAgeSettings = channel => {
+          if (suspended) return;
+          hidePlayerTooltip();
+          try {
+            channelAgeDialog ||= suite.createChannelAgeDialog(document, suite.channelAge);
+            channelAgeDialog.open(channel);
+          } catch (error) {
+            suite.reportModuleError('suiteSettings', 'open channel upload filters', error);
+          }
+        };
+        suite.installVideoMenu(suite);
 
         function createPanel() {
           const dialog = suite.createSettingsDialog(document);
@@ -12759,7 +13755,15 @@
             interface: [
               ['headerSettingsIcon', 'Header button', ['off', 'colour', 'monochrome'], value => value[0].toUpperCase() + value.slice(1)],
               ['playerSettingsIcon', 'Video player button', ['off', 'colour', 'monochrome'], value => value[0].toUpperCase() + value.slice(1)],
+              ['showRydTooltipBar', 'Show Return YouTube Dislike tooltip bar'],
+              ['showDeArrowTitleButton', 'Show DeArrow icon beside video title'],
               ['showDeArrowQueueButton', 'Show DeArrow logo in queues'],
+              ['menuShowDownload', 'Show Download in video menus'],
+              ['menuGroupChannelTools', 'Group channel tools in a submenu'],
+              ['menuShowAgeLimit', 'Show Filter channel uploads action'],
+              ['menuShowNotInterested', 'Show Not interested'],
+              ['menuShowDontRecommend', 'Show Don’t recommend channel'],
+              ['menuShowReport', 'Show Report'],
             ],
           };
           const DESCRIPTIONS = {
@@ -12786,16 +13790,28 @@
             queueInfo: 'Show the current title and queue position at the top of the floating player.',
             headerSettingsIcon: 'Choose the icon beside your profile button. Available on feed and watch pages.',
             playerSettingsIcon: 'Choose the icon before Mirror video in watch and live player controls.',
+            showRydTooltipBar: 'Show Return YouTube Dislike’s tooltip bar. Hidden by default; dislike counts and voting buttons are unchanged. Applies after reload.',
+            showDeArrowTitleButton: 'Show DeArrow’s title-button controls beside the watch-page title. Hidden by default; title and thumbnail replacements remain active. Applies after reload.',
             showDeArrowQueueButton: 'Show DeArrow’s original/custom toggle logo in queue titles. Hiding it does not disable DeArrow title or thumbnail replacements.',
+            menuShowDownload: 'Show YouTube’s Download action when available. Hidden by default; this does not enable downloads or change your account permissions.',
+            menuGroupChannelTools: 'On: place Don’t recommend channel, Report and Filter channel uploads in a Channel tools submenu. Off: keep enabled actions separate in the main menu. Not interested always stays in the main menu. Save and reload to apply.',
+            menuShowAgeLimit: 'Add Filter channel uploads to set how old a selected channel’s uploads can be. It appears at the bottom by default.',
+            menuShowNotInterested: 'Keep YouTube’s Not interested action visible when the video menu provides it.',
+            menuShowDontRecommend: 'Keep YouTube’s Don’t recommend channel action available, separately or inside Channel tools.',
+            menuShowReport: 'Keep YouTube’s Report action available, separately or inside Channel tools. A report is never submitted automatically.',
           };
           let saved = settings.read();
           let draft = { ...saved };
+          let externalConflict = false;
           let pickerTarget = null;
           let pickerTrigger = null;
+          let currentTab = 'comments';
 
-          const tabIds = ['comments', 'feed', 'player', 'layout', 'miniplayer', 'interface', 'extensions', 'credits'];
+          const tabIds = ['comments', 'feed', 'channels', 'player', 'layout', 'miniplayer', 'interface', 'extensions', 'credits'];
           function selectTab(id, focus = false) {
             closePicker(false);
+            currentTab = id;
+            $('restore-section-defaults').disabled = id === 'channels' || id === 'extensions' || id === 'credits';
             for (const tab of tabIds) {
               const selected = tab === id;
               $(`section-${tab}`).hidden = !selected;
@@ -12803,6 +13819,7 @@
               $(`tab-${tab}`).tabIndex = selected ? 0 : -1;
             }
             dialog.querySelector('.content').scrollTop = 0;
+            if (id === 'channels') renderChannelRules();
             if (focus) $(`tab-${id}`).focus();
           }
           for (const id of tabIds) {
@@ -12819,6 +13836,9 @@
             });
             dialog.querySelector('nav').append(tab);
           }
+          const menuDetails = document.createElement('details'); menuDetails.id = 'ytms-video-menu-settings';
+          const menuSummary = document.createElement('summary'); menuSummary.textContent = 'Video context menu';
+          menuDetails.append(menuSummary); $('section-interface').append(menuDetails);
           for (const [group, rows] of Object.entries(GROUPS)) {
             for (const [key, labelText, choices, format] of rows) {
               const row = document.createElement('div'); row.className = 'row';
@@ -12830,10 +13850,98 @@
               if (choices) {
                 for (const value of choices) { const option = document.createElement('option'); option.value = value; option.textContent = format(value); input.append(option); }
               } else { input.type = 'checkbox'; input.className = 'switch'; input.setAttribute('role', 'switch'); }
-              row.append(label, input); $(`section-${group}`).append(row);
+              row.append(label, input);
+              if (group === 'interface' && key.startsWith('menu')) menuDetails.append(row);
+              else $(`section-${group}`).insertBefore(row, group === 'interface' ? menuDetails : null);
               input.addEventListener('change', () => { draft[key] = choices ? input.value : input.checked; updateColours(); });
             }
           }
+          const ageRow = document.createElement('div'); ageRow.className = 'row';
+          const ageLabel = document.createElement('div'); ageLabel.className = 'row-label';
+          ageLabel.textContent = 'Channel upload filters';
+          const ageDescription = document.createElement('span'); ageDescription.className = 'description';
+          ageDescription.id = 'ytms-channel-age-description';
+          ageDescription.textContent = 'Choose how old each channel’s uploads can be: days, weeks, months or years. Watched-video filtering remains independent. Manage and save these filters separately; the settings reset buttons leave them unchanged.';
+          ageLabel.append(ageDescription);
+          const ageButton = document.createElement('button'); ageButton.id = 'ytms-manage-channel-age';
+          ageButton.type = 'button'; ageButton.className = 'text-button'; ageButton.textContent = 'Manage';
+          ageButton.setAttribute('aria-label', 'Manage channel upload filters');
+          ageButton.setAttribute('aria-describedby', ageDescription.id); ageButton.setAttribute('aria-haspopup', 'dialog');
+          ageButton.addEventListener('click', () => suite.openChannelAgeSettings());
+          const channelNote = document.createElement('p'); channelNote.className = 'section-note';
+          channelNote.textContent = 'This list contains filters saved by YouTube Master Suite in this browser profile. YouTube’s own Don’t recommend channel choices are separate and are not included here. Edit or remove a filter in the manager, then choose Save filters to apply it.';
+          const channelHelp = document.createElement('a'); channelHelp.className = 'channel-filter-help';
+          channelHelp.textContent = 'Manage YouTube’s own recommendation controls';
+          channelHelp.href = 'https://support.google.com/youtube/answer/6342839?hl=en&co=GENIE.Platform%3DDesktop';
+          channelHelp.target = '_blank'; channelHelp.rel = 'noopener noreferrer';
+          channelHelp.setAttribute('aria-label', 'Manage YouTube’s own recommendation controls (opens in a new tab)');
+          const channelList = document.createElement('div'); channelList.id = 'ytms-channel-filter-list';
+          channelList.setAttribute('role', 'list'); channelList.setAttribute('aria-label', 'Saved channel upload filters');
+          ageRow.append(ageLabel, ageButton); $('section-channels').append(ageRow, channelNote, channelHelp, channelList);
+          function renderChannelRules() {
+            channelList.replaceChildren();
+            const rules = suite.channelAge.read();
+            if (!rules.length) {
+              const empty = document.createElement('p'); empty.className = 'section-note'; empty.textContent = 'No channel upload filters saved.';
+              channelList.append(empty);
+            }
+            for (const rule of rules) {
+              const card = document.createElement('article'); card.className = 'channel-filter-card'; card.setAttribute('role', 'listitem');
+              const title = document.createElement('h3'); title.textContent = rule.name || rule.channelId;
+              const id = document.createElement('p'); id.className = 'channel-filter-id'; id.textContent = rule.channelId;
+              const age = document.createElement('p'); age.textContent = `Maximum upload age: ${rule.maxAge} ${rule.maxAge === 1 ? rule.unit.slice(0, -1) : rule.unit}`;
+              const status = document.createElement('p'); status.className = 'channel-filter-status';
+              status.textContent = `Status: ${!rule.enabled ? 'Disabled' : rule.blocked ? 'All uploads hidden' : 'Enabled'}`;
+              const actions = document.createElement('div'); actions.className = 'channel-filter-actions';
+              for (const [label, remove] of [['Edit', false], ['Remove', true]]) {
+                const action = document.createElement('button'); action.type = 'button'; action.className = 'text-button';
+                action.textContent = label; action.setAttribute('aria-label', `${label} filter for ${rule.name || rule.channelId}`);
+                action.addEventListener('click', () => suite.openChannelAgeSettings({ channelId: rule.channelId, name: rule.name, ...(remove ? { remove: true } : {}) }));
+                actions.append(action);
+              }
+              card.append(title, id, age, status, actions); channelList.append(card);
+            }
+          }
+
+          const menuOrder = document.createElement('section'); menuOrder.className = 'menu-order';
+          const menuOrderHeading = document.createElement('h3'); menuOrderHeading.textContent = 'Video context menu order';
+          const menuOrderNote = document.createElement('p'); menuOrderNote.className = 'section-note';
+          menuOrderNote.id = 'ytms-menu-order-description';
+          menuOrderNote.textContent = 'Use the arrows to arrange recognised video actions. Hidden or unavailable actions are skipped. Grouped actions keep their relative order inside Channel tools; other YouTube items are left available.';
+          const menuOrderList = document.createElement('ol'); menuOrderList.id = 'ytms-menu-order';
+          menuOrderList.setAttribute('aria-label', 'Video context menu order'); menuOrderList.setAttribute('aria-describedby', menuOrderNote.id);
+          const menuLabels = {
+            playNext: 'Play next in queue', addToQueue: 'Add to queue', watchLater: 'Save to Watch Later',
+            savePlaylist: 'Save to playlist', download: 'Download', share: 'Share', notInterested: 'Not interested',
+            dontRecommend: 'Don’t recommend channel', report: 'Report', channelAge: 'Filter channel uploads', channelTools: 'Channel tools submenu',
+          };
+          function renderMenuOrder(focusId, focusDirection) {
+            menuOrderList.replaceChildren();
+            const order = draft.menuItemOrder;
+            for (const [index, id] of order.entries()) {
+              const item = document.createElement('li'); item.dataset.menuItem = id;
+              const label = document.createElement('span'); label.textContent = menuLabels[id];
+              item.append(label);
+              for (const [direction, text, offset] of [['up', '↑', -1], ['down', '↓', 1]]) {
+                const move = document.createElement('button'); move.type = 'button'; move.className = 'menu-order-move';
+                move.dataset.direction = direction; move.textContent = text;
+                move.setAttribute('aria-label', `Move ${menuLabels[id]} ${direction}`);
+                move.disabled = index + offset < 0 || index + offset >= order.length;
+                move.addEventListener('click', () => {
+                  const next = [...draft.menuItemOrder];
+                  [next[index], next[index + offset]] = [next[index + offset], next[index]];
+                  draft.menuItemOrder = next; markDraftChanged(); renderMenuOrder(id, direction);
+                });
+                item.append(move);
+              }
+              menuOrderList.append(item);
+              if (id === focusId) {
+                const preferred = item.querySelector(`[data-direction="${focusDirection}"]`);
+                (preferred?.disabled ? item.querySelector('button:not(:disabled)') : preferred)?.focus();
+              }
+            }
+          }
+          menuOrder.append(menuOrderHeading, menuOrderNote, menuOrderList); menuDetails.append(menuOrder);
           const miniplayerNote = document.createElement('p'); miniplayerNote.className = 'section-note';
           miniplayerNote.textContent = 'Size remains automatic and adapts to the available window space.';
           $('section-miniplayer').append(miniplayerNote);
@@ -12877,6 +13985,51 @@
             return rgb(colour).map(value => { const channel = value / 255; return channel <= .04045 ? channel / 12.92 : ((channel + .055) / 1.055) ** 2.4; })
               .reduce((sum, channel, index) => sum + channel * [.2126, .7152, .0722][index], 0);
           }
+          function samePreferences(left, right) {
+            return Object.keys(DEFAULTS).every(key => {
+              const value = left[key], other = right[key];
+              return Array.isArray(value) && Array.isArray(other)
+                ? value.length === other.length && value.every((item, index) => item === other[index])
+                : value === other;
+            });
+          }
+          function primaryActionState() {
+            const invalid = draft.colourMode === 'custom' && ['viewer', 'owner'].some(name => !normaliseHex($(`${name}-hex`).value));
+            const inaccessible = draft.headerSettingsIcon === 'off' && draft.playerSettingsIcon === 'off';
+            return {
+              invalid, inaccessible,
+              dirty: invalid || inaccessible || !samePreferences(settings.validate(draft), saved),
+              pendingReload: !samePreferences(saved, settings.initial),
+            };
+          }
+          function updatePrimaryAction() {
+            const state = primaryActionState();
+            const reload = !externalConflict && !state.dirty && state.pendingReload;
+            $('save-preview').textContent = reload ? 'Reload now' : 'Save';
+            $('save-preview').dataset.action = reload ? 'reload' : 'save';
+            $('save-preview').disabled = externalConflict || state.invalid || state.inaccessible || (!state.dirty && !state.pendingReload);
+            return state;
+          }
+          function showConflictNotice() {
+            $('settings-status').textContent = 'Settings changed in another window. Your draft has been kept. Cancel and reopen settings before saving or reloading.';
+            $('settings-status').hidden = false;
+          }
+          function reconcileStoredPreferences() {
+            if (!dialog.open) return true;
+            const current = settings.read();
+            if (samePreferences(current, saved)) return !externalConflict;
+            if (externalConflict || primaryActionState().dirty) {
+              externalConflict = true; updatePrimaryAction(); showConflictNotice();
+              return false;
+            }
+            saved = current; draft = { ...saved };
+            closePicker(false); populate();
+            $('settings-status').textContent = primaryActionState().pendingReload
+              ? 'Saved settings changed in another window. Reload when ready to apply them.'
+              : 'Saved settings changed in another window. They now match the settings applied to this page.';
+            $('settings-status').hidden = false;
+            return true;
+          }
           function updateColours() {
             const custom = draft.colourMode === 'custom';
             $('custom-colours').hidden = !custom; $('palette-row').hidden = draft.colourMode !== 'preset';
@@ -12885,27 +14038,31 @@
               if (pair) preview.style.setProperty(`--${name}-colour`, pair[index]); else preview.style.removeProperty(`--${name}-colour`);
               $(`${name}-swatch`).style.setProperty('--swatch', draft[`${name}Colour`]);
             }
-            const invalid = custom && ['viewer', 'owner'].some(name => !normaliseHex($(`${name}-hex`).value));
             const inaccessible = draft.headerSettingsIcon === 'off' && draft.playerSettingsIcon === 'off';
             $('button-access-error').hidden = !inaccessible;
-            $('save-preview').disabled = invalid || inaccessible;
+            updatePrimaryAction();
             const background = luminance(theme() === 'dark' ? '#0F0F0F' : '#FFFFFF');
             $('contrast-warning').hidden = !pair || !pair.some(colour => {
               const foreground = luminance(colour);
               return (Math.max(foreground, background) + .05) / (Math.min(foreground, background) + .05) < 4.5;
             });
           }
-          function populate() {
+          function populate(keys) {
+            const selected = keys ? new Set(keys) : null;
             for (const [key, value] of Object.entries(draft)) {
+              if (selected && !selected.has(key)) continue;
               const input = $(key); if (!input) continue;
               if (input.type === 'checkbox') input.checked = value; else input.value = value;
             }
-            $('colour-mode').value = draft.colourMode; $('palette').value = draft.palette;
+            if (!selected || selected.has('colourMode')) $('colour-mode').value = draft.colourMode;
+            if (!selected || selected.has('palette')) $('palette').value = draft.palette;
             for (const name of ['viewer', 'owner']) {
+              if (selected && !selected.has(`${name}Colour`)) continue;
               $(`${name}-hex`).value = draft[`${name}Colour`];
               $(`${name}-hex`).setAttribute('aria-invalid', 'false'); $(`${name}-error`).hidden = true;
             }
             updateColours();
+            if (!selected || selected.has('menuItemOrder')) renderMenuOrder();
           }
           function closePicker(restoreFocus = true) {
             $('colour-picker').hidden = true;
@@ -12948,10 +14105,19 @@
           $('close-picker').addEventListener('click', () => closePicker());
           $('colour-mode').addEventListener('change', event => { closePicker(false); draft.colourMode = event.target.value; updateColours(); });
           $('palette').addEventListener('change', event => { draft.palette = event.target.value; updateColours(); });
+          for (const key of ['compactComments', 'hideCommentControls']) {
+            $(key).addEventListener('change', event => { draft[key] = event.target.checked; updateColours(); });
+          }
           function openPanel() {
             saved = settings.read(); draft = { ...saved };
-            $('settings-status').hidden = true; $('reload-now').hidden = true;
+            externalConflict = false;
+            menuDetails.open = false;
+            $('settings-status').hidden = true;
             closePicker(false); populate(); selectTab('comments');
+            if (primaryActionState().pendingReload) {
+              $('settings-status').textContent = 'Saved changes are waiting for reload. This page still uses its previous settings.';
+              $('settings-status').hidden = false;
+            }
             dialog.showModal(); $('tab-comments').focus();
           }
 
@@ -12967,25 +14133,51 @@
             if (event.clientX < box.left || event.clientX > box.right || event.clientY < box.top || event.clientY > box.bottom) dialog.close();
           });
           function markDraftChanged() {
-            $('settings-status').hidden = true;
-            $('reload-now').hidden = true;
+            if (externalConflict) showConflictNotice();
+            else $('settings-status').hidden = true;
+            updatePrimaryAction();
           }
           dialog.addEventListener('input', markDraftChanged);
           dialog.addEventListener('change', markDraftChanged);
-          $('restore-defaults').addEventListener('click', () => { draft = { ...DEFAULTS }; markDraftChanged(); closePicker(false); populate(); });
-          $('save-preview').addEventListener('click', () => {
-            if ($('save-preview').disabled) return;
-            const result = settings.save(draft);
+          function restoreDraftDefaults(keys, message) {
+            for (const key of keys) draft[key] = Array.isArray(DEFAULTS[key]) ? [...DEFAULTS[key]] : DEFAULTS[key];
+            markDraftChanged(); closePicker(false); populate(keys);
+            if (externalConflict) { showConflictNotice(); return; }
+            const state = primaryActionState();
+            $('settings-status').textContent = state.dirty ? message : state.pendingReload
+              ? 'Defaults match your saved settings. Reload when ready to apply them. Saved channel filters are unchanged.'
+              : 'These settings already match the defaults. Saved channel filters are unchanged.';
             $('settings-status').hidden = false;
-            $('settings-status').textContent = result.ok ? 'Saved. Reload when ready to apply these changes. The miniplayer corner also synchronises with open YouTube windows.' : result.error;
-            $('reload-now').hidden = !result.ok;
-            if (result.ok) saved = result.values;
+          }
+          $('restore-section-defaults').addEventListener('click', () => {
+            const keys = currentTab === 'comments'
+              ? ['colourMode', 'palette', 'viewerColour', 'ownerColour', 'compactComments', 'hideCommentControls']
+              : (GROUPS[currentTab] || []).map(([key]) => key);
+            if (!keys.length) return;
+            if (currentTab === 'interface') keys.push('menuItemOrder');
+            restoreDraftDefaults(keys, `${$(`tab-${currentTab}`).textContent} defaults restored in this draft. Save to apply. Saved channel filters are unchanged.`);
           });
-          $('reload-now').addEventListener('click', () => {
-            if (window.confirm('Reload YouTube now? This will restart the current page and video.')) location.reload();
+          $('restore-defaults').addEventListener('click', () => {
+            restoreDraftDefaults(Object.keys(DEFAULTS), 'All settings restored in this draft. Save to apply. Saved channel filters are unchanged.');
+          });
+          $('save-preview').addEventListener('click', () => {
+            if (!reconcileStoredPreferences()) return;
+            const state = updatePrimaryAction();
+            if ($('save-preview').disabled) return;
+            if (!state.dirty) {
+              if (state.pendingReload && window.confirm('Reload YouTube now? This will restart the current page and video.')) location.reload();
+              return;
+            }
+            const result = settings.save(draft);
+            if (result.ok) { saved = result.values; draft = { ...saved }; }
+            const next = updatePrimaryAction();
+            $('settings-status').hidden = false;
+            $('settings-status').textContent = !result.ok ? result.error : next.pendingReload
+              ? 'Saved. Please reload this page.'
+              : 'Saved. No reload needed.';
           });
           populate(); selectTab('comments');
-          return { dialog, open: openPanel, updateTheme: updateColours };
+          return { dialog, open: openPanel, updateTheme: updateColours, updateChannels: renderChannelRules, reconcileSaved: reconcileStoredPreferences };
 
         }
 
@@ -13224,12 +14416,18 @@
           discoveryActive = false;
           hidePlayerTooltip();
           document.getElementById(DIALOG_ID)?.close();
+          channelAgeDialog?.close();
         }
         suite.addWindowListener("pagehide", stop);
         suite.addWindowListener("pageshow", start);
-        suite.addWindowListener("yt-navigate-start", () => { hidePlayerTooltip(); document.getElementById(DIALOG_ID)?.close(); });
+        suite.addWindowListener("yt-navigate-start", () => { hidePlayerTooltip(); document.getElementById(DIALOG_ID)?.close(); channelAgeDialog?.close(); });
         suite.addWindowListener("yt-navigate-finish", scheduleInstall);
         suite.addWindowListener("yt-page-data-updated", scheduleInstall);
+        suite.addWindowListener('yt-master-channel-age-changed', () => panel?.updateChannels());
+        suite.addWindowListener('storage', event => {
+          if (event.key === null || event.key === settings.key || event.key === 'yt-master-suite.scroll-miniplayer.corner.v1') panel?.reconcileSaved();
+          if (event.key === null || event.key === suite.channelAge.key) window.dispatchEvent(new CustomEvent('yt-master-channel-age-changed'));
+        });
         document.addEventListener('loadedmetadata', event => { if (event.target?.matches?.('video.html5-main-video')) scheduleInstall(); }, true);
         document.addEventListener('fullscreenchange', () => { hidePlayerTooltip(); scheduleInstall(); }, true);
         suite.addWindowListener('resize', refreshPlayerTooltip);

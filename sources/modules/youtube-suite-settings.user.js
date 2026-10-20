@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         YouTube Suite Settings
 // @namespace    Citizen.youtube.suite-settings
-// @version      1.13
+// @version      1.25
 // @description  Master-only native-style settings panel accessible from the header and watch player.
 // @author       Citizen
 // @license      GNU GPLv3
@@ -31,6 +31,19 @@
   let playerTooltip = null;
   let playerTarget = null;
   let watchedPlayerBranch = [];
+  let channelAgeDialog = null;
+
+  suite.openChannelAgeSettings = channel => {
+    if (suspended) return;
+    hidePlayerTooltip();
+    try {
+      channelAgeDialog ||= suite.createChannelAgeDialog(document, suite.channelAge);
+      channelAgeDialog.open(channel);
+    } catch (error) {
+      suite.reportModuleError('suiteSettings', 'open channel upload filters', error);
+    }
+  };
+  suite.installVideoMenu(suite);
 
   function createPanel() {
     const dialog = suite.createSettingsDialog(document);
@@ -65,7 +78,15 @@
       interface: [
         ['headerSettingsIcon', 'Header button', ['off', 'colour', 'monochrome'], value => value[0].toUpperCase() + value.slice(1)],
         ['playerSettingsIcon', 'Video player button', ['off', 'colour', 'monochrome'], value => value[0].toUpperCase() + value.slice(1)],
+        ['showRydTooltipBar', 'Show Return YouTube Dislike tooltip bar'],
+        ['showDeArrowTitleButton', 'Show DeArrow icon beside video title'],
         ['showDeArrowQueueButton', 'Show DeArrow logo in queues'],
+        ['menuShowDownload', 'Show Download in video menus'],
+        ['menuGroupChannelTools', 'Group channel tools in a submenu'],
+        ['menuShowAgeLimit', 'Show Filter channel uploads action'],
+        ['menuShowNotInterested', 'Show Not interested'],
+        ['menuShowDontRecommend', 'Show Don’t recommend channel'],
+        ['menuShowReport', 'Show Report'],
       ],
     };
     const DESCRIPTIONS = {
@@ -92,16 +113,28 @@
       queueInfo: 'Show the current title and queue position at the top of the floating player.',
       headerSettingsIcon: 'Choose the icon beside your profile button. Available on feed and watch pages.',
       playerSettingsIcon: 'Choose the icon before Mirror video in watch and live player controls.',
+      showRydTooltipBar: 'Show Return YouTube Dislike’s tooltip bar. Hidden by default; dislike counts and voting buttons are unchanged. Applies after reload.',
+      showDeArrowTitleButton: 'Show DeArrow’s title-button controls beside the watch-page title. Hidden by default; title and thumbnail replacements remain active. Applies after reload.',
       showDeArrowQueueButton: 'Show DeArrow’s original/custom toggle logo in queue titles. Hiding it does not disable DeArrow title or thumbnail replacements.',
+      menuShowDownload: 'Show YouTube’s Download action when available. Hidden by default; this does not enable downloads or change your account permissions.',
+      menuGroupChannelTools: 'On: place Don’t recommend channel, Report and Filter channel uploads in a Channel tools submenu. Off: keep enabled actions separate in the main menu. Not interested always stays in the main menu. Save and reload to apply.',
+      menuShowAgeLimit: 'Add Filter channel uploads to set how old a selected channel’s uploads can be. It appears at the bottom by default.',
+      menuShowNotInterested: 'Keep YouTube’s Not interested action visible when the video menu provides it.',
+      menuShowDontRecommend: 'Keep YouTube’s Don’t recommend channel action available, separately or inside Channel tools.',
+      menuShowReport: 'Keep YouTube’s Report action available, separately or inside Channel tools. A report is never submitted automatically.',
     };
     let saved = settings.read();
     let draft = { ...saved };
+    let externalConflict = false;
     let pickerTarget = null;
     let pickerTrigger = null;
+    let currentTab = 'comments';
 
-    const tabIds = ['comments', 'feed', 'player', 'layout', 'miniplayer', 'interface', 'extensions', 'credits'];
+    const tabIds = ['comments', 'feed', 'channels', 'player', 'layout', 'miniplayer', 'interface', 'extensions', 'credits'];
     function selectTab(id, focus = false) {
       closePicker(false);
+      currentTab = id;
+      $('restore-section-defaults').disabled = id === 'channels' || id === 'extensions' || id === 'credits';
       for (const tab of tabIds) {
         const selected = tab === id;
         $(`section-${tab}`).hidden = !selected;
@@ -109,6 +142,7 @@
         $(`tab-${tab}`).tabIndex = selected ? 0 : -1;
       }
       dialog.querySelector('.content').scrollTop = 0;
+      if (id === 'channels') renderChannelRules();
       if (focus) $(`tab-${id}`).focus();
     }
     for (const id of tabIds) {
@@ -125,6 +159,9 @@
       });
       dialog.querySelector('nav').append(tab);
     }
+    const menuDetails = document.createElement('details'); menuDetails.id = 'ytms-video-menu-settings';
+    const menuSummary = document.createElement('summary'); menuSummary.textContent = 'Video context menu';
+    menuDetails.append(menuSummary); $('section-interface').append(menuDetails);
     for (const [group, rows] of Object.entries(GROUPS)) {
       for (const [key, labelText, choices, format] of rows) {
         const row = document.createElement('div'); row.className = 'row';
@@ -136,10 +173,98 @@
         if (choices) {
           for (const value of choices) { const option = document.createElement('option'); option.value = value; option.textContent = format(value); input.append(option); }
         } else { input.type = 'checkbox'; input.className = 'switch'; input.setAttribute('role', 'switch'); }
-        row.append(label, input); $(`section-${group}`).append(row);
+        row.append(label, input);
+        if (group === 'interface' && key.startsWith('menu')) menuDetails.append(row);
+        else $(`section-${group}`).insertBefore(row, group === 'interface' ? menuDetails : null);
         input.addEventListener('change', () => { draft[key] = choices ? input.value : input.checked; updateColours(); });
       }
     }
+    const ageRow = document.createElement('div'); ageRow.className = 'row';
+    const ageLabel = document.createElement('div'); ageLabel.className = 'row-label';
+    ageLabel.textContent = 'Channel upload filters';
+    const ageDescription = document.createElement('span'); ageDescription.className = 'description';
+    ageDescription.id = 'ytms-channel-age-description';
+    ageDescription.textContent = 'Choose how old each channel’s uploads can be: days, weeks, months or years. Watched-video filtering remains independent. Manage and save these filters separately; the settings reset buttons leave them unchanged.';
+    ageLabel.append(ageDescription);
+    const ageButton = document.createElement('button'); ageButton.id = 'ytms-manage-channel-age';
+    ageButton.type = 'button'; ageButton.className = 'text-button'; ageButton.textContent = 'Manage';
+    ageButton.setAttribute('aria-label', 'Manage channel upload filters');
+    ageButton.setAttribute('aria-describedby', ageDescription.id); ageButton.setAttribute('aria-haspopup', 'dialog');
+    ageButton.addEventListener('click', () => suite.openChannelAgeSettings());
+    const channelNote = document.createElement('p'); channelNote.className = 'section-note';
+    channelNote.textContent = 'This list contains filters saved by YouTube Master Suite in this browser profile. YouTube’s own Don’t recommend channel choices are separate and are not included here. Edit or remove a filter in the manager, then choose Save filters to apply it.';
+    const channelHelp = document.createElement('a'); channelHelp.className = 'channel-filter-help';
+    channelHelp.textContent = 'Manage YouTube’s own recommendation controls';
+    channelHelp.href = 'https://support.google.com/youtube/answer/6342839?hl=en&co=GENIE.Platform%3DDesktop';
+    channelHelp.target = '_blank'; channelHelp.rel = 'noopener noreferrer';
+    channelHelp.setAttribute('aria-label', 'Manage YouTube’s own recommendation controls (opens in a new tab)');
+    const channelList = document.createElement('div'); channelList.id = 'ytms-channel-filter-list';
+    channelList.setAttribute('role', 'list'); channelList.setAttribute('aria-label', 'Saved channel upload filters');
+    ageRow.append(ageLabel, ageButton); $('section-channels').append(ageRow, channelNote, channelHelp, channelList);
+    function renderChannelRules() {
+      channelList.replaceChildren();
+      const rules = suite.channelAge.read();
+      if (!rules.length) {
+        const empty = document.createElement('p'); empty.className = 'section-note'; empty.textContent = 'No channel upload filters saved.';
+        channelList.append(empty);
+      }
+      for (const rule of rules) {
+        const card = document.createElement('article'); card.className = 'channel-filter-card'; card.setAttribute('role', 'listitem');
+        const title = document.createElement('h3'); title.textContent = rule.name || rule.channelId;
+        const id = document.createElement('p'); id.className = 'channel-filter-id'; id.textContent = rule.channelId;
+        const age = document.createElement('p'); age.textContent = `Maximum upload age: ${rule.maxAge} ${rule.maxAge === 1 ? rule.unit.slice(0, -1) : rule.unit}`;
+        const status = document.createElement('p'); status.className = 'channel-filter-status';
+        status.textContent = `Status: ${!rule.enabled ? 'Disabled' : rule.blocked ? 'All uploads hidden' : 'Enabled'}`;
+        const actions = document.createElement('div'); actions.className = 'channel-filter-actions';
+        for (const [label, remove] of [['Edit', false], ['Remove', true]]) {
+          const action = document.createElement('button'); action.type = 'button'; action.className = 'text-button';
+          action.textContent = label; action.setAttribute('aria-label', `${label} filter for ${rule.name || rule.channelId}`);
+          action.addEventListener('click', () => suite.openChannelAgeSettings({ channelId: rule.channelId, name: rule.name, ...(remove ? { remove: true } : {}) }));
+          actions.append(action);
+        }
+        card.append(title, id, age, status, actions); channelList.append(card);
+      }
+    }
+
+    const menuOrder = document.createElement('section'); menuOrder.className = 'menu-order';
+    const menuOrderHeading = document.createElement('h3'); menuOrderHeading.textContent = 'Video context menu order';
+    const menuOrderNote = document.createElement('p'); menuOrderNote.className = 'section-note';
+    menuOrderNote.id = 'ytms-menu-order-description';
+    menuOrderNote.textContent = 'Use the arrows to arrange recognised video actions. Hidden or unavailable actions are skipped. Grouped actions keep their relative order inside Channel tools; other YouTube items are left available.';
+    const menuOrderList = document.createElement('ol'); menuOrderList.id = 'ytms-menu-order';
+    menuOrderList.setAttribute('aria-label', 'Video context menu order'); menuOrderList.setAttribute('aria-describedby', menuOrderNote.id);
+    const menuLabels = {
+      playNext: 'Play next in queue', addToQueue: 'Add to queue', watchLater: 'Save to Watch Later',
+      savePlaylist: 'Save to playlist', download: 'Download', share: 'Share', notInterested: 'Not interested',
+      dontRecommend: 'Don’t recommend channel', report: 'Report', channelAge: 'Filter channel uploads', channelTools: 'Channel tools submenu',
+    };
+    function renderMenuOrder(focusId, focusDirection) {
+      menuOrderList.replaceChildren();
+      const order = draft.menuItemOrder;
+      for (const [index, id] of order.entries()) {
+        const item = document.createElement('li'); item.dataset.menuItem = id;
+        const label = document.createElement('span'); label.textContent = menuLabels[id];
+        item.append(label);
+        for (const [direction, text, offset] of [['up', '↑', -1], ['down', '↓', 1]]) {
+          const move = document.createElement('button'); move.type = 'button'; move.className = 'menu-order-move';
+          move.dataset.direction = direction; move.textContent = text;
+          move.setAttribute('aria-label', `Move ${menuLabels[id]} ${direction}`);
+          move.disabled = index + offset < 0 || index + offset >= order.length;
+          move.addEventListener('click', () => {
+            const next = [...draft.menuItemOrder];
+            [next[index], next[index + offset]] = [next[index + offset], next[index]];
+            draft.menuItemOrder = next; markDraftChanged(); renderMenuOrder(id, direction);
+          });
+          item.append(move);
+        }
+        menuOrderList.append(item);
+        if (id === focusId) {
+          const preferred = item.querySelector(`[data-direction="${focusDirection}"]`);
+          (preferred?.disabled ? item.querySelector('button:not(:disabled)') : preferred)?.focus();
+        }
+      }
+    }
+    menuOrder.append(menuOrderHeading, menuOrderNote, menuOrderList); menuDetails.append(menuOrder);
     const miniplayerNote = document.createElement('p'); miniplayerNote.className = 'section-note';
     miniplayerNote.textContent = 'Size remains automatic and adapts to the available window space.';
     $('section-miniplayer').append(miniplayerNote);
@@ -183,6 +308,51 @@
       return rgb(colour).map(value => { const channel = value / 255; return channel <= .04045 ? channel / 12.92 : ((channel + .055) / 1.055) ** 2.4; })
         .reduce((sum, channel, index) => sum + channel * [.2126, .7152, .0722][index], 0);
     }
+    function samePreferences(left, right) {
+      return Object.keys(DEFAULTS).every(key => {
+        const value = left[key], other = right[key];
+        return Array.isArray(value) && Array.isArray(other)
+          ? value.length === other.length && value.every((item, index) => item === other[index])
+          : value === other;
+      });
+    }
+    function primaryActionState() {
+      const invalid = draft.colourMode === 'custom' && ['viewer', 'owner'].some(name => !normaliseHex($(`${name}-hex`).value));
+      const inaccessible = draft.headerSettingsIcon === 'off' && draft.playerSettingsIcon === 'off';
+      return {
+        invalid, inaccessible,
+        dirty: invalid || inaccessible || !samePreferences(settings.validate(draft), saved),
+        pendingReload: !samePreferences(saved, settings.initial),
+      };
+    }
+    function updatePrimaryAction() {
+      const state = primaryActionState();
+      const reload = !externalConflict && !state.dirty && state.pendingReload;
+      $('save-preview').textContent = reload ? 'Reload now' : 'Save';
+      $('save-preview').dataset.action = reload ? 'reload' : 'save';
+      $('save-preview').disabled = externalConflict || state.invalid || state.inaccessible || (!state.dirty && !state.pendingReload);
+      return state;
+    }
+    function showConflictNotice() {
+      $('settings-status').textContent = 'Settings changed in another window. Your draft has been kept. Cancel and reopen settings before saving or reloading.';
+      $('settings-status').hidden = false;
+    }
+    function reconcileStoredPreferences() {
+      if (!dialog.open) return true;
+      const current = settings.read();
+      if (samePreferences(current, saved)) return !externalConflict;
+      if (externalConflict || primaryActionState().dirty) {
+        externalConflict = true; updatePrimaryAction(); showConflictNotice();
+        return false;
+      }
+      saved = current; draft = { ...saved };
+      closePicker(false); populate();
+      $('settings-status').textContent = primaryActionState().pendingReload
+        ? 'Saved settings changed in another window. Reload when ready to apply them.'
+        : 'Saved settings changed in another window. They now match the settings applied to this page.';
+      $('settings-status').hidden = false;
+      return true;
+    }
     function updateColours() {
       const custom = draft.colourMode === 'custom';
       $('custom-colours').hidden = !custom; $('palette-row').hidden = draft.colourMode !== 'preset';
@@ -191,27 +361,31 @@
         if (pair) preview.style.setProperty(`--${name}-colour`, pair[index]); else preview.style.removeProperty(`--${name}-colour`);
         $(`${name}-swatch`).style.setProperty('--swatch', draft[`${name}Colour`]);
       }
-      const invalid = custom && ['viewer', 'owner'].some(name => !normaliseHex($(`${name}-hex`).value));
       const inaccessible = draft.headerSettingsIcon === 'off' && draft.playerSettingsIcon === 'off';
       $('button-access-error').hidden = !inaccessible;
-      $('save-preview').disabled = invalid || inaccessible;
+      updatePrimaryAction();
       const background = luminance(theme() === 'dark' ? '#0F0F0F' : '#FFFFFF');
       $('contrast-warning').hidden = !pair || !pair.some(colour => {
         const foreground = luminance(colour);
         return (Math.max(foreground, background) + .05) / (Math.min(foreground, background) + .05) < 4.5;
       });
     }
-    function populate() {
+    function populate(keys) {
+      const selected = keys ? new Set(keys) : null;
       for (const [key, value] of Object.entries(draft)) {
+        if (selected && !selected.has(key)) continue;
         const input = $(key); if (!input) continue;
         if (input.type === 'checkbox') input.checked = value; else input.value = value;
       }
-      $('colour-mode').value = draft.colourMode; $('palette').value = draft.palette;
+      if (!selected || selected.has('colourMode')) $('colour-mode').value = draft.colourMode;
+      if (!selected || selected.has('palette')) $('palette').value = draft.palette;
       for (const name of ['viewer', 'owner']) {
+        if (selected && !selected.has(`${name}Colour`)) continue;
         $(`${name}-hex`).value = draft[`${name}Colour`];
         $(`${name}-hex`).setAttribute('aria-invalid', 'false'); $(`${name}-error`).hidden = true;
       }
       updateColours();
+      if (!selected || selected.has('menuItemOrder')) renderMenuOrder();
     }
     function closePicker(restoreFocus = true) {
       $('colour-picker').hidden = true;
@@ -254,10 +428,19 @@
     $('close-picker').addEventListener('click', () => closePicker());
     $('colour-mode').addEventListener('change', event => { closePicker(false); draft.colourMode = event.target.value; updateColours(); });
     $('palette').addEventListener('change', event => { draft.palette = event.target.value; updateColours(); });
+    for (const key of ['compactComments', 'hideCommentControls']) {
+      $(key).addEventListener('change', event => { draft[key] = event.target.checked; updateColours(); });
+    }
     function openPanel() {
       saved = settings.read(); draft = { ...saved };
-      $('settings-status').hidden = true; $('reload-now').hidden = true;
+      externalConflict = false;
+      menuDetails.open = false;
+      $('settings-status').hidden = true;
       closePicker(false); populate(); selectTab('comments');
+      if (primaryActionState().pendingReload) {
+        $('settings-status').textContent = 'Saved changes are waiting for reload. This page still uses its previous settings.';
+        $('settings-status').hidden = false;
+      }
       dialog.showModal(); $('tab-comments').focus();
     }
 
@@ -273,25 +456,51 @@
       if (event.clientX < box.left || event.clientX > box.right || event.clientY < box.top || event.clientY > box.bottom) dialog.close();
     });
     function markDraftChanged() {
-      $('settings-status').hidden = true;
-      $('reload-now').hidden = true;
+      if (externalConflict) showConflictNotice();
+      else $('settings-status').hidden = true;
+      updatePrimaryAction();
     }
     dialog.addEventListener('input', markDraftChanged);
     dialog.addEventListener('change', markDraftChanged);
-    $('restore-defaults').addEventListener('click', () => { draft = { ...DEFAULTS }; markDraftChanged(); closePicker(false); populate(); });
-    $('save-preview').addEventListener('click', () => {
-      if ($('save-preview').disabled) return;
-      const result = settings.save(draft);
+    function restoreDraftDefaults(keys, message) {
+      for (const key of keys) draft[key] = Array.isArray(DEFAULTS[key]) ? [...DEFAULTS[key]] : DEFAULTS[key];
+      markDraftChanged(); closePicker(false); populate(keys);
+      if (externalConflict) { showConflictNotice(); return; }
+      const state = primaryActionState();
+      $('settings-status').textContent = state.dirty ? message : state.pendingReload
+        ? 'Defaults match your saved settings. Reload when ready to apply them. Saved channel filters are unchanged.'
+        : 'These settings already match the defaults. Saved channel filters are unchanged.';
       $('settings-status').hidden = false;
-      $('settings-status').textContent = result.ok ? 'Saved. Reload when ready to apply these changes. The miniplayer corner also synchronises with open YouTube windows.' : result.error;
-      $('reload-now').hidden = !result.ok;
-      if (result.ok) saved = result.values;
+    }
+    $('restore-section-defaults').addEventListener('click', () => {
+      const keys = currentTab === 'comments'
+        ? ['colourMode', 'palette', 'viewerColour', 'ownerColour', 'compactComments', 'hideCommentControls']
+        : (GROUPS[currentTab] || []).map(([key]) => key);
+      if (!keys.length) return;
+      if (currentTab === 'interface') keys.push('menuItemOrder');
+      restoreDraftDefaults(keys, `${$(`tab-${currentTab}`).textContent} defaults restored in this draft. Save to apply. Saved channel filters are unchanged.`);
     });
-    $('reload-now').addEventListener('click', () => {
-      if (window.confirm('Reload YouTube now? This will restart the current page and video.')) location.reload();
+    $('restore-defaults').addEventListener('click', () => {
+      restoreDraftDefaults(Object.keys(DEFAULTS), 'All settings restored in this draft. Save to apply. Saved channel filters are unchanged.');
+    });
+    $('save-preview').addEventListener('click', () => {
+      if (!reconcileStoredPreferences()) return;
+      const state = updatePrimaryAction();
+      if ($('save-preview').disabled) return;
+      if (!state.dirty) {
+        if (state.pendingReload && window.confirm('Reload YouTube now? This will restart the current page and video.')) location.reload();
+        return;
+      }
+      const result = settings.save(draft);
+      if (result.ok) { saved = result.values; draft = { ...saved }; }
+      const next = updatePrimaryAction();
+      $('settings-status').hidden = false;
+      $('settings-status').textContent = !result.ok ? result.error : next.pendingReload
+        ? 'Saved. Please reload this page.'
+        : 'Saved. No reload needed.';
     });
     populate(); selectTab('comments');
-    return { dialog, open: openPanel, updateTheme: updateColours };
+    return { dialog, open: openPanel, updateTheme: updateColours, updateChannels: renderChannelRules, reconcileSaved: reconcileStoredPreferences };
 
   }
 
@@ -530,12 +739,18 @@
     discoveryActive = false;
     hidePlayerTooltip();
     document.getElementById(DIALOG_ID)?.close();
+    channelAgeDialog?.close();
   }
   window.addEventListener("pagehide", stop);
   window.addEventListener("pageshow", start);
-  window.addEventListener("yt-navigate-start", () => { hidePlayerTooltip(); document.getElementById(DIALOG_ID)?.close(); });
+  window.addEventListener("yt-navigate-start", () => { hidePlayerTooltip(); document.getElementById(DIALOG_ID)?.close(); channelAgeDialog?.close(); });
   window.addEventListener("yt-navigate-finish", scheduleInstall);
   window.addEventListener("yt-page-data-updated", scheduleInstall);
+  window.addEventListener('yt-master-channel-age-changed', () => panel?.updateChannels());
+  window.addEventListener('storage', event => {
+    if (event.key === null || event.key === settings.key || event.key === 'yt-master-suite.scroll-miniplayer.corner.v1') panel?.reconcileSaved();
+    if (event.key === null || event.key === suite.channelAge.key) window.dispatchEvent(new CustomEvent('yt-master-channel-age-changed'));
+  });
   document.addEventListener('loadedmetadata', event => { if (event.target?.matches?.('video.html5-main-video')) scheduleInstall(); }, true);
   document.addEventListener('fullscreenchange', () => { hidePlayerTooltip(); scheduleInstall(); }, true);
   window.addEventListener('resize', refreshPlayerTooltip);

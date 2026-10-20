@@ -337,7 +337,8 @@ test("Save persists validated custom colours but applies them only after reload"
   await page.locator("#ytms-viewer-hex").fill("abcdef");
   await page.locator("#ytms-owner-hex").fill("#FEDCBA");
   await page.locator("#ytms-save-preview").click();
-  assert.equal(await page.locator("#ytms-reload-now").isVisible(), true);
+  assert.equal(await page.locator('#ytms-save-preview').textContent(), 'Reload now');
+  assert.equal(await page.locator('#ytms-reload-now').count(), 0);
   assert.equal(await colour(page, ".fixture-viewer"), "rgb(130, 163, 230)");
   assert.equal(await page.evaluate(key => JSON.parse(localStorage.getItem(key)).values.viewerColour, KEY), "#ABCDEF");
   await page.locator("#ytms-cancel-panel").click();
@@ -349,6 +350,331 @@ test("Save persists validated custom colours but applies them only after reload"
   assert.equal(await colour(page, ".comment-message"), "rgb(255, 255, 255)");
   await openPanel(page);
   assert.equal(await page.locator("#ytms-viewer-hex").inputValue(), "#ABCDEF");
+});
+
+test('one primary action follows effective draft differences, saved changes and the applied page baseline', async t => {
+  const page = await openFixture(t);
+  await openPanel(page);
+  const action = page.locator('#ytms-save-preview');
+  assert.equal(await page.locator('#ytms-settings-dialog footer .primary').count(), 1);
+  assert.equal(await page.locator('#ytms-reload-now').count(), 0);
+  assert.equal(await action.textContent(), 'Save'); assert.equal(await action.isDisabled(), true);
+  await page.getByRole('tab', { name: 'Feed', exact: true }).click();
+  await page.locator('#ytms-hideShorts').uncheck();
+  assert.equal(await action.textContent(), 'Save'); assert.equal(await action.isEnabled(), true);
+  await page.locator('#ytms-hideShorts').check();
+  assert.equal(await action.textContent(), 'Save'); assert.equal(await action.isDisabled(), true);
+  await page.locator('#ytms-hideShorts').uncheck();
+  await action.click();
+  assert.equal(await action.textContent(), 'Reload now'); assert.equal(await action.isEnabled(), true);
+  await page.locator('#ytms-watchedThreshold').selectOption('95');
+  assert.equal(await action.textContent(), 'Save');
+  await page.locator('#ytms-watchedThreshold').selectOption('90');
+  assert.equal(await action.textContent(), 'Reload now');
+  await page.locator('#ytms-hideShorts').check();
+  assert.equal(await action.textContent(), 'Save');
+  await action.click();
+  assert.equal(await action.textContent(), 'Save'); assert.equal(await action.isDisabled(), true);
+  assert.equal(await page.locator('#ytms-settings-status').textContent(), 'Saved. No reload needed.');
+  assert.equal(await page.evaluate(key => JSON.parse(localStorage.getItem(key)).values.hideShorts, KEY), true);
+  await page.getByRole('tab', { name: 'Interface', exact: true }).click();
+  await page.locator('#ytms-video-menu-settings > summary').click();
+  await page.getByRole('button', { name: 'Move Download up', exact: true }).click();
+  assert.equal(await action.isEnabled(), true);
+  await page.getByRole('button', { name: 'Move Download down', exact: true }).click();
+  assert.equal(await action.textContent(), 'Save'); assert.equal(await action.isDisabled(), true);
+  await page.locator('#ytms-restore-section-defaults').click();
+  assert.equal(await action.textContent(), 'Save'); assert.equal(await action.isDisabled(), true);
+  assert.match(await page.locator('#ytms-settings-status').textContent(), /already match the defaults/);
+});
+
+test('reverting non-default saved controls and RGB edits disables Save without writing settings', async t => {
+  const page = await openFixture(t, {
+    colourMode: 'custom', viewerColour: '#ABCDEF', compactComments: false, hideCommentControls: false,
+    watchedThreshold: '95', preferredVideoQuality: 'hd1440',
+  });
+  const before = await page.evaluate(() => ({ ...localStorage }));
+  await openPanel(page);
+  const action = page.locator('#ytms-save-preview');
+  for (const id of ['compactComments', 'hideCommentControls']) {
+    await page.locator(`#ytms-${id}`).check();
+    assert.equal(await action.isEnabled(), true);
+    await page.locator(`#ytms-${id}`).uncheck();
+    assert.equal(await action.isDisabled(), true);
+  }
+  await page.locator('#ytms-viewer-swatch').click();
+  await page.locator('#ytms-red').fill('172');
+  await page.locator('#ytms-red').dispatchEvent('input');
+  assert.equal(await action.isEnabled(), true);
+  await page.locator('#ytms-red').fill('171');
+  await page.locator('#ytms-red').dispatchEvent('input');
+  assert.equal(await action.isDisabled(), true);
+  await page.locator('#ytms-close-picker').click();
+  await page.locator('#ytms-viewer-hex').fill('abcdef');
+  assert.equal(await action.isDisabled(), true, 'Equivalent hex formatting is not a preference change');
+  for (const [tab, id, changed, saved] of [
+    ['Feed', 'watchedThreshold', '80', '95'],
+    ['Player', 'preferredVideoQuality', 'hd1080', 'hd1440'],
+  ]) {
+    await page.getByRole('tab', { name: tab, exact: true }).click();
+    await page.locator(`#ytms-${id}`).selectOption(changed);
+    assert.equal(await action.isEnabled(), true);
+    await page.locator(`#ytms-${id}`).selectOption(saved);
+    assert.equal(await action.isDisabled(), true);
+  }
+  await action.evaluate(button => button.click());
+  assert.equal(await page.locator('#ytms-settings-status').isVisible(), false);
+  assert.deepEqual(await page.evaluate(() => ({ ...localStorage })), before);
+});
+
+test('wider settings fit all tabs and place save status between Cancel and the primary action', async t => {
+  const page = await openFixture(t);
+  await openPanel(page);
+  const dialog = page.locator('#ytms-settings-dialog');
+  assert.equal(await dialog.getAttribute('lang'), 'en-GB');
+  assert.equal(await dialog.getAttribute('aria-describedby'), null);
+  assert.equal(await dialog.locator('#ytms-panel-intro, .intro').count(), 0);
+  assert.equal(await dialog.locator('nav').evaluate(nav => nav.scrollWidth <= nav.clientWidth), true);
+  assert.deepEqual(await dialog.locator('.footer-actions > *').evaluateAll(nodes => nodes.map(node => node.id)),
+    ['ytms-cancel-panel', 'ytms-settings-status', 'ytms-save-preview']);
+  await page.locator('#ytms-compactComments').uncheck();
+  await page.locator('#ytms-hideCommentControls').uncheck();
+  await page.locator('#ytms-save-preview').click();
+  const status = page.locator('#ytms-settings-status');
+  assert.equal(await status.textContent(), 'Saved. Please reload this page.');
+  assert.deepEqual(await page.evaluate(key => {
+    const values = JSON.parse(localStorage.getItem(key)).values;
+    return [values.compactComments, values.hideCommentControls];
+  }, KEY), [false, false]);
+  const cancelBox = await page.locator('#ytms-cancel-panel').boundingBox();
+  const statusBox = await status.boundingBox();
+  const actionBox = await page.locator('#ytms-save-preview').boundingBox();
+  assert.ok(statusBox.x >= cancelBox.x + cancelBox.width);
+  assert.ok(actionBox.x >= statusBox.x + statusBox.width);
+  for (const viewport of [{ width: 360, height: 600 }, { width: 640, height: 400 }]) {
+    await page.setViewportSize(viewport);
+    for (const showDefaults of [false, true]) {
+      if (showDefaults) await page.locator('#ytms-restore-defaults').click();
+      const bounds = await dialog.boundingBox();
+      const footer = dialog.locator('footer');
+      assert.equal(await footer.evaluate(node => node.scrollWidth <= node.clientWidth), true);
+      for (const control of ['#ytms-settings-status', 'footer button']) {
+        for (const node of await dialog.locator(control).all()) {
+          const box = await node.boundingBox();
+          assert.ok(box.x >= bounds.x && box.y >= bounds.y &&
+            box.x + box.width <= bounds.x + bounds.width && box.y + box.height <= bounds.y + bounds.height);
+        }
+      }
+      assert.ok((await dialog.locator('.content').boundingBox()).height > 0);
+    }
+  }
+});
+
+test('red settings accents remain readable in both themes and disabled Save stays neutral even on hover', async t => {
+  const page = await openFixture(t);
+  await openPanel(page);
+  const action = page.locator('#ytms-save-preview');
+  for (const dark of [true, false]) {
+    await page.evaluate(dark => document.documentElement.toggleAttribute('dark', dark), dark);
+    const accent = dark ? 'rgb(255, 0, 51)' : 'rgb(204, 0, 0)';
+    const neutral = dark ? 'rgb(63, 63, 63)' : 'rgb(213, 213, 213)';
+    await action.hover();
+    assert.equal(await action.isDisabled(), true);
+    assert.equal(await action.evaluate(node => getComputedStyle(node).backgroundColor), neutral);
+    assert.equal(await page.locator('#ytms-compactComments').evaluate(node => getComputedStyle(node).backgroundColor), accent);
+    assert.equal(await page.locator('#ytms-tab-comments').evaluate(node => getComputedStyle(node).borderBottomColor), accent);
+    await page.locator('#ytms-compactComments').uncheck();
+    assert.equal(await action.isEnabled(), true);
+    assert.equal(await action.evaluate(node => getComputedStyle(node).backgroundColor), accent);
+    const contrast = await action.evaluate(node => {
+      const luminance = colour => colour.match(/[\d.]+/g).slice(0, 3).map(Number).map(value => {
+        const channel = value / 255;
+        return channel <= .04045 ? channel / 12.92 : ((channel + .055) / 1.055) ** 2.4;
+      }).reduce((sum, channel, index) => sum + channel * [.2126, .7152, .0722][index], 0);
+      const style = getComputedStyle(node), foreground = luminance(style.color), background = luminance(style.backgroundColor);
+      return (Math.max(foreground, background) + .05) / (Math.min(foreground, background) + .05);
+    });
+    assert.ok(contrast >= 4.5, `Primary text contrast: ${contrast}`);
+    await page.locator('#ytms-compactComments').check();
+    assert.equal(await action.isDisabled(), true);
+  }
+});
+
+test('pending reload survives Cancel and reopen, with confirmation required before applying saved settings', async t => {
+  const page = await openFixture(t);
+  await openPanel(page);
+  await page.getByRole('tab', { name: 'Feed', exact: true }).click();
+  await page.locator('#ytms-hideShorts').uncheck();
+  await page.locator('#ytms-save-preview').click();
+  await page.locator('#ytms-cancel-panel').click();
+  await openPanel(page);
+  const action = page.locator('#ytms-save-preview');
+  assert.equal(await action.textContent(), 'Reload now');
+  assert.match(await page.locator('#ytms-settings-status').textContent(), /waiting for reload/);
+  let confirmation = '';
+  page.once('dialog', async dialog => { confirmation = dialog.message(); await dialog.dismiss(); });
+  await action.click();
+  assert.equal(confirmation, 'Reload YouTube now? This will restart the current page and video.');
+  assert.equal(await action.textContent(), 'Reload now');
+  assert.equal(await page.locator('#ytms-settings-dialog').isVisible(), true);
+  await page.getByRole('tab', { name: 'Feed', exact: true }).click();
+  await page.locator('#ytms-hideMixes').uncheck();
+  assert.equal(await action.textContent(), 'Save');
+  await page.locator('#ytms-cancel-panel').click();
+  await openPanel(page);
+  assert.equal(await action.textContent(), 'Reload now');
+  page.once('dialog', dialog => dialog.accept());
+  await Promise.all([page.waitForNavigation(), action.click()]);
+  await healthy(page);
+  await openPanel(page);
+  assert.equal(await action.textContent(), 'Save'); assert.equal(await action.isDisabled(), true);
+});
+
+test('failed settings writes keep the unsaved Save action and permit a successful retry', async t => {
+  const page = await openFixture(t);
+  await openPanel(page);
+  await page.getByRole('tab', { name: 'Feed', exact: true }).click();
+  await page.locator('#ytms-hideShorts').uncheck();
+  await page.evaluate(key => {
+    const original = Storage.prototype.setItem;
+    Storage.prototype.setItem = function (name, value) {
+      if (name === key) throw new DOMException('Fixture storage failure', 'QuotaExceededError');
+      return original.call(this, name, value);
+    };
+    window.restoreFixtureStorage = () => { Storage.prototype.setItem = original; };
+  }, KEY);
+  const action = page.locator('#ytms-save-preview');
+  await action.click();
+  assert.equal(await action.textContent(), 'Save'); assert.equal(await action.isEnabled(), true);
+  assert.match(await page.locator('#ytms-settings-status').textContent(), /Settings could not be saved/);
+  assert.equal(await page.evaluate(key => localStorage.getItem(key), KEY), null);
+  await page.evaluate(() => window.restoreFixtureStorage());
+  await action.click();
+  assert.equal(await action.textContent(), 'Reload now');
+  assert.equal(await page.evaluate(key => JSON.parse(localStorage.getItem(key)).values.hideShorts, KEY), false);
+});
+
+test('invalid colour text cannot trigger reload and equivalent normalised colours restore the correct action', async t => {
+  const page = await openFixture(t, { colourMode: 'custom', viewerColour: '#ABCDEF' });
+  await openPanel(page);
+  const action = page.locator('#ytms-save-preview');
+  assert.equal(await action.isDisabled(), true);
+  await page.locator('#ytms-viewer-hex').fill('#zzzzzz');
+  assert.equal(await action.textContent(), 'Save'); assert.equal(await action.isDisabled(), true);
+  await page.locator('#ytms-viewer-hex').fill('#FEDCBA');
+  assert.equal(await action.isEnabled(), true);
+  await action.click();
+  assert.equal(await action.textContent(), 'Reload now');
+  await page.locator('#ytms-viewer-hex').fill('#zzzzzz');
+  assert.equal(await action.textContent(), 'Save'); assert.equal(await action.isDisabled(), true);
+  await page.locator('#ytms-viewer-hex').fill('fedcba');
+  assert.equal(await action.textContent(), 'Reload now'); assert.equal(await action.isEnabled(), true);
+  await page.locator('#ytms-viewer-hex').fill('abcdef');
+  assert.equal(await action.textContent(), 'Save'); assert.equal(await action.isEnabled(), true);
+  await action.click();
+  assert.equal(await action.textContent(), 'Save'); assert.equal(await action.isDisabled(), true);
+});
+
+test('opening settings recognises saved preferences changed after startup as not yet applied', async t => {
+  const page = await openFixture(t);
+  await page.evaluate(key => localStorage.setItem(key, JSON.stringify({ version: 1, values: { hideShorts: false } })), KEY);
+  await openPanel(page);
+  assert.equal(await page.locator('#ytms-save-preview').textContent(), 'Reload now');
+  assert.equal(await page.locator('#ytms-save-preview').isEnabled(), true);
+  await page.locator('#ytms-cancel-panel').click();
+  await openPanel(page);
+  assert.equal(await page.locator('#ytms-save-preview').textContent(), 'Reload now');
+});
+
+test('clean settings reconcile external writes, clears and corner changes without polling or automatic reload', async t => {
+  const page = await openFixture(t);
+  await openPanel(page);
+  await page.getByRole('tab', { name: 'Feed', exact: true }).click();
+  const other = await page.context().newPage();
+  await other.goto(WATCH_URL); await healthy(other);
+  await other.evaluate(key => localStorage.setItem(key, JSON.stringify({ version: 1, values: { hideShorts: false } })), KEY);
+  await page.waitForFunction(() => document.getElementById('ytms-hideShorts').checked === false);
+  assert.equal(await page.locator('#ytms-save-preview').textContent(), 'Reload now');
+  assert.match(await page.locator('#ytms-settings-status').textContent(), /changed in another window/);
+  await other.evaluate(() => localStorage.clear());
+  await page.waitForFunction(() => document.getElementById('ytms-hideShorts').checked === true);
+  assert.equal(await page.locator('#ytms-save-preview').textContent(), 'Save');
+  assert.equal(await page.locator('#ytms-save-preview').isDisabled(), true);
+  await other.evaluate(() => localStorage.setItem('yt-master-suite.scroll-miniplayer.corner.v1', 'bottom-left'));
+  await page.waitForFunction(() => document.getElementById('ytms-corner').value === 'bottom-left');
+  assert.equal(await page.locator('#ytms-save-preview').textContent(), 'Reload now');
+  assert.equal(await page.locator('#ytms-settings-dialog').isVisible(), true);
+});
+
+test('external saves preserve dirty and invalid inputs while blocking overwrites until Cancel and reopen', async t => {
+  const page = await openFixture(t, { colourMode: 'custom', viewerColour: '#ABCDEF' });
+  await openPanel(page);
+  await page.getByRole('tab', { name: 'Feed', exact: true }).click();
+  await page.locator('#ytms-hideShorts').uncheck();
+  await page.getByRole('tab', { name: 'Comments', exact: true }).click();
+  await page.locator('#ytms-viewer-hex').fill('#zzzzzz');
+  const other = await page.context().newPage();
+  await other.goto(WATCH_URL); await healthy(other);
+  const externalRecord = JSON.stringify({ version: 1, values: { colourMode: 'custom', viewerColour: '#123456', hideMixes: false } });
+  await other.evaluate(({ key, record }) => localStorage.setItem(key, record), { key: KEY, record: externalRecord });
+  await page.waitForFunction(() => document.getElementById('ytms-settings-status').textContent.includes('Your draft has been kept'));
+  assert.equal(await page.locator('#ytms-viewer-hex').inputValue(), '#zzzzzz');
+  assert.equal(await page.locator('#ytms-hideShorts').isChecked(), false);
+  const action = page.locator('#ytms-save-preview');
+  assert.equal(await action.textContent(), 'Save'); assert.equal(await action.isDisabled(), true);
+  await page.locator('#ytms-viewer-hex').fill('#ABCDEF');
+  assert.equal(await action.isDisabled(), true);
+  assert.match(await page.locator('#ytms-settings-status').textContent(), /Cancel and reopen settings/);
+  assert.equal(await page.evaluate(key => localStorage.getItem(key), KEY), externalRecord);
+  await page.locator('#ytms-cancel-panel').click();
+  await openPanel(page);
+  assert.equal(await page.locator('#ytms-viewer-hex').inputValue(), '#123456');
+  assert.equal(await page.locator('#ytms-hideMixes').isChecked(), false);
+  assert.equal(await action.textContent(), 'Reload now'); assert.equal(await action.isEnabled(), true);
+});
+
+test('primary action preflight catches undelivered storage changes before saving or reloading', async t => {
+  const page = await openFixture(t);
+  await openPanel(page);
+  await page.getByRole('tab', { name: 'Feed', exact: true }).click();
+  await page.locator('#ytms-hideShorts').uncheck();
+  const externalRecord = JSON.stringify({ version: 1, values: { hideMixes: false } });
+  // A same-page fixture write deliberately emits no storage event, reproducing
+  // the window before another context's native event reaches this document.
+  await page.evaluate(({ key, record }) => localStorage.setItem(key, record), { key: KEY, record: externalRecord });
+  const action = page.locator('#ytms-save-preview');
+  assert.equal(await action.isEnabled(), true);
+  await action.click();
+  assert.equal(await action.isDisabled(), true);
+  assert.match(await page.locator('#ytms-settings-status').textContent(), /Your draft has been kept/);
+  assert.equal(await page.locator('#ytms-hideShorts').isChecked(), false);
+  assert.equal(await page.evaluate(key => localStorage.getItem(key), KEY), externalRecord);
+  await page.locator('#ytms-cancel-panel').click();
+  await openPanel(page);
+  assert.equal(await action.textContent(), 'Reload now');
+  await page.evaluate(key => localStorage.removeItem(key), KEY);
+  let confirmations = 0;
+  page.on('dialog', dialog => { confirmations++; return dialog.dismiss(); });
+  await action.click();
+  assert.equal(confirmations, 0);
+  assert.equal(await action.textContent(), 'Save'); assert.equal(await action.isDisabled(), true);
+  assert.equal(await page.locator('#ytms-settings-dialog').isVisible(), true);
+  assert.equal(await page.evaluate(key => localStorage.getItem(key), KEY), null);
+});
+
+test('separately saved channel upload filters do not create unsaved main preferences or a reload request', async t => {
+  const page = await openFixture(t);
+  await openPanel(page);
+  await page.getByRole('tab', { name: 'Channels', exact: true }).click();
+  await page.getByRole('button', { name: 'Manage channel upload filters', exact: true }).click();
+  await page.locator('#ytms-age-add').click();
+  await page.getByLabel('Channel ID or channel URL', { exact: true }).fill(`UC${'a'.repeat(22)}`);
+  await page.locator('#ytms-age-save').click();
+  await page.locator('#ytms-age-cancel').click();
+  assert.equal(await page.locator('#ytms-save-preview').textContent(), 'Save');
+  assert.equal(await page.locator('#ytms-save-preview').isDisabled(), true);
+  assert.equal(await page.evaluate(key => localStorage.getItem(key), KEY), null);
+  assert.equal(await page.evaluate(() => JSON.parse(localStorage.getItem('yt-master-suite.channel-age.v1')).rules.length), 1);
 });
 
 test("Interface controls persist both icon styles, remove either button and prevent settings lockout", async t => {
@@ -395,8 +721,8 @@ test("panel dimensions stay fixed across every tab, colour picker, field errors 
   await openPanel(page);
   const dialog = page.locator('#ytms-settings-dialog');
   const bounds = await dialog.boundingBox();
-  assert.equal(bounds.width, 640); assert.equal(bounds.height, 720);
-  for (const name of ['Feed', 'Player', 'Layout', 'Miniplayer', 'Interface', 'Extensions', 'Credits', 'Comments']) {
+  assert.equal(bounds.width, 760); assert.equal(bounds.height, 720);
+  for (const name of ['Feed', 'Channels', 'Player', 'Layout', 'Miniplayer', 'Interface', 'Extensions', 'Credits', 'Comments']) {
     await page.getByRole('tab', { name, exact: true }).click();
     assert.deepEqual(await dialog.boundingBox(), bounds, name);
   }
@@ -411,7 +737,7 @@ test("panel dimensions stay fixed across every tab, colour picker, field errors 
   assert.equal(await page.locator('#ytms-settings-status').isVisible(), true);
   assert.deepEqual(await dialog.boundingBox(), bounds);
   assert.equal(await page.locator('#ytms-section-player .row .description').count(), 6);
-  assert.equal(await page.locator('#ytms-section-interface .row .description').count(), 3);
+  assert.equal(await page.locator('#ytms-section-interface .row .description').count(), 11);
 });
 
 test("Credits uses the bundled coloured logo and a safe GitHub profile link", async t => {
@@ -481,7 +807,7 @@ test("Extensions remains theme-adaptive, keyboard-accessible and contained in a 
   for (const dark of [true, false]) {
     await page.evaluate(dark => document.documentElement.toggleAttribute('dark', dark), dark);
     assert.equal(await page.locator('#ytms-extension-ryd .extension-note').evaluate(element => getComputedStyle(element).color), dark ? 'rgb(170, 170, 170)' : 'rgb(96, 96, 96)');
-    assert.equal(await page.locator('#ytms-extension-ryd a').evaluate(element => getComputedStyle(element).color), dark ? 'rgb(62, 166, 255)' : 'rgb(6, 95, 212)');
+    assert.equal(await page.locator('#ytms-extension-ryd a').evaluate(element => getComputedStyle(element).color), dark ? 'rgb(255, 107, 107)' : 'rgb(204, 0, 0)');
     assert.equal(await content.evaluate(element => element.scrollWidth <= element.clientWidth), true);
     assert.deepEqual(await dialog.boundingBox(), bounds);
   }
@@ -571,6 +897,162 @@ test("Cancel and Restore defaults are draft-only, and invalid storage does not p
   assert.equal(await page.evaluate(key => localStorage.getItem(key), KEY), "{");
 });
 
+test('Restore this section resets Feed only, preserves other drafts, and remains cancellable until Save', async t => {
+  const page = await openFixture(t, { hideShorts: false, hideWatchedVideos: false, watchedThreshold: '80', mirrorButton: false, menuShowDownload: true });
+  const originalStorage = await page.evaluate(key => localStorage.getItem(key), KEY);
+  await openPanel(page);
+  await page.getByRole('tab', { name: 'Player', exact: true }).click();
+  await page.locator('#ytms-mirrorButton').check();
+  await page.getByRole('tab', { name: 'Interface', exact: true }).click();
+  await page.locator('#ytms-video-menu-settings > summary').click();
+  await page.getByRole('button', { name: 'Move Download up', exact: true }).click();
+  const draftOrder = await page.locator('#ytms-menu-order li').evaluateAll(nodes => nodes.map(node => node.dataset.menuItem));
+  await page.getByRole('tab', { name: 'Feed', exact: true }).click();
+  await page.getByRole('button', { name: 'Restore this section', exact: true }).click();
+  assert.equal(await page.locator('#ytms-hideShorts').isChecked(), true);
+  assert.equal(await page.locator('#ytms-hideWatchedVideos').isChecked(), true);
+  assert.equal(await page.locator('#ytms-watchedThreshold').inputValue(), '90');
+  assert.match(await page.locator('#ytms-settings-status').textContent(), /Feed defaults restored in this draft/);
+  assert.equal(await page.locator('#ytms-save-preview').textContent(), 'Save');
+  await page.getByRole('tab', { name: 'Player', exact: true }).click();
+  assert.equal(await page.locator('#ytms-mirrorButton').isChecked(), true);
+  await page.getByRole('tab', { name: 'Interface', exact: true }).click();
+  assert.deepEqual(await page.locator('#ytms-menu-order li').evaluateAll(nodes => nodes.map(node => node.dataset.menuItem)), draftOrder);
+  assert.equal(await page.locator('#ytms-menuShowDownload').isChecked(), true);
+  assert.equal(await page.evaluate(key => localStorage.getItem(key), KEY), originalStorage);
+  await page.locator('#ytms-cancel-panel').click();
+  await openPanel(page);
+  await page.getByRole('tab', { name: 'Player', exact: true }).click();
+  assert.equal(await page.locator('#ytms-mirrorButton').isChecked(), false);
+  await page.getByRole('tab', { name: 'Feed', exact: true }).click();
+  assert.equal(await page.locator('#ytms-hideShorts').isChecked(), false);
+  await page.locator('#ytms-restore-section-defaults').click();
+  await page.locator('#ytms-save-preview').click();
+  const saved = await page.evaluate(key => JSON.parse(localStorage.getItem(key)).values, KEY);
+  assert.equal(saved.hideShorts, true); assert.equal(saved.hideWatchedVideos, true); assert.equal(saved.watchedThreshold, '90');
+  assert.equal(saved.mirrorButton, false); assert.equal(saved.menuShowDownload, true);
+});
+
+test('video context-menu controls and order share one collapsible group which starts closed on every settings open', async t => {
+  const page = await openFixture(t);
+  await openPanel(page);
+  await page.getByRole('tab', { name: 'Interface', exact: true }).click();
+  const group = page.locator('#ytms-video-menu-settings');
+  assert.equal(await page.locator('#ytms-section-interface details').count(), 1);
+  assert.equal(await group.locator('summary').textContent(), 'Video context menu');
+  assert.equal(await group.evaluate(node => node.open), false);
+  assert.equal(await page.locator('#ytms-menuShowDownload').isVisible(), false);
+  assert.equal(await page.locator('#ytms-menu-order').isVisible(), false);
+  const bounds = await page.locator('#ytms-settings-dialog').boundingBox();
+  await group.locator('summary').focus();
+  await page.keyboard.press('Enter');
+  assert.equal(await group.evaluate(node => node.open), true);
+  assert.equal(await group.locator('#ytms-menuShowDownload').isVisible(), true);
+  assert.equal(await group.locator('#ytms-menu-order').isVisible(), true);
+  await page.locator('#ytms-menuGroupChannelTools').uncheck();
+  assert.deepEqual(await page.locator('#ytms-settings-dialog').boundingBox(), bounds);
+  await page.locator('#ytms-cancel-panel').click();
+  await openPanel(page);
+  await page.getByRole('tab', { name: 'Interface', exact: true }).click();
+  assert.equal(await group.evaluate(node => node.open), false);
+  assert.equal(await page.locator('#ytms-menuGroupChannelTools').isChecked(), true);
+  await page.setViewportSize({ width: 360, height: 600 });
+  await group.locator('summary').click();
+  assert.equal(await page.locator('#ytms-settings-dialog .content').evaluate(node => node.scrollWidth <= node.clientWidth), true);
+});
+
+test('Comments section reset restores all six comment preferences without changing Feed settings', async t => {
+  const page = await openFixture(t, { colourMode: 'custom', palette: 'cyan-rose', viewerColour: '#ABCDEF', ownerColour: '#123456', compactComments: false, hideCommentControls: false, hideShorts: false });
+  await openPanel(page);
+  await page.locator('#ytms-viewer-swatch').click();
+  await page.locator('#ytms-restore-section-defaults').click();
+  assert.equal(await page.locator('#ytms-colour-picker').isVisible(), false);
+  assert.equal(await page.locator('#ytms-colour-mode').inputValue(), 'default');
+  assert.equal(await page.locator('#ytms-palette').inputValue(), 'teal-coral');
+  assert.equal(await page.locator('#ytms-viewer-hex').inputValue(), '#82A3E6');
+  assert.equal(await page.locator('#ytms-owner-hex').inputValue(), '#FF9F1C');
+  assert.equal(await page.locator('#ytms-compactComments').isChecked(), true);
+  assert.equal(await page.locator('#ytms-hideCommentControls').isChecked(), true);
+  await page.getByRole('tab', { name: 'Feed', exact: true }).click();
+  assert.equal(await page.locator('#ytms-hideShorts').isChecked(), false);
+  await page.locator('#ytms-save-preview').click();
+  const saved = await page.evaluate(key => JSON.parse(localStorage.getItem(key)).values, KEY);
+  assert.equal(saved.colourMode, 'default'); assert.equal(saved.palette, 'teal-coral');
+  assert.equal(saved.viewerColour, '#82A3E6'); assert.equal(saved.ownerColour, '#FF9F1C');
+  assert.equal(saved.compactComments, true); assert.equal(saved.hideCommentControls, true);
+  assert.equal(saved.hideShorts, false);
+});
+
+test('Interface section reset restores cloned menu order and all Interface controls without touching comment choices', async t => {
+  const page = await openFixture(t, { colourMode: 'off', menuItemOrder: ['share', 'download'], menuShowDownload: true, menuGroupChannelTools: false, menuShowAgeLimit: false });
+  await openPanel(page);
+  await page.getByRole('tab', { name: 'Interface', exact: true }).click();
+  const defaultOrder = ['playNext', 'addToQueue', 'watchLater', 'savePlaylist', 'download', 'share', 'notInterested', 'dontRecommend', 'report', 'channelAge', 'channelTools'];
+  assert.equal(await page.locator('#ytms-video-menu-settings').evaluate(node => node.open), false);
+  await page.locator('#ytms-restore-section-defaults').click();
+  assert.equal(await page.locator('#ytms-video-menu-settings').evaluate(node => node.open), false);
+  assert.deepEqual(await page.locator('#ytms-menu-order li').evaluateAll(nodes => nodes.map(node => node.dataset.menuItem)), defaultOrder);
+  assert.equal(await page.locator('#ytms-menuShowDownload').isChecked(), false);
+  assert.equal(await page.locator('#ytms-menuGroupChannelTools').isChecked(), true);
+  assert.equal(await page.locator('#ytms-menuShowAgeLimit').isChecked(), true);
+  await page.locator('#ytms-video-menu-settings > summary').click();
+  await page.getByRole('button', { name: 'Move Download up', exact: true }).click();
+  await page.locator('#ytms-restore-section-defaults').click();
+  assert.deepEqual(await page.locator('#ytms-menu-order li').evaluateAll(nodes => nodes.map(node => node.dataset.menuItem)), defaultOrder);
+  await page.getByRole('tab', { name: 'Comments', exact: true }).click();
+  assert.equal(await page.locator('#ytms-colour-mode').inputValue(), 'off');
+  await page.locator('#ytms-save-preview').click();
+  const saved = await page.evaluate(key => JSON.parse(localStorage.getItem(key)).values, KEY);
+  assert.deepEqual(saved.menuItemOrder, defaultOrder); assert.equal(saved.colourMode, 'off');
+});
+
+test('section reset preserves invalid typed colour text and Save validation in an unrelated tab', async t => {
+  const page = await openFixture(t, { colourMode: 'custom', viewerColour: '#ABCDEF', menuShowDownload: true });
+  const originalStorage = await page.evaluate(key => localStorage.getItem(key), KEY);
+  await openPanel(page);
+  await page.locator('#ytms-viewer-hex').fill('#zzzzzz');
+  assert.equal(await page.locator('#ytms-save-preview').isDisabled(), true);
+  await page.getByRole('tab', { name: 'Interface', exact: true }).click();
+  await page.locator('#ytms-restore-section-defaults').click();
+  assert.equal(await page.locator('#ytms-menuShowDownload').isChecked(), false);
+  assert.equal(await page.locator('#ytms-viewer-hex').inputValue(), '#zzzzzz');
+  assert.equal(await page.locator('#ytms-viewer-hex').getAttribute('aria-invalid'), 'true');
+  assert.equal(await page.locator('#ytms-save-preview').isDisabled(), true);
+  await page.getByRole('tab', { name: 'Comments', exact: true }).click();
+  assert.equal(await page.locator('#ytms-viewer-error').isVisible(), true);
+  assert.equal(await page.evaluate(key => localStorage.getItem(key), KEY), originalStorage);
+  await page.locator('#ytms-restore-defaults').click();
+  assert.equal(await page.locator('#ytms-viewer-hex').inputValue(), '#82A3E6');
+  assert.equal(await page.locator('#ytms-save-preview').isEnabled(), true);
+});
+
+test('Restore all settings is draft-only, leaves saved channel filters untouched, and section reset is disabled on read-only tabs', async t => {
+  const page = await openFixture(t, { hideShorts: false, colourMode: 'off', menuShowDownload: true });
+  const ageKey = 'yt-master-suite.channel-age.v1';
+  const ageRecord = JSON.stringify({ version: 1, rules: [{ channelId: `UC${'a'.repeat(22)}`, name: 'News', maxAge: 1, unit: 'weeks', enabled: true }] });
+  await page.evaluate(({ key, record }) => localStorage.setItem(key, record), { key: ageKey, record: ageRecord });
+  const originalStorage = await page.evaluate(key => localStorage.getItem(key), KEY);
+  await openPanel(page);
+  for (const tab of ['Channels', 'Extensions', 'Credits']) {
+    await page.getByRole('tab', { name: tab, exact: true }).click();
+    assert.equal(await page.locator('#ytms-restore-section-defaults').isDisabled(), true);
+    assert.equal(await page.getByRole('button', { name: 'Restore all settings', exact: true }).isEnabled(), true);
+  }
+  await page.locator('#ytms-restore-defaults').click();
+  assert.match(await page.locator('#ytms-settings-status').textContent(), /Saved channel filters are unchanged/);
+  assert.equal(await page.evaluate(key => localStorage.getItem(key), KEY), originalStorage);
+  assert.equal(await page.evaluate(key => localStorage.getItem(key), ageKey), ageRecord);
+  await page.locator('#ytms-cancel-panel').click();
+  await openPanel(page);
+  assert.equal(await page.locator('#ytms-colour-mode').inputValue(), 'off');
+  assert.equal(await page.locator('#ytms-restore-section-defaults').isEnabled(), true);
+  await page.locator('#ytms-restore-defaults').click();
+  await page.locator('#ytms-save-preview').click();
+  assert.equal(await page.evaluate(key => JSON.parse(localStorage.getItem(key)).values.hideShorts, KEY), true);
+  assert.equal(await page.evaluate(key => JSON.parse(localStorage.getItem(key)).values.menuShowDownload, KEY), false);
+  assert.equal(await page.evaluate(key => localStorage.getItem(key), ageKey), ageRecord);
+});
+
 test("settings disabling mirror, theatre and miniplayer apply after reload without removing safeguards", async t => {
   const page = await openFixture(t, { mirrorButton: false, theatreMode: false, miniplayerEnabled: false });
   assert.equal(await page.locator("#ytppl-video-mirror-button").count(), 0);
@@ -609,6 +1091,12 @@ test("production panel and picker fit a narrow app window without horizontal con
   const box = await page.locator("#ytms-settings-dialog").boundingBox();
   assert.ok(box && box.x >= 0 && box.y >= 0 && box.x + box.width <= 375 && box.y + box.height <= 720);
   assert.equal(await page.locator("#ytms-settings-dialog .content").evaluate(el => el.scrollWidth <= el.clientWidth), true);
+  const footer = page.locator('#ytms-settings-dialog footer');
+  assert.equal(await footer.evaluate(el => el.scrollWidth <= el.clientWidth), true);
+  for (const id of ['restore-section-defaults', 'restore-defaults', 'cancel-panel', 'save-preview']) {
+    const buttonBounds = await page.locator(`#ytms-${id}`).boundingBox();
+    assert.ok(buttonBounds.x >= box.x && buttonBounds.y >= box.y && buttonBounds.x + buttonBounds.width <= box.x + box.width && buttonBounds.y + buttonBounds.height <= box.y + box.height);
+  }
 });
 
 test("layout switches restore native related, chat, info-card and end-screen surfaces", async t => {
@@ -649,7 +1137,7 @@ test("repeated opens and native navigation events retain one button and one lazi
   });
   assert.equal(await page.locator('#ytms-settings-button').count(), 1);
   assert.equal(await page.locator('#ytms-settings-dialog').count(), 1);
-  assert.equal(await page.locator('#ytms-settings-dialog [role="tab"]').count(), 8);
+  assert.equal(await page.locator('#ytms-settings-dialog [role="tab"]').count(), 9);
   assert.equal(await page.evaluate(key => localStorage.getItem(key), KEY), null);
 });
 

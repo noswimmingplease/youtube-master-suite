@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         YouTube Feed UI Cleaner
 // @namespace    Citizen.youtube.feed-ui-cleaner
-// @version      2.7
+// @version      2.10
 // @description  Removes unwanted YouTube UI and filtered feed cards, reconciles recycled renderers, and offers a temporary non-ad reveal control.
 // @author       Citizen
 // @homepageURL  https://github.com/noswimmingplease/youtube-feed-ui-cleaner
@@ -29,6 +29,9 @@
     },
     showTemporaryRevealControl: true,
   };
+
+  // Standalone module installs have no shared age service and fail open.
+  const channelAge = typeof suite !== 'undefined' ? suite.channelAge : null;
 
   const STATIC_HIDE_SELECTORS = [
     'ytd-guide-section-renderer.ytd-guide-renderer.style-scope:nth-of-type(2)',
@@ -184,7 +187,19 @@
     );
   }
 
+  function isChannelAgeFeedRoute() {
+    return location.pathname === '/' || location.pathname === '/feed/recommended' ||
+      location.pathname === '/feed/subscriptions' || location.pathname === '/results' ||
+      /^\/(?:channel\/UC[A-Za-z0-9_-]{22}|@[^/]+|c\/[^/]+|user\/[^/]+)(?:\/(?:videos|streams|featured))?\/?$/.test(location.pathname);
+  }
+
   const CARD_FILTERS = [
+    {
+      key: 'channelAge',
+      reason: 'Channel age',
+      selector: `${OUTER_CONTAINER_SELECTORS},${INNER_CONTAINER_SELECTORS}`,
+      matches: (el) => channelAge && isChannelAgeFeedRoute() && channelAge.cardFilterReason(getCardContainer(el)),
+    },
     {
       key: 'mixes',
       reason: 'Mix',
@@ -217,6 +232,13 @@
     PODCAST_LINK_SELECTOR,
     `[${HIDDEN_FLAG}]`,
     `[${PERMANENT_HIDDEN_FLAG}]`,
+  ].join(',');
+  const AGE_MUTATION_TRIGGER_SELECTOR = [
+    '#metadata-line',
+    '#metadata',
+    '.yt-content-metadata-view-model__metadata-text',
+    '.ytContentMetadataViewModelMetadataText',
+    'time[datetime]',
   ].join(',');
 
   function buildHideCss(selectors) {
@@ -303,7 +325,9 @@
   }
 
   function addContainerMatch(matchesByContainer, el, filter) {
-    if (isInsideExcludedSurface(el) || !filter.matches(el)) return;
+    if (isInsideExcludedSurface(el)) return;
+    const match = filter.matches(el);
+    if (!match) return;
 
     const container = getCardContainer(el);
     if (!container || isInsideExcludedSurface(container)) return;
@@ -313,7 +337,7 @@
       reasons: new Set(),
     };
     current.permanent ||= Boolean(filter.permanent);
-    current.reasons.add(filter.reason);
+    current.reasons.add(typeof match === 'string' ? match : filter.reason);
     matchesByContainer.set(container, current);
   }
 
@@ -337,6 +361,7 @@
 
     CARD_FILTERS.forEach((filter) => {
       if (!filter.permanent && profile[filter.key] === false) return;
+      if (filter.key === 'channelAge' && !channelAge?.hasEnabledRules()) return;
 
       collectMatchingElements(root, filter.selector).forEach((el) =>
         addContainerMatch(matchesByContainer, el, filter),
@@ -555,12 +580,14 @@
 
     if (
       mutation.type === 'attributes' &&
-      mutation.attributeName?.startsWith('data-ytppl-')
+      (mutation.attributeName?.startsWith('data-ytppl-') ||
+        (channelAge?.hasEnabledRules() && ['href', 'datetime', 'overlay-style'].includes(mutation.attributeName)))
     ) {
       return true;
     }
 
-    return Boolean(element.closest(FILTER_MUTATION_TRIGGER_SELECTOR));
+    return Boolean(element.closest(FILTER_MUTATION_TRIGGER_SELECTOR) ||
+      (channelAge?.hasEnabledRules() && element.closest(AGE_MUTATION_TRIGGER_SELECTOR)));
   }
 
   GM_addStyle(buildCss());
@@ -590,6 +617,8 @@
   const OBSERVER_OPTIONS = {
     attributeFilter: [
       'href',
+      'datetime',
+      'overlay-style',
       'data-ytppl-upcoming-hidden',
       'data-ytppl-pay-to-watch-hidden',
       'data-ytppl-watched-hidden',
@@ -641,6 +670,10 @@
   }, true);
   window.addEventListener('yt-navigate-finish', reconcileRoute, true);
   window.addEventListener('yt-page-data-updated', reconcileRoute, true);
+  window.addEventListener('yt-master-channel-age-changed', () => {
+    channelAge?.read();
+    if (isRuntimeFeedRoute()) scheduleCleanUp(document);
+  });
   window.addEventListener('pagehide', () => {
     stopMutationObservation();
     resetScheduledWork();
