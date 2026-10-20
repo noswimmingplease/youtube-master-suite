@@ -160,13 +160,22 @@ test('a long preroll consumes no retries; content metadata applies the preferenc
 test('queue navigation cancels previous-video retries and applies only to the coherent destination', async t => {
   const page = await openFixture(t, { preferredVideoQuality: 'hd1080' }, 'ignored=1');
   await page.waitForFunction(() => qualityFixture.calls.length > 0);
-  const initial = await page.evaluate(() => qualityFixture.calls.length);
-  await page.evaluate(() => { qualityFixture.confirm = true; });
+  await page.evaluate(() => {
+    window.addEventListener('yt-navigate-start', () => {
+      // Retries before the trusted click are valid, even on a slow CI runner.
+      // Record the actual navigation boundary, not an earlier protocol call.
+      qualityFixture.beforeNavigation = qualityFixture.calls.map(call => ({ ...call }));
+      qualityFixture.confirm = true;
+    }, { once: true, capture: true });
+  });
+  await page.waitForFunction(() => qualityFixture.calls.length >= 2);
   await page.locator('#next-video').click();
   await page.waitForFunction(() => qualityFixture.quality === 'hd1080');
   await page.waitForTimeout(500);
-  const calls = await page.evaluate(() => qualityFixture.calls);
-  assert.equal(calls.filter(call => call.videoId === 'aaaaaaaaaaa').length, initial);
+  const { calls, beforeNavigation } = await page.evaluate(() => qualityFixture);
+  assert.ok(beforeNavigation.length >= 2);
+  assert.ok(beforeNavigation.every(call => call.videoId === 'aaaaaaaaaaa'));
+  assert.deepEqual(calls.filter(call => call.videoId === 'aaaaaaaaaaa'), beforeNavigation);
   assert.deepEqual(calls.filter(call => call.videoId === 'bbbbbbbbbbb'), [{ videoId: 'bbbbbbbbbbb', min: 'hd1080', max: 'hd1080' }]);
   assert.equal(await page.locator('h1').textContent(), 'Video B');
   assert.equal(await page.locator('.comment-message').textContent(), 'Comment for Video B');
