@@ -77,13 +77,123 @@ test('older-video filter manager starts empty, is theme-aware and makes no persi
   }
 });
 
+test('Add filter collapses a staged rule and Edit filter restores its values without saving', async t => {
+  const page = await openFixture(t);
+  assert.equal(await page.locator('#ytms-age-add').textContent(), 'Add another channel');
+  await addRule(page, FIRST, '3', 'months', 'Daily news');
+  assert.equal(await page.getByRole('button', { name: 'Remove filter for Daily news', exact: true }).textContent(), 'Remove filter');
+  assert.equal(await page.locator('.ytms-age-rule h3').textContent(), 'Daily news');
+  await field(page, 'Enabled').uncheck();
+  await page.getByRole('button', { name: 'Add filter', exact: true }).click();
+  const card = page.locator('.ytms-age-rule').first();
+  assert.equal(await card.locator('.ytms-age-fields').isVisible(), false);
+  assert.equal(await card.locator('.ytms-age-summary').isVisible(), true);
+  assert.match(await card.locator('.ytms-age-summary').textContent(), /Maximum upload age: 3 months/);
+  assert.match(await card.locator('.ytms-age-summary').textContent(), /Status: Disabled/);
+  assert.equal(await page.evaluate(key => localStorage.getItem(key), KEY), null);
+  assert.equal(await page.evaluate(() => ageChanged), 0);
+  assert.match(await page.locator('#ytms-age-status').textContent(), /added to this draft/);
+  const edit = page.getByRole('button', { name: 'Edit filter for Daily news', exact: true });
+  assert.equal(await edit.getAttribute('aria-expanded'), 'false');
+  assert.equal(await edit.evaluate(node => node === document.activeElement), true);
+  await edit.click();
+  assert.equal(await field(page, 'Channel name').inputValue(), 'Daily news');
+  assert.equal(await field(page, 'Channel ID or channel URL').inputValue(), FIRST);
+  assert.equal(await field(page, 'Maximum age').inputValue(), '3');
+  assert.equal(await field(page, 'Unit').inputValue(), 'months');
+  assert.equal(await field(page, 'Enabled').isChecked(), false);
+  assert.equal(await page.getByRole('button', { name: 'Update filter', exact: true }).isVisible(), true);
+  assert.equal(await field(page, 'Channel ID or channel URL').evaluate(node => node === document.activeElement), true);
+  await field(page, 'Maximum age').fill('4');
+  await page.getByRole('button', { name: 'Update filter', exact: true }).click();
+  assert.match(await card.locator('.ytms-age-summary').textContent(), /Maximum upload age: 4 months/);
+  await page.locator('#ytms-age-cancel').click();
+  await page.locator('#open').click();
+  assert.equal(await page.locator('.ytms-age-rule').count(), 0);
+});
+
+test('Add another channel collapses the previous editor and keeps one editable channel visible', async t => {
+  const page = await openFixture(t);
+  await addRule(page, FIRST, '2', 'weeks');
+  await addRule(page, SECOND, '1', 'years', 'Documentaries');
+  assert.equal(await page.locator('.ytms-age-fields:visible').count(), 1);
+  assert.equal(await page.locator('.ytms-age-rule').first().locator('.ytms-age-summary').isVisible(), true);
+  assert.equal(await page.locator('.ytms-age-rule').nth(1).locator('.ytms-age-fields').isVisible(), true);
+  await page.getByRole('button', { name: 'Edit filter for Daily news', exact: true }).click();
+  assert.equal(await page.locator('.ytms-age-fields:visible').count(), 1);
+  assert.equal(await field(page, 'Maximum age').inputValue(), '2');
+  assert.equal(await field(page, 'Maximum age', 1).inputValue(), '1');
+  assert.equal(await page.locator('.ytms-age-rule').nth(1).locator('.ytms-age-summary').isVisible(), true);
+  assert.equal(await page.evaluate(key => localStorage.getItem(key), KEY), null);
+});
+
+test('adding another channel refuses invalid drafts and saving reopens an invalid collapsed editor', async t => {
+  const page = await openFixture(t);
+  await addRule(page, FIRST);
+  await field(page, 'Channel ID or channel URL').fill('@not-a-channel-id');
+  await page.locator('#ytms-age-add').click();
+  assert.equal(await page.locator('.ytms-age-rule').count(), 1);
+  assert.equal(await page.locator('#ytms-age-dialog').isVisible(), true);
+  assert.equal(await field(page, 'Channel ID or channel URL').evaluate(node => node === document.activeElement), true);
+  assert.match(await page.locator('#ytms-age-status').textContent(), /Rule 1/);
+  await field(page, 'Channel ID or channel URL').fill(FIRST);
+  await addRule(page, SECOND, '1', 'years', 'Documentaries');
+  // A hidden control still cannot bypass final draft validation.
+  await field(page, 'Maximum age').evaluate(node => {
+    node.value = '0'; node.dispatchEvent(new Event('input', { bubbles: true }));
+  });
+  assert.equal(await page.locator('.ytms-age-rule').first().locator('.ytms-age-fields').isVisible(), false);
+  await page.locator('#ytms-age-save').click();
+  assert.equal(await page.locator('#ytms-age-dialog').isVisible(), true);
+  assert.equal(await page.locator('.ytms-age-rule').first().locator('.ytms-age-fields').isVisible(), true);
+  assert.equal(await page.locator('.ytms-age-fields:visible').count(), 1);
+  assert.match(await page.locator('#ytms-age-status').textContent(), /Rule 1/);
+  assert.equal(await page.evaluate(key => localStorage.getItem(key), KEY), null);
+  assert.equal(await page.evaluate(() => ageChanged), 0);
+});
+
+test('channel filter buttons are bordered and Save filters has white text on accessible red in both themes', async t => {
+  const page = await openFixture(t);
+  await addRule(page);
+  const dialog = page.locator('#ytms-age-dialog');
+  const save = page.locator('#ytms-age-save');
+  for (const dark of [true, false]) {
+    await page.evaluate(dark => document.documentElement.toggleAttribute('dark', dark), dark);
+    assert.equal(await save.evaluate(node => getComputedStyle(node).backgroundColor), 'rgb(204, 0, 0)');
+    assert.equal(await save.evaluate(node => getComputedStyle(node).color), 'rgb(255, 255, 255)');
+    const contrast = await save.evaluate(node => {
+      const luminance = colour => colour.match(/[\d.]+/g).slice(0, 3).map(Number).map(value => {
+        const channel = value / 255;
+        return channel <= .04045 ? channel / 12.92 : ((channel + .055) / 1.055) ** 2.4;
+      }).reduce((sum, channel, index) => sum + channel * [.2126, .7152, .0722][index], 0);
+      const style = getComputedStyle(node), foreground = luminance(style.color), background = luminance(style.backgroundColor);
+      return (Math.max(foreground, background) + .05) / (Math.min(foreground, background) + .05);
+    });
+    assert.ok(contrast >= 4.5, `Save filters text contrast: ${contrast}`);
+    for (const action of [page.locator('#ytms-age-add'), page.getByRole('button', { name: 'Add filter', exact: true }),
+      page.getByRole('button', { name: 'Remove filter for Daily news', exact: true })]) {
+      assert.equal(await action.evaluate(node => getComputedStyle(node).borderTopStyle), 'solid');
+      assert.equal(await action.evaluate(node => getComputedStyle(node).borderTopWidth), '1px');
+    }
+    assert.equal(await page.locator('.ytms-age-rule').evaluate(node => getComputedStyle(node).borderBottomStyle), 'solid');
+    assert.equal(await page.locator('.ytms-age-rule').evaluate(node => getComputedStyle(node).borderBottomWidth), '1px');
+  }
+  for (const width of [360, 320]) {
+    await page.setViewportSize({ width, height: 600 });
+    for (const target of [dialog, dialog.locator('.ytms-age-content'), dialog.locator('.ytms-age-actions'), dialog.locator('footer')]) {
+      assert.equal(await target.evaluate(node => node.scrollWidth <= node.clientWidth), true);
+    }
+    assert.equal(await page.getByRole('button', { name: 'Remove filter for Daily news', exact: true }).textContent(), 'Remove filter');
+  }
+});
+
 test('channel rules save distinct age units and enabled state without changing main preferences or navigation', async t => {
   const page = await openFixture(t);
   await addRule(page, `https://www.youtube.com/channel/${FIRST}`, '2', 'weeks');
   await addRule(page, SECOND, '1', 'years', 'Documentaries');
   await field(page, 'Enabled', 1).uncheck();
   await page.locator('#ytms-age-save').click();
-  assert.equal(await page.locator('#ytms-age-status').textContent(), 'Saved. Channel upload filters now apply; no reload is needed.');
+  assert.equal(await page.locator('#ytms-age-dialog').isVisible(), false);
   assert.deepEqual(await page.evaluate(() => ageService.getRules()), [
     { channelId: FIRST, name: 'Daily news', maxAge: 2, unit: 'weeks', enabled: true, blocked: false },
     { channelId: SECOND, name: 'Documentaries', maxAge: 1, unit: 'years', enabled: false, blocked: false },
@@ -100,7 +210,7 @@ test('Cancel and Escape discard row edits and removals rather than saving drafts
   await page.locator('#ytms-age-cancel').click();
   await page.locator('#open').click();
   assert.equal(await field(page, 'Maximum age').inputValue(), '1');
-  await page.getByRole('button', { name: 'Remove News', exact: true }).click();
+  await page.getByRole('button', { name: 'Remove filter for News', exact: true }).click();
   await page.keyboard.press('Escape');
   await page.locator('#open').click();
   assert.equal(await page.locator('.ytms-age-rule').count(), 1);
@@ -137,6 +247,8 @@ test('storage failure preserves the active rules and emits no age-change notific
   await page.evaluate(() => Object.defineProperty(window, 'localStorage', { configurable: true, get() { throw new Error('Unavailable'); } }));
   await page.locator('#ytms-age-save').click();
   assert.ok((await page.locator('#ytms-age-status').textContent()).includes('could not be saved'));
+  assert.equal(await page.locator('#ytms-age-dialog').isVisible(), true);
+  assert.equal(await field(page, 'Maximum age').inputValue(), '2');
   assert.deepEqual(await page.evaluate(() => ageService.getRules()), [original]);
   assert.equal(await page.evaluate(() => ageChanged), 0);
 });
@@ -151,7 +263,7 @@ test('menu opener selects an existing channel or drafts a new one without HTML p
   assert.equal(await page.locator('#ytms-age-dialog img').count(), 0);
   assert.equal(await page.evaluate(key => localStorage.getItem(key), KEY), null);
   await page.locator('#ytms-age-save').click();
-  await page.locator('#ytms-age-cancel').click();
+  assert.equal(await page.locator('#ytms-age-dialog').isVisible(), false);
   await page.locator('#open').click();
   assert.equal(await page.locator('.ytms-age-rule').count(), 1);
   assert.equal(await field(page, 'Channel ID or channel URL').evaluate(node => node === document.activeElement), true);
@@ -186,7 +298,7 @@ test('integrated Feed manager does not save unrelated draft changes and menu ord
   await addRule(page);
   await page.locator('#ytms-age-save').click();
   assert.equal(await page.evaluate(key => localStorage.getItem(key), SETTINGS_KEY), null);
-  await page.locator('#ytms-age-cancel').click();
+  assert.equal(await page.locator('#ytms-age-dialog').isVisible(), false);
   assert.equal(await page.locator('#ytms-hideShorts').isChecked(), false);
   await page.getByRole('tab', { name: 'Interface', exact: true }).click();
   await page.locator('#ytms-video-menu-settings > summary').click();
@@ -241,7 +353,7 @@ test('Hide this channel keeps the age selection but disables it and persists onl
   assert.deepEqual(await page.evaluate(() => ageService.getRules()), [
     { channelId: FIRST, name: 'Daily news', maxAge: 3, unit: 'months', enabled: true, blocked: true },
   ]);
-  await page.locator('#ytms-age-cancel').click();
+  assert.equal(await page.locator('#ytms-age-dialog').isVisible(), false);
   await page.locator('#open').click();
   assert.equal(await field(page, 'Hide this channel — all uploads').isChecked(), true);
   await field(page, 'Hide this channel — all uploads').uncheck();
@@ -263,6 +375,12 @@ test('Channels lists only Suite-saved filters and Edit or Remove require explici
   await page.getByRole('tab', { name: 'Channels', exact: true }).click();
   const list = page.locator('#ytms-channel-filter-list');
   assert.equal(await list.getByRole('listitem').count(), 2);
+  assert.equal(await page.locator('#ytms-manage-channel-age').textContent(), 'Manage filters');
+  assert.deepEqual(await list.getByRole('listitem').first().locator('button').allTextContents(), ['Edit filter', 'Remove filter']);
+  for (const action of [page.locator('#ytms-manage-channel-age'), ...await list.locator('button').all()]) {
+    assert.equal(await action.evaluate(node => getComputedStyle(node).borderTopStyle), 'solid');
+    assert.equal(await action.evaluate(node => getComputedStyle(node).borderTopWidth), '1px');
+  }
   assert.deepEqual(await list.locator('h3').allTextContents(), ['Daily news', 'Documentaries']);
   assert.deepEqual(await list.locator('.channel-filter-id').allTextContents(), [FIRST, SECOND]);
   assert.equal(await list.getByRole('listitem').first().getByText('Maximum upload age: 2 weeks', { exact: true }).count(), 1);
@@ -277,7 +395,7 @@ test('Channels lists only Suite-saved filters and Edit or Remove require explici
   await field(page, 'Hide this channel — all uploads').first().uncheck();
   await field(page, 'Maximum age').first().fill('3');
   await page.locator('#ytms-age-save').click();
-  await page.locator('#ytms-age-cancel').click();
+  assert.equal(await page.locator('#ytms-age-dialog').isVisible(), false);
   assert.match(await list.getByRole('listitem').first().textContent(), /Maximum upload age: 3 weeks/);
   await page.getByRole('button', { name: 'Remove filter for Documentaries', exact: true }).click();
   assert.match(await page.locator('#ytms-age-status').textContent(), /removed from this draft/);
@@ -287,7 +405,7 @@ test('Channels lists only Suite-saved filters and Edit or Remove require explici
   assert.equal(await list.getByRole('listitem').count(), 2);
   await page.getByRole('button', { name: 'Remove filter for Documentaries', exact: true }).click();
   await page.locator('#ytms-age-save').click();
-  await page.locator('#ytms-age-cancel').click();
+  assert.equal(await page.locator('#ytms-age-dialog').isVisible(), false);
   assert.equal(await list.getByRole('listitem').count(), 1);
   assert.equal(await page.evaluate(key => JSON.parse(localStorage.getItem(key)).rules.length, KEY), 1);
   await page.setViewportSize({ width: 360, height: 600 });
@@ -305,6 +423,7 @@ test('an open channel editor preserves its draft and rejects a newer save from a
   await other.locator('#ytms-age-save').click();
   await page.locator('#ytms-age-save').click();
   assert.match(await page.locator('#ytms-age-status').textContent(), /changed in another window/);
+  assert.equal(await page.locator('#ytms-age-dialog').isVisible(), true);
   assert.equal(await field(page, 'Maximum age').inputValue(), '2');
   assert.equal(await page.evaluate(key => JSON.parse(localStorage.getItem(key)).rules[0].maxAge, KEY), 3);
   assert.equal(await page.evaluate(() => ageChanged), 0);

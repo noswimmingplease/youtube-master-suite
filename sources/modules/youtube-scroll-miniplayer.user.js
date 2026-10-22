@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         YouTube Scroll Miniplayer
 // @namespace    Citizen.youtube.scroll-miniplayer
-// @version      5.25
+// @version      5.27
 // @description  Floats the active YouTube player with compact queue context, YouTube-style controls, and synchronised corner selection across open windows.
 // @author       Citizen
 // @homepageURL  https://github.com/noswimmingplease/youtube-scroll-miniplayer
@@ -1915,7 +1915,27 @@
     });
   }
 
+  function isSuiteDialogContentMutation(mutation) {
+    if (mutation.type !== "childList") return false;
+    const target = mutation.target?.closest ? mutation.target : mutation.target?.parentElement;
+    const dialog = target?.closest?.("dialog");
+    const topology = "#movie_player, .html5-video-player, ytd-watch-flexy, #ytsmp-player-placeholder, .ytp-right-controls";
+    if (
+      typeof HTMLDialogElement !== "function" || !(dialog instanceof HTMLDialogElement) ||
+      !dialog.isConnected || dialog.parentElement !== document.body ||
+      !["ytms-settings-dialog", "ytms-age-dialog"].includes(dialog.id) ||
+      target.closest(topology)
+    ) return false;
+
+    return [...mutation.addedNodes, ...mutation.removedNodes].every((node) =>
+      !node.matches?.(topology) && !node.querySelector?.(topology),
+    );
+  }
+
   const mutationObserver = new MutationObserver((mutations) => {
+    // Ignore only internal edits to the two body-mounted Suite dialogues.
+    // Real player detach/adoption, dialogue mounting and mixed batches still reconcile.
+    if (mutations.length && mutations.every(isSuiteDialogContentMutation)) return;
     if (reconcileTrackedPlayer()) {
       scheduleRouteSync();
     }

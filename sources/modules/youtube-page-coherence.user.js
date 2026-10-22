@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         YouTube Page Coherence Guard
 // @namespace    Citizen.youtube.page-coherence
-// @version      1.13
+// @version      1.14
 // @description  Detects incomplete YouTube queue navigation, publishes identity diagnostics, and rechecks restored foreground pages without hiding native page content.
 // @author       Citizen
 // @license      GNU GPLv3
@@ -142,12 +142,12 @@
     );
   };
 
-  const getPlayerData = () => readPlayerData(getActivePlayer());
+  const getPlayerData = (player = getActivePlayer()) => readPlayerData(player);
 
   const isRenderedWatchFlexy = (flexy) => isRenderedElement(flexy);
 
-  const getActiveWatchFlexy = () => {
-    const playerFlexy = getActivePlayer()?.closest?.("ytd-watch-flexy");
+  const getActiveWatchFlexy = (player = getActivePlayer()) => {
+    const playerFlexy = player?.closest?.("ytd-watch-flexy");
     if (isRenderedWatchFlexy(playerFlexy)) return playerFlexy;
 
     const placeholderFlexy = document
@@ -345,11 +345,12 @@
     );
 
   const buildSnapshot = () => {
-    const playerData = getPlayerData();
+    const player = getActivePlayer();
+    const playerData = getPlayerData(player);
     const queue = getQueueState();
     const urlVideoId = getVideoIdFromUrl(location.href);
     const playerVideoId = playerData.video_id || "";
-    const activeFlexy = getActiveWatchFlexy();
+    const activeFlexy = getActiveWatchFlexy(player);
     const comments = activeFlexy?.querySelector("ytd-comments");
     const commentVideoIds = getCommentVideoIds(comments);
     const flexyIdentity = getFlexyVideoIdentity(

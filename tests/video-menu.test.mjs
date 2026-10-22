@@ -30,3 +30,21 @@ test('menu setup performs no native command, queue operation, DOM scan or period
   });
   assert.doesNotThrow(() => vm.runInContext(`(${installVideoMenu.toString()})(suite)()`, context));
 });
+
+test('menu compatibility starts unchecked rather than claiming initialisation verifies a native menu', () => {
+  const attributes = new Map();
+  const noOp = () => {};
+  const dispose = vm.runInNewContext(`(${installVideoMenu.toString()})(suite)`, {
+    document: { documentElement: {
+      getAttribute: name => attributes.get(name) ?? null,
+      setAttribute: (name, value) => attributes.set(name, value),
+    }, addEventListener: noOp, removeEventListener: noOp },
+    window: { addEventListener: noOp, removeEventListener: noOp },
+    suite: { settings: { initial: {} } },
+  });
+  assert.equal(attributes.get('data-ytms-video-menu-status'), 'idle');
+  assert.equal(attributes.get('data-ytms-video-menu-compatibility'), 'not-checked');
+  dispose();
+  assert.equal(attributes.get('data-ytms-video-menu-status'), 'disposed');
+  assert.equal(attributes.get('data-ytms-video-menu-compatibility'), 'not-checked');
+});

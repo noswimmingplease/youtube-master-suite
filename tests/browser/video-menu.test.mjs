@@ -148,6 +148,98 @@ async function visibleIds(page) {
     .map(row => row.dataset.nativeId || row.dataset.ytmsMenuAction));
 }
 
+test('compatibility distinguishes an unchecked page, a non-video menu and a recognised video menu', async t => {
+  const page = await open(t, { sheet: true });
+  assert.equal(await page.locator('html').getAttribute('data-ytms-video-menu-compatibility'), 'not-checked');
+  await page.evaluate(() => menuFixture.open());
+  assert.equal(await page.locator('html').getAttribute('data-ytms-video-menu-compatibility'), 'not-applicable');
+  assert.equal(await page.locator('[data-ytms-video-menu]').count(), 0);
+  await page.evaluate(() => menuFixture.dropdown.close());
+  await show(page);
+  assert.equal(await page.locator('html').getAttribute('data-ytms-video-menu-compatibility'), 'recognised');
+  await page.evaluate(() => window.dispatchEvent(new Event('yt-navigate-start')));
+  assert.equal(await page.locator('html').getAttribute('data-ytms-video-menu-compatibility'), 'not-checked');
+});
+
+test('compatibility waits only for an actual trusted menu attempt and reports no menu after its bounded deadline', async t => {
+  const page = await open(t, { sheet: true });
+  await page.evaluate(() => document.getElementById('trigger').removeEventListener('click', menuFixture.open));
+  await page.locator('#trigger').click();
+  assert.equal(await page.locator('html').getAttribute('data-ytms-video-menu-compatibility'), 'awaiting-menu');
+  await page.waitForFunction(() => document.documentElement.getAttribute('data-ytms-video-menu-compatibility') === 'no-menu');
+  assert.equal(await page.locator('[data-ytms-video-menu]').count(), 0);
+  await page.evaluate(() => menuFixture.open());
+  assert.equal(await page.locator('[data-ytms-video-menu]').count(), 0, 'A late native event must not restart an expired attempt');
+  assert.equal(await page.locator('html').getAttribute('data-ytms-video-menu-compatibility'), 'unsupported');
+});
+
+test('a partially stamped menu reports loading then recognised without periodic polling', async t => {
+  const page = await open(t, { sheet: true });
+  await page.evaluate(() => {
+    const button = document.getElementById('trigger');
+    button.removeEventListener('click', menuFixture.open);
+    button.addEventListener('click', () => {
+      menuFixture.dropdown.hidden = false;
+      menuFixture.popup.dispatchEvent(new CustomEvent('yt-popup-opened', { bubbles: true }));
+    });
+  });
+  await page.locator('#trigger').click();
+  await page.waitForFunction(() => document.documentElement.getAttribute('data-ytms-video-menu-compatibility') === 'loading-menu');
+  assert.equal(await page.locator('[data-ytms-video-menu]').count(), 0);
+  await page.evaluate(() => menuFixture.open());
+  await page.locator('[data-ytms-video-menu="1"]').waitFor();
+  assert.equal(await page.locator('html').getAttribute('data-ytms-video-menu-compatibility'), 'recognised');
+});
+
+test('a changed video-menu trigger wrapper reports unsupported rather than claiming the menu is not applicable', async t => {
+  const page = await open(t, { sheet: true, modernTrigger: true });
+  await page.evaluate(() => { document.querySelector('.ytLockupMetadataViewModelMenuButton').className = 'futureVideoMenuButton'; });
+  await page.locator('#trigger').click();
+  assert.equal(await page.locator('html').getAttribute('data-ytms-video-menu-compatibility'), 'unsupported');
+  assert.equal(await page.locator('[data-ytms-menu-action]').count(), 0);
+  assert.equal(await page.getByRole('menuitem', { name: 'Download', exact: true }).isVisible(), true);
+});
+
+for (const sheet of [false, true]) {
+  test(`unsupported ${sheet ? 'current' : 'legacy'} menu models remain entirely native and report compatibility failure`, async t => {
+    const page = await open(t, { sheet });
+    await page.evaluate(sheet => {
+      const native = sheet ? menuFixture.popup.componentProps.data() : menuFixture.popup.polymerController.data;
+      const future = sheet ? { content: { futureListViewModel: native.content.listViewModel } } : { futureItems: native.items };
+      if (sheet) menuFixture.popup.componentProps = { data: () => future };
+      else menuFixture.popup.polymerController.data = future;
+    }, sheet);
+    await page.locator('#trigger').click();
+    await page.waitForFunction(() => document.documentElement.getAttribute('data-ytms-video-menu-compatibility') === 'unsupported');
+    assert.equal(await page.locator('[data-ytms-video-menu]').count(), 0);
+    assert.equal(await page.locator('[data-ytms-menu-action]').count(), 0);
+    assert.equal(await page.getByRole('menuitem', { name: 'Download', exact: true }).isVisible(), true);
+    assert.deepEqual(await page.evaluate(() => menuFixture.nativeCalls), []);
+    await page.getByRole('menuitem', { name: 'Share', exact: true }).click();
+    assert.deepEqual(await page.evaluate(() => menuFixture.nativeCalls), ['share']);
+  });
+
+  test(`partly recognised ${sheet ? 'current' : 'legacy'} model wrappers fail open instead of decorating only the known actions`, async t => {
+    const page = await open(t, { sheet, bindingFault: 'unknown-model' });
+    await page.locator('#trigger').click();
+    await page.waitForFunction(() => document.documentElement.getAttribute('data-ytms-video-menu-compatibility') === 'unsupported');
+    assert.equal(await page.locator('[data-ytms-menu-action]').count(), 0);
+    assert.equal(await page.getByRole('menuitem', { name: 'Download', exact: true }).isVisible(), true);
+    assert.deepEqual(await page.evaluate(() => menuFixture.originals.map(row => row.style.display)), Array(9).fill(''));
+    assert.deepEqual(await page.evaluate(() => menuFixture.nativeCalls), []);
+  });
+
+  test(`an unknown action within a recognised ${sheet ? 'current' : 'legacy'} layout retains its native handler`, async t => {
+    const page = await open(t, { sheet, unknown: true });
+    const before = await page.evaluate(() => JSON.stringify(menuFixture.items));
+    await show(page);
+    assert.equal(await page.locator('html').getAttribute('data-ytms-video-menu-compatibility'), 'recognised');
+    assert.equal(await page.evaluate(() => JSON.stringify(menuFixture.items)), before);
+    await page.getByRole('menuitem', { name: 'Unrecognised native action', exact: true }).click();
+    assert.deepEqual(await page.evaluate(() => menuFixture.nativeCalls), ['unrecognised']);
+  });
+}
+
 for (const [surface, cardTag, containerTag, route] of [
   ['History', 'yt-lockup-view-model', null, '/feed/history'],
   ['playlist videos', 'ytd-playlist-video-renderer', 'ytd-playlist-video-list-renderer', '/playlist?list=WL'],

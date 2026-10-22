@@ -32,7 +32,7 @@ async function open(t, options = {}) {
   });
   await page.goto(`https://www.youtube.com/watch?v=${A}`);
   if (options.suite) await waitForSuiteHealth(page, MANIFEST.registeredModules, { timeoutMs: 10000, requireReady: true });
-  await page.evaluate(({ ids, current, delay, unsupported, nativeNext, listId, sheet }) => {
+  await page.evaluate(({ ids, current, delay, unsupported, nativeNext, listId, sheet, homeMiniplayer, homePath, collapsed, stampDelay }) => {
     const f = window.queueFixture = { adds: [], moves: [], current, delay, ids: ids || [], seed: ids !== null, nativeItems: null,
       displayWrites: 0, rowWrites: 0, staleSelected: new Set(), staleRows: new Set() };
     fixture.playerId = current;
@@ -181,9 +181,32 @@ async function open(t, options = {}) {
       };
       f.popup = view;
     }
+    if (homeMiniplayer) {
+      const mini = document.createElement('ytd-miniplayer');
+      const player = document.getElementById('movie_player');
+      mini.append(player); document.querySelector('ytd-app').append(mini);
+      player.getPlaylistId = () => null;
+      player.getPlaylist = () => [...f.ids];
+      history.replaceState(null, '', homePath);
+      const bar = document.createElement('ytd-miniplayer-info-bar');
+      const toggle = document.createElement('button'); toggle.textContent = 'Queue';
+      toggle.setAttribute('aria-expanded', String(!collapsed));
+      toggle.onclick = () => {
+        const expand = toggle.getAttribute('aria-expanded') === 'false';
+        toggle.setAttribute('aria-expanded', String(expand));
+        if (!expand) { panel.remove(); return; }
+        f.addsAtExpansion = f.adds.length;
+        setTimeout(() => { mini.append(panel); f.render(); }, stampDelay);
+      };
+      bar.append(toggle); mini.append(bar);
+      if (collapsed) panel.remove(); else mini.append(panel);
+      f.mini = mini; f.queueToggle = toggle;
+      window.dispatchEvent(new Event('yt-navigate-finish'));
+    }
   }, { ids: options.ids === undefined ? [A, B, C] : options.ids, current: options.current || A,
     delay: options.delay || 0, unsupported: Boolean(options.unsupported), nativeNext: Boolean(options.nativeNext),
-    listId: options.listId || "TLPQfixture", sheet: Boolean(options.sheet) });
+    listId: options.listId || "TLPQfixture", sheet: Boolean(options.sheet), homeMiniplayer: Boolean(options.homeMiniplayer),
+    homePath: options.homePath || '/', collapsed: Boolean(options.collapsed), stampDelay: options.stampDelay || 0 });
   if (!options.suite) await page.addScriptTag({ content: `(() => { ${SELECTION_INSTALLER}\n ${INSTALLER}\n installQueuePlayingMarkerReconciliation(); window.disposeQueueNext = installQueuePlayNext(); })();` });
   return page;
 }
@@ -348,6 +371,183 @@ test('a preflight failure does not consume an otherwise reusable menu selection'
   await page.waitForFunction(() => queueFixture.moves.length === 1);
   assert.equal((await snapshot(page)).adds.length, 1);
   assert.deepEqual((await snapshot(page)).ids, [A, D, B, C]);
+});
+
+for (const suite of [false, true]) for (const homePath of ['/', '/results?search_query=fixture']) test(`${homePath === '/' ? 'Home' : 'search'} miniplayer uses its verified native queue when the player reports no playlist ID (${suite ? 'complete Suite' : 'source'})`, async t => {
+  const page = await open(t, { sheet: true, homeMiniplayer: true, homePath, suite });
+  const before = await snapshot(page);
+  await choose(page, D);
+  await page.waitForFunction(() => queueFixture.moves.length === 1);
+  const after = await snapshot(page);
+  assert.deepEqual(after.ids, [A, D, B, C]);
+  assert.equal(after.adds.length, 1);
+  assert.equal(after.playing, before.playing);
+  assert.equal(after.url, before.url);
+  assert.equal(after.title, before.title);
+  assert.equal(after.comments, before.comments);
+});
+
+test('collapsed Home queue is expanded and verified before adding, then moves the video exactly once', async t => {
+  const page = await open(t, { sheet: true, homeMiniplayer: true, collapsed: true, stampDelay: 160 });
+  await choose(page, D);
+  await page.waitForFunction(() => queueFixture.moves.length === 1);
+  assert.equal(await page.evaluate(() => queueFixture.addsAtExpansion), 0);
+  assert.deepEqual((await snapshot(page)).ids, [A, D, B, C]);
+  assert.equal((await snapshot(page)).adds.length, 1);
+});
+
+for (const fault of ['wrong-native-list', 'wrong-order', 'wrong-owner', 'missing-playlist-api', 'duplicate-current']) test(`Home miniplayer fails closed for ${fault} without appending`, async t => {
+  const page = await open(t, { sheet: true, homeMiniplayer: true });
+  await page.evaluate(fault => {
+    const player = document.getElementById('movie_player');
+    if (fault === 'wrong-native-list') player.getPlaylistId = () => 'TLPQother';
+    if (fault === 'wrong-order') player.getPlaylist = () => [...queueFixture.ids].reverse();
+    if (fault === 'wrong-owner') document.querySelector('#secondary').append(document.querySelector('ytd-miniplayer ytd-playlist-panel-renderer'));
+    if (fault === 'missing-playlist-api') delete player.getPlaylist;
+    if (fault === 'duplicate-current') player.getPlaylist = () => [queueFixture.current, ...queueFixture.ids];
+  }, fault);
+  await choose(page, D);
+  assert.match(await page.locator('[data-yt-master-queue-status]').textContent(), /still updating/);
+  assert.equal((await snapshot(page)).adds.length, 0);
+  assert.deepEqual((await snapshot(page)).moves, []);
+});
+
+test('a Home warning followed by a collapsed-queue retry adds and moves only once', async t => {
+  const page = await open(t, { sheet: true, homeMiniplayer: true, stampDelay: 120 });
+  await page.evaluate(() => { queueFixture.owner.canReorder = false; });
+  await choose(page, D);
+  assert.match(await page.locator('[data-yt-master-queue-status]').textContent(), /still updating/);
+  assert.equal((await snapshot(page)).adds.length, 0);
+  await page.evaluate(() => {
+    queueFixture.owner.canReorder = true;
+    queueFixture.queueToggle.click();
+  });
+  await choose(page, D);
+  await page.waitForFunction(() => queueFixture.moves.length === 1);
+  assert.deepEqual((await snapshot(page)).ids, [A, D, B, C]);
+  assert.equal((await snapshot(page)).adds.length, 1);
+  assert.equal(await page.evaluate(() => queueFixture.addsAtExpansion), 0);
+});
+
+for (const hidden of [false, true]) test(`Home miniplayer with a ${hidden ? 'hidden' : 'visible'} native panel refuses an unexpectedly empty player playlist`, async t => {
+  const page = await open(t, { sheet: true, homeMiniplayer: true });
+  await page.evaluate(hidden => {
+    document.getElementById('movie_player').getPlaylist = () => [];
+    if (hidden) document.querySelector('ytd-miniplayer ytd-playlist-panel-renderer').style.display = 'none';
+  }, hidden);
+  await choose(page, D);
+  assert.match(await page.locator('[data-yt-master-queue-status]').textContent(), /still updating/);
+  assert.equal((await snapshot(page)).adds.length, 0);
+  assert.deepEqual((await snapshot(page)).moves, []);
+});
+
+test('a Home miniplayer can move an already queued video without adding it again', async t => {
+  const page = await open(t, { sheet: true, homeMiniplayer: true, collapsed: true, stampDelay: 80 });
+  await choose(page, C);
+  await page.waitForFunction(() => queueFixture.moves.length === 1);
+  assert.deepEqual((await snapshot(page)).ids, [A, C, B]);
+  assert.equal((await snapshot(page)).adds.length, 0);
+});
+
+test('a standalone Home miniplayer can still create a queue', async t => {
+  const page = await open(t, { sheet: true, homeMiniplayer: true, ids: null });
+  await choose(page, D);
+  await page.waitForFunction(() => document.querySelector('[data-yt-master-queue-status]')?.textContent === 'Playing next in queue');
+  assert.deepEqual((await snapshot(page)).ids, [A, D]);
+  assert.equal((await snapshot(page)).adds.length, 1);
+  assert.deepEqual((await snapshot(page)).moves, []);
+});
+
+test('Home queue identification ignores a retained hidden watch-page panel', async t => {
+  const page = await open(t, { sheet: true, homeMiniplayer: true });
+  await page.evaluate(() => {
+    const stale = document.createElement('ytd-playlist-panel-renderer');
+    stale.style.display = 'none';
+    stale.polymerController = { canReorder: false, data: { playlistId: 'TLPQold', contents: [] } };
+    document.querySelector('#secondary').prepend(stale);
+  });
+  await choose(page, D);
+  await page.waitForFunction(() => queueFixture.moves.length === 1);
+  assert.deepEqual((await snapshot(page)).ids, [A, D, B, C]);
+});
+
+for (const cancellation of ['navigation', 'playback', 'playlist']) test(`Home queue preparation is cancelled by ${cancellation} without appending`, async t => {
+  const page = await open(t, { sheet: true, homeMiniplayer: true, collapsed: true, stampDelay: 350 });
+  await choose(page, D);
+  await page.evaluate(cancellation => {
+    if (cancellation === 'navigation') window.dispatchEvent(new Event('yt-navigate-start'));
+    if (cancellation === 'playback') { queueFixture.current = 'bbbbbbbbbbb'; fixture.playerId = queueFixture.current; }
+    if (cancellation === 'playlist') queueFixture.ids.reverse();
+    window.dispatchEvent(new Event('yt-playlist-data-updated'));
+  }, cancellation);
+  await page.waitForTimeout(500);
+  assert.equal((await snapshot(page)).adds.length, 0);
+  assert.deepEqual((await snapshot(page)).moves, []);
+});
+
+test('Home queue preparation times out without adding and allows a later clean retry', async t => {
+  const page = await open(t, { sheet: true, homeMiniplayer: true, collapsed: true, stampDelay: 2300 });
+  await choose(page, D);
+  await page.waitForFunction(() => document.querySelector('[data-yt-master-queue-status]')?.textContent.includes('Nothing was added'), null, { timeout: 3000 });
+  assert.equal((await snapshot(page)).adds.length, 0);
+  await page.waitForFunction(() => queueFixture.mini.querySelector('ytd-playlist-panel-renderer'));
+  await choose(page, D);
+  await page.waitForFunction(() => queueFixture.moves.length === 1);
+  assert.equal((await snapshot(page)).adds.length, 1);
+  assert.deepEqual((await snapshot(page)).ids, [A, D, B, C]);
+});
+
+test('Home preparation does not use unrelated player expand controls or append without a native queue header', async t => {
+  const page = await open(t, { sheet: true, homeMiniplayer: true, collapsed: true });
+  await page.evaluate(() => {
+    queueFixture.queueToggle.remove();
+    const unrelated = document.createElement('button'); unrelated.setAttribute('aria-expanded', 'false');
+    unrelated.onclick = () => { queueFixture.unrelatedClicked = true; };
+    document.getElementById('movie_player').append(unrelated);
+  });
+  await choose(page, D);
+  assert.match(await page.locator('[data-yt-master-queue-status]').textContent(), /Open the miniplayer queue/);
+  assert.equal(await page.evaluate(() => Boolean(queueFixture.unrelatedClicked)), false);
+  assert.equal((await snapshot(page)).adds.length, 0);
+});
+
+test('repeated requests during Home queue preparation cannot send another append', async t => {
+  const page = await open(t, { sheet: true, homeMiniplayer: true, collapsed: true, stampDelay: 250 });
+  await choose(page, D);
+  await choose(page, C);
+  assert.match(await page.locator('[data-yt-master-queue-status]').textContent(), /Please wait/);
+  await page.waitForFunction(() => queueFixture.moves.length === 1);
+  assert.equal((await snapshot(page)).adds.length, 1);
+  assert.deepEqual((await snapshot(page)).ids, [A, D, B, C]);
+});
+
+test('a changed native Home queue ID cancels the move even if the player still reports no ID', async t => {
+  const page = await open(t, { sheet: true, homeMiniplayer: true, delay: 150 });
+  await choose(page, D);
+  await page.evaluate(() => {
+    const render = queueFixture.render;
+    queueFixture.render = () => { render(); queueFixture.owner.data.playlistId = 'TLPQreplacement'; };
+    queueFixture.render();
+  });
+  await page.waitForFunction(() => document.querySelector('[data-yt-master-queue-status]')?.textContent.includes('The queue changed'));
+  await page.waitForTimeout(200);
+  assert.equal((await snapshot(page)).adds.length, 1);
+  assert.deepEqual((await snapshot(page)).moves, []);
+  assert.deepEqual((await snapshot(page)).ids, [A, B, C, D]);
+});
+
+for (const fault of ['unmatched-binding', 'text-node', 'native-drag']) test(`Play next preflights ${fault} before appending`, async t => {
+  const page = await open(t, { sheet: true });
+  await page.evaluate(fault => {
+    const items = document.querySelector('ytd-playlist-panel-renderer #items');
+    if (fault === 'unmatched-binding') items.firstElementChild.data = { videoId: 'aaaaaaaaaaa', playlistSetVideoId: 'wrong' };
+    if (fault === 'text-node') items.prepend(document.createTextNode(' '));
+    if (fault === 'native-drag') queueFixture.owner.ytReorderableController = { native_dragListGroup: { isDragging: () => true } };
+  }, fault);
+  await choose(page, D);
+  assert.match(await page.locator('[data-yt-master-queue-status]').textContent(), /Nothing was added/);
+  assert.equal((await snapshot(page)).adds.length, 0);
+  assert.deepEqual((await snapshot(page)).moves, []);
 });
 
 test('current sheet Add to queue and an existing native Play next remain unchanged', async t => {
@@ -612,13 +812,13 @@ test("rapid repeated requests are explained rather than appended twice", async t
   assert.deepEqual((await snapshot(page)).ids, [A, D, B, C]);
 });
 
-test("an unsupported native reorder ends with one clear bounded failure", { timeout: 16000 }, async t => {
+test("an unsupported native reorder is refused before adding a video", async t => {
   const page = await open(t, { unsupported: true });
   await choose(page, D);
-  await page.waitForFunction(() => document.querySelector('[data-yt-master-queue-status]')?.textContent.includes('could not move'), null, { timeout: 10000 });
-  assert.equal((await snapshot(page)).adds.length, 1);
+  assert.match(await page.locator('[data-yt-master-queue-status]').textContent(), /Nothing was added/);
+  assert.equal((await snapshot(page)).adds.length, 0);
   assert.deepEqual((await snapshot(page)).moves, []);
-  assert.deepEqual((await snapshot(page)).ids, [A, B, C, D]);
+  assert.deepEqual((await snapshot(page)).ids, [A, B, C]);
 });
 
 test("Play next installs no polling, custom queue storage or direct network client", () => {

@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         YouTube Feed UI Cleaner
 // @namespace    Citizen.youtube.feed-ui-cleaner
-// @version      2.10
+// @version      2.13
 // @description  Removes unwanted YouTube UI and filtered feed cards, reconciles recycled renderers, and offers a temporary non-ad reveal control.
 // @author       Citizen
 // @homepageURL  https://github.com/noswimmingplease/youtube-feed-ui-cleaner
@@ -357,15 +357,23 @@
   function reconcileFilteredCards(root = document) {
     const matchesByContainer = new Map();
     const containers = new Set();
+    let changed = false;
     const profile = getFilterProfile();
 
     CARD_FILTERS.forEach((filter) => {
       if (!filter.permanent && profile[filter.key] === false) return;
       if (filter.key === 'channelAge' && !channelAge?.hasEnabledRules()) return;
+      const ageCheckedContainers = filter.key === 'channelAge' ? new Set() : null;
 
-      collectMatchingElements(root, filter.selector).forEach((el) =>
-        addContainerMatch(matchesByContainer, el, filter),
-      );
+      collectMatchingElements(root, filter.selector).forEach((el) => {
+        if (ageCheckedContainers) {
+          if (isInsideExcludedSurface(el)) return;
+          const container = getCardContainer(el);
+          if (!container || ageCheckedContainers.has(container)) return;
+          ageCheckedContainers.add(container);
+        }
+        addContainerMatch(matchesByContainer, el, filter);
+      });
     });
 
     matchesByContainer.forEach((_match, container) => containers.add(container));
@@ -373,38 +381,34 @@
 
     containers.forEach((container) => {
       const match = matchesByContainer.get(container);
-      if (!match) {
-        container.removeAttribute(HIDDEN_FLAG);
-        container.removeAttribute(HIDDEN_REASON_ATTRIBUTE);
-        container.removeAttribute(PERMANENT_HIDDEN_FLAG);
-        return;
+      const values = [
+        [HIDDEN_FLAG, match && !match.permanent ? '1' : null],
+        [HIDDEN_REASON_ATTRIBUTE, match ? [...match.reasons].sort().join(', ') : null],
+        [PERMANENT_HIDDEN_FLAG, match?.permanent ? '1' : null],
+      ];
+      for (const [attribute, value] of values) {
+        if (container.getAttribute(attribute) === value) continue;
+        if (value === null) container.removeAttribute(attribute);
+        else container.setAttribute(attribute, value);
+        changed = true;
       }
-
-      const reasons = [...match.reasons].sort().join(', ');
-      if (match.permanent) {
-        container.setAttribute(PERMANENT_HIDDEN_FLAG, '1');
-        container.removeAttribute(HIDDEN_FLAG);
-      } else {
-        container.setAttribute(HIDDEN_FLAG, '1');
-        container.removeAttribute(PERMANENT_HIDDEN_FLAG);
-      }
-      container.setAttribute(HIDDEN_REASON_ATTRIBUTE, reasons);
     });
+    return changed;
   }
 
   function cleanUp(root = document) {
     const rootElement =
       root && root.nodeType === Node.ELEMENT_NODE ? root : null;
     if (rootElement && rootElement.closest(FEED_SURFACE_SELECTOR)) {
-      reconcileFilteredCards(rootElement);
-      scheduleFilterToggleUpdate();
+      if (reconcileFilteredCards(rootElement)) scheduleFilterToggleUpdate();
       return;
     }
 
+    let changed = false;
     collectMatchingElements(root, FEED_SURFACE_SELECTOR).forEach((surface) => {
-      reconcileFilteredCards(surface);
+      changed = reconcileFilteredCards(surface) || changed;
     });
-    scheduleFilterToggleUpdate();
+    if (changed || root === document) scheduleFilterToggleUpdate();
   }
 
   let filterToggleUpdateFrame = 0;
@@ -517,12 +521,6 @@
 
   function addPendingCleanUpRoot(root) {
     if (!root || !root.querySelectorAll) return;
-
-    for (const pendingRoot of Array.from(pendingCleanUpRoots)) {
-      if (pendingRoot === root || pendingRoot.contains?.(root)) return;
-      if (root.contains?.(pendingRoot)) pendingCleanUpRoots.delete(pendingRoot);
-    }
-
     pendingCleanUpRoots.add(root);
   }
 
@@ -533,10 +531,16 @@
 
     cleanUpFrame = requestAnimationFrame(() => {
       cleanUpFrame = 0;
-      const roots = Array.from(pendingCleanUpRoots);
+      const roots = new Set(pendingCleanUpRoots);
       pendingCleanUpRoots.clear();
-      roots.forEach((pendingRoot) => {
-        if (pendingRoot.isConnected !== false) cleanUp(pendingRoot);
+      roots.forEach((root) => {
+        if (root.isConnected === false) return;
+        // Classify against the current tree, not a potentially stale tree at
+        // enqueue time. Sibling bursts are O(roots * depth), not pairwise.
+        for (let parent = root.parentNode; parent; parent = parent.parentNode) {
+          if (roots.has(parent)) return;
+        }
+        cleanUp(root);
       });
     });
   }
@@ -569,7 +573,20 @@
     return null;
   }
 
+  function isPreviewPlaybackMutation(mutation) {
+    const element = mutation.target?.nodeType === Node.ELEMENT_NODE
+      ? mutation.target : mutation.target?.parentElement;
+    const surface = element?.closest?.(
+      '.ytp-progress-bar-container, .ytp-caption-window-container, .ytp-chrome-controls',
+    );
+    const player = surface?.closest('.html5-video-player');
+    return Boolean(player?.closest('ytd-video-preview'));
+  }
+
   function mutationCanAffectFiltering(mutation) {
+    // Playback animation/caption changes are not feed metadata. Keep outer
+    // renderer changes and genuine thumbnail resume-progress updates visible.
+    if (isPreviewPlaybackMutation(mutation)) return false;
     if (mutation.type === 'childList') return true;
 
     const element =
@@ -594,24 +611,37 @@
   cleanUp(document);
 
   const observer = new MutationObserver((mutations) => {
+    let toggleDirty = false;
     for (const mutation of mutations) {
       if (!mutationCanAffectFiltering(mutation)) continue;
 
       if (mutation.type !== 'childList') {
         const cleanUpRoot = getMutationCleanUpRoot(mutation);
         if (cleanUpRoot) scheduleCleanUp(cleanUpRoot);
+        if (mutation.type === 'attributes' && mutation.attributeName?.startsWith('data-ytppl-')) toggleDirty = true;
         continue;
       }
 
       const mutationRoot = getMutationCleanUpRoot(mutation);
       if (mutationRoot) scheduleCleanUp(mutationRoot);
+      if (mutationRoot && [...mutation.addedNodes, ...mutation.removedNodes].some(node => node.nodeType === Node.ELEMENT_NODE)) toggleDirty = true;
+      for (const node of mutation.removedNodes) {
+        if (node.nodeType === Node.ELEMENT_NODE &&
+            (node.matches(FEED_SURFACE_SELECTOR) || node.querySelector(FEED_SURFACE_SELECTOR))) toggleDirty = true;
+      }
       if (!mutation.addedNodes || !mutation.addedNodes.length) continue;
 
       mutation.addedNodes.forEach((node) => {
         const cleanUpRoot = getAddedNodeCleanUpRoot(node);
-        if (cleanUpRoot) scheduleCleanUp(cleanUpRoot);
+        if (cleanUpRoot) {
+          scheduleCleanUp(cleanUpRoot);
+          if (node.nodeType === Node.ELEMENT_NODE) toggleDirty = true;
+        }
       });
     }
+    // Text-only churn cannot change card membership. Owned hide/reason changes
+    // invalidate in cleanUp; structural and external-marker changes do so here.
+    if (toggleDirty) scheduleFilterToggleUpdate();
   });
 
   const OBSERVER_OPTIONS = {

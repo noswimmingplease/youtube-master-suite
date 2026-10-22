@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         YouTube Miniplayer Button Restorer
 // @namespace    Citizen.youtube.miniplayer-button-restorer
-// @version      1.11
+// @version      1.14
 // @description  Restores a Miniplayer button to YouTube watch and live player controls, falling back to the native miniplayer shortcut when needed.
 // @author       Citizen
 // @homepageURL  https://github.com/noswimmingplease/youtube-miniplayer-button-restorer
@@ -34,6 +34,12 @@
   const CONTROL_STATE_ATTRIBUTES = [
     "aria-disabled", "aria-hidden", "class", "disabled", "hidden", "style",
   ];
+  const WATCH_STATE_ATTRIBUTES = [...CONTROL_STATE_ATTRIBUTES, "video-id"];
+  const PLAYER_CONTROL_SELECTOR = [...PLAYER_SELECTORS, RIGHT_CONTROLS_SELECTOR].join(",");
+  const PLAYER_TOPOLOGY_SELECTOR = [
+    PLAYER_CONTROL_SELECTOR,
+    "ytd-watch-flexy", "#ytsmp-player-placeholder",
+  ].join(",");
 
   let observing = false;
   let installedButton = null;
@@ -491,6 +497,9 @@
       targets.push(element);
       if (element === player) break;
     }
+    const watchRoot = player?.closest?.("ytd-watch-flexy") || document
+      .querySelector("#ytsmp-player-placeholder")?.closest?.("ytd-watch-flexy");
+    if (watchRoot && !targets.includes(watchRoot)) targets.push(watchRoot);
     if (
       observedControls === controls &&
       targets.length === observedControlTargets.length &&
@@ -499,7 +508,7 @@
 
     const registrations = targets.map((target) => [target, {
       attributes: true,
-      attributeFilter: CONTROL_STATE_ATTRIBUTES,
+      attributeFilter: target === watchRoot ? WATCH_STATE_ATTRIBUTES : CONTROL_STATE_ATTRIBUTES,
       childList: target === controls,
       subtree: target === controls,
     }]);
@@ -625,8 +634,46 @@
     if (isEligiblePath()) debounceInstall(150);
   });
 
+  function isCommentContentMutation(mutation) {
+    const target = mutation.target?.closest
+      ? mutation.target
+      : mutation.target?.parentElement;
+    if (
+      mutation.type !== "childList" || !target?.closest?.("ytd-comments") ||
+      target.closest(PLAYER_CONTROL_SELECTOR)
+    ) return false;
+
+    return [...mutation.addedNodes, ...mutation.removedNodes].every((node) =>
+      !node.matches?.(PLAYER_TOPOLOGY_SELECTOR) &&
+      !node.querySelector?.(PLAYER_TOPOLOGY_SELECTOR),
+    );
+  }
+
+  function isSuiteDialogContentMutation(mutation) {
+    if (mutation.type !== "childList") return false;
+    const target = mutation.target?.closest ? mutation.target : mutation.target?.parentElement;
+    const dialog = target?.closest?.("dialog");
+    if (
+      typeof HTMLDialogElement !== "function" || !(dialog instanceof HTMLDialogElement) ||
+      !dialog.isConnected || dialog.parentElement !== document.body ||
+      !["ytms-settings-dialog", "ytms-age-dialog"].includes(dialog.id) ||
+      target.closest(PLAYER_TOPOLOGY_SELECTOR)
+    ) return false;
+
+    return [...mutation.addedNodes, ...mutation.removedNodes].every((node) =>
+      !node.matches?.(PLAYER_TOPOLOGY_SELECTOR) &&
+      !node.querySelector?.(PLAYER_TOPOLOGY_SELECTOR),
+    );
+  }
+
   const mo = new MutationObserver((muts) => {
     hideTooltipForMutations(muts);
+    // These native dialogues contain only Suite controls, not the watch player.
+    // Their mounting/removal and any mixed/native topology batch still fall through.
+    if (muts.length && muts.every(isSuiteDialogContentMutation)) return;
+    // Ordinary comment updates cannot replace the installed toolbar. Keep the
+    // existing discovery path for unknown/structural batches and detached owners.
+    if (observedControls?.isConnected && muts.length && muts.every(isCommentContentMutation)) return;
     // The narrow observer owns changes inside the current toolbar. This broad
     // child-list observer only discovers its initial creation or replacement.
     if (observedControls?.isConnected && getPlayerEl()?.contains(observedControls)) return;

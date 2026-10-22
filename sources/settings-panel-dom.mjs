@@ -73,7 +73,7 @@ export function createSettingsDialog(document) {
       button("close-panel", "×", "icon-button close", { "aria-label": "Close settings" })),
     element("nav", { role: "tablist", "aria-label": "Settings sections" }),
     element("div", { class: "content" }, comments,
-      ...["feed", "channels", "player", "layout", "miniplayer", "interface", "extensions", "credits"].map(name => element("section", {
+      ...["feed", "channels", "player", "layout", "miniplayer", "interface", "extensions", "support", "credits"].map(name => element("section", {
         id: id(`section-${name}`), role: "tabpanel", "aria-labelledby": id(`tab-${name}`), hidden: true,
       })),
       element("p", { id: id("button-access-error"), class: "field-error", role: "alert", hidden: true }, "Keep at least one settings button enabled.")),

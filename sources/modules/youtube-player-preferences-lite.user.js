@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         YouTube Player Preferences Lite
 // @namespace    Citizen.youtube.player-preferences-lite
-// @version      1.70
+// @version      1.73
 // @description  Applies small YouTube player preferences without touching Enhancer-style miniplayer, queue, autoplay, or background playback controls.
 // @author       Citizen
 // @homepageURL  https://github.com/noswimmingplease/youtube-player-preferences-lite
@@ -2859,12 +2859,16 @@
       videoMirrorTooltipObserver = new MutationObserver(() => {
         if (!isVideoMirrorTooltipOwnerVisible()) hideVideoMirrorTooltip();
       });
+      const registrations = [];
       for (let element = videoMirrorButton; element; element = element.parentElement) {
-        videoMirrorTooltipObserver.observe(element, {
+        registrations.push([element, {
           attributes: true,
           attributeFilter: ["class", "style", "hidden", "aria-hidden"],
-        });
+        }]);
       }
+      // Register this complete owner chain once. Sequential observe calls
+      // otherwise rebuild the master's shared native observer for each ancestor.
+      replaceObserverRegistrations(videoMirrorTooltipObserver, registrations);
     }
     positionVideoMirrorTooltip();
   }
@@ -3928,23 +3932,6 @@
       return;
     }
 
-    for (const pendingRoot of Array.from(pendingApplyRoots)) {
-      if (
-        pendingRoot !== applyRoot &&
-        pendingRoot.contains &&
-        pendingRoot.contains(applyRoot)
-      ) {
-        return;
-      }
-
-      if (
-        applyRoot.contains &&
-        applyRoot.contains(pendingRoot)
-      ) {
-        pendingApplyRoots.delete(pendingRoot);
-      }
-    }
-
     pendingApplyRoots.add(applyRoot);
   }
 
@@ -3956,22 +3943,24 @@
 
     applyFrame = requestAnimationFrame(() => {
       applyFrame = 0;
-      const roots = Array.from(pendingApplyRoots);
+      const roots = new Set(pendingApplyRoots);
       pendingApplyRoots.clear();
 
-      if (!roots.length) {
+      if (!roots.size) {
         return;
       }
 
-      if (roots.includes(document)) {
+      if (roots.has(document)) {
         applyDynamicPreferences(document);
         return;
       }
 
       roots.forEach((applyRoot) => {
-        if (applyRoot.isConnected !== false) {
-          applyDynamicPreferences(applyRoot);
+        if (applyRoot.isConnected === false) return;
+        for (let parent = applyRoot.parentNode; parent; parent = parent.parentNode) {
+          if (roots.has(parent)) return;
         }
+        applyDynamicPreferences(applyRoot);
       });
     });
   }
@@ -4036,7 +4025,19 @@
     return addContainedMutationRoots(roots, node);
   }
 
+  function isPreviewPlaybackMutation(mutation) {
+    const surface = closestElement(
+      mutation.target,
+      ".ytp-progress-bar-container, .ytp-caption-window-container, .ytp-chrome-controls",
+    );
+    const player = surface?.closest(".html5-video-player");
+    return Boolean(player?.closest("ytd-video-preview"));
+  }
+
   function addMutationApplyRoots(roots, mutation) {
+    // Ignore only known preview playback internals for preference routing.
+    // Mirror/control discovery still receives the original mutation records.
+    if (isPreviewPlaybackMutation(mutation)) return;
     if (mutation.addedNodes && mutation.addedNodes.length) {
       let rootAdded = false;
 

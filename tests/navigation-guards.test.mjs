@@ -1415,6 +1415,43 @@ test("Page Coherence gives each navigation only one bounded recovery budget", ()
   );
 });
 
+test("Page Coherence selects the active player once per snapshot, with no cross-snapshot cache", () => {
+  const harness = createHarness(PAGE_COHERENCE_SOURCE,
+    `https://www.youtube.com/watch?v=${VIDEO_A}`);
+  const watch = createWatchDom(harness, VIDEO_A);
+  let scans = 0;
+  let reads = 0;
+  const queryAll = harness.document.querySelectorAll.bind(harness.document);
+  harness.document.querySelectorAll = selector => {
+    if (selector === '[id="movie_player"]') scans++;
+    return queryAll(selector);
+  };
+  const read = watch.player.getVideoData.bind(watch.player);
+  watch.player.getVideoData = () => { reads++; return read(); };
+  for (let index = 0; index < 1000; index++) {
+    assert.equal(harness.context.__YT_MASTER_STATE__.snapshot().playerVideoId, VIDEO_A);
+  }
+  assert.deepEqual({ scans, reads }, { scans: 1000, reads: 2000 });
+
+  watch.flexy.hidden = true;
+  const next = createWatchDom(harness, VIDEO_B);
+  setWatchUrl(harness, VIDEO_B);
+  scans = 0;
+  const snapshot = harness.context.__YT_MASTER_STATE__.snapshot();
+  assert.equal(scans, 1);
+  assert.equal(snapshot.playerVideoId, VIDEO_B);
+  assert.equal(snapshot.flexyVideoId, VIDEO_B);
+  assert.equal(snapshot.confirmedCoherent, true);
+
+  harness.document.body.appendChild(next.player);
+  next.flexy.appendChild(new FakeElement("div", { id: "ytsmp-player-placeholder" }));
+  scans = 0;
+  const floated = harness.context.__YT_MASTER_STATE__.snapshot();
+  assert.equal(scans, 1);
+  assert.equal(floated.playerVideoId, VIDEO_B);
+  assert.equal(floated.flexyVideoId, VIDEO_B);
+});
+
 test("Page Coherence selects the player-owned or placeholder-owned active flexy", () => {
   const harness = createHarness(PAGE_COHERENCE_SOURCE);
   const staleFlexy = new FakeElement("ytd-watch-flexy", {

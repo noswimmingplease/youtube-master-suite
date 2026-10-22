@@ -1,4 +1,6 @@
-/** Customise recognised video-card menus without replacing native action handlers. */
+/** Customise recognised video-card menus without replacing native action handlers.
+ * Unknown action rows stay native; an unrecognised model/layout is left untouched.
+ */
 export function installVideoMenu(suite) {
   const preferences = suite.settings.initial;
   const cardSelector = 'ytd-video-renderer, ytd-grid-video-renderer, ytd-rich-item-renderer, ytd-compact-video-renderer, yt-lockup-view-model, ytd-playlist-video-renderer, ytd-playlist-panel-video-renderer, yt-playlist-panel-video-renderer';
@@ -16,11 +18,23 @@ export function installVideoMenu(suite) {
   let style = null;
   let disposed = false;
   let triggerReason = 'missing-trigger';
+  const compatibilityStates = {
+    idle: 'not-checked', disposed: 'not-checked', ready: 'recognised',
+    'missing-trigger': 'not-applicable',
+    'captured-trigger': 'awaiting-menu', 'waiting-for-menu': 'awaiting-menu', 'waiting-for-visible-popup': 'awaiting-menu',
+    'unavailable-model': 'loading-menu', 'unsupported-model': 'loading-menu', 'row-count': 'loading-menu', 'row-binding': 'loading-menu',
+  };
+
+  function compatibility(status) {
+    const root = document.documentElement;
+    if (root?.getAttribute?.('data-ytms-video-menu-compatibility') !== status) root?.setAttribute?.('data-ytms-video-menu-compatibility', status);
+  }
 
   function diagnostic(reason) {
     // Fixed reason codes only: never expose titles, channel IDs, URLs or account data.
     const root = document.documentElement;
     if (root?.getAttribute?.('data-ytms-video-menu-status') !== reason) root?.setAttribute?.('data-ytms-video-menu-status', reason);
+    compatibility(compatibilityStates[reason] || 'unsupported');
     return false;
   }
 
@@ -207,6 +221,7 @@ export function installVideoMenu(suite) {
       waiting.observer.disconnect();
       clearTimeout(waiting.timer);
       waiting = null;
+      compatibility('not-checked');
     }
     if (firstFrame) cancelAnimationFrame(firstFrame);
     if (secondFrame) cancelAnimationFrame(secondFrame);
@@ -335,6 +350,7 @@ export function installVideoMenu(suite) {
       try {
         const visible = [...document.querySelectorAll(popupSelector)].filter(popup =>
           roots.some(root => root === popup || root.contains(popup)) && visiblePopup(popup));
+        if (visible.length) request.sawPopup = true;
         const matching = visible.filter(popup => matchesSelection(popup, selection));
         if (matching.length > 1 || (visible.length > 1 && matching.length !== 1)) {
           diagnostic('ambiguous-popup'); return;
@@ -348,7 +364,7 @@ export function installVideoMenu(suite) {
           clearTimeout(request.timer);
           waiting = null;
         }
-      } catch { reset(); }
+      } catch { reset(); compatibility('unsupported'); }
     }
     // YouTube reuses cached sheets without another yt-popup-opened event. Watch
     // only known popup containers after this trusted activation, never the page.
@@ -357,13 +373,14 @@ export function installVideoMenu(suite) {
     });
     for (const root of roots) observer.observe(root, { childList: true, subtree: true,
       attributes: true, attributeFilter: ['hidden', 'style', 'aria-hidden', 'opened'] });
-    request = { popup: eventPopup && matchesSelection(eventPopup, selection) ? eventPopup : null, roots, observer, timer: setTimeout(() => {
+    request = { popup: eventPopup && matchesSelection(eventPopup, selection) ? eventPopup : null, roots, observer, sawPopup: false, timer: setTimeout(() => {
       if (waiting === request) {
         observer.disconnect(); waiting = null;
-        if (trigger === selection) trigger = null;
+        if (trigger === selection) { trigger = null; triggerReason = 'expired-trigger'; }
         if (firstFrame) cancelAnimationFrame(firstFrame);
         if (secondFrame) cancelAnimationFrame(secondFrame);
         firstFrame = secondFrame = 0;
+        compatibility(request.sawPopup ? 'unsupported' : 'no-menu');
       }
     }, 1500) };
     waiting = request;
@@ -387,7 +404,7 @@ export function installVideoMenu(suite) {
     if (!current.popup.contains(event.target)) {
       // Automatic theatre-mode and other native helpers use synthetic clicks.
       // They must not cancel a menu that the user has just opened.
-      if (event.isTrusted) { reset(); trigger = null; }
+      if (event.isTrusted) { reset(); trigger = null; triggerReason = 'missing-trigger'; }
       return;
     }
     const action = event.target.closest?.('[data-ytms-menu-action]')?.dataset.ytmsMenuAction;
@@ -402,7 +419,7 @@ export function installVideoMenu(suite) {
       try { channel = suite.channelAge?.channelFromCard(current.card); } catch { return; }
       if (!current.card.isConnected || videoIdFromCard(current.card) !== current.videoId || channel?.channelId !== current.channel.channelId) return;
       try { current.popup.closest('tp-yt-iron-dropdown')?.close?.(); } catch { /* Settings can still open if the native dropdown has already closed. */ }
-      reset(); trigger = null;
+      reset(); trigger = null; triggerReason = 'missing-trigger';
       suite.openChannelAgeSettings?.(channel);
     }
   }
@@ -415,7 +432,7 @@ export function installVideoMenu(suite) {
       event.preventDefault(); event.stopImmediatePropagation();
       setPage(!current.tools); return;
     }
-    if (event.key === 'Escape') { reset(); trigger = null; return; }
+    if (event.key === 'Escape') { reset(); trigger = null; triggerReason = 'missing-trigger'; return; }
     if (!['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) return;
     const rows = [...current.parent.children].filter(row => row === current.back ? current.tools :
       row === current.group ? !current.group.hidden :
@@ -432,11 +449,11 @@ export function installVideoMenu(suite) {
     const popup = active?.popup || waiting?.popup;
     if ((popup && (event.target === popup || event.target?.contains?.(popup))) ||
         (!active && waiting?.roots.some(root => root === event.target))) {
-      reset(); trigger = null;
+      reset(); trigger = null; triggerReason = 'missing-trigger';
     }
   }
 
-  function navigated() { reset(); trigger = null; }
+  function navigated() { reset(); trigger = null; triggerReason = 'missing-trigger'; compatibility('not-checked'); }
   document.addEventListener('click', captureTrigger, true);
   document.addEventListener('keydown', captureTrigger, true);
   document.addEventListener('click', activate, true);

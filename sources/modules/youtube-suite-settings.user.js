@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         YouTube Suite Settings
 // @namespace    Citizen.youtube.suite-settings
-// @version      1.25
+// @version      1.30
 // @description  Master-only native-style settings panel accessible from the header and watch player.
 // @author       Citizen
 // @license      GNU GPLv3
@@ -130,19 +130,22 @@
     let pickerTrigger = null;
     let currentTab = 'comments';
 
-    const tabIds = ['comments', 'feed', 'channels', 'player', 'layout', 'miniplayer', 'interface', 'extensions', 'credits'];
+    let supportPanel = null;
+    const tabIds = ['comments', 'feed', 'channels', 'player', 'layout', 'miniplayer', 'interface', 'extensions', 'support', 'credits'];
     function selectTab(id, focus = false) {
       closePicker(false);
       currentTab = id;
-      $('restore-section-defaults').disabled = id === 'channels' || id === 'extensions' || id === 'credits';
+      $('restore-section-defaults').disabled = ['channels', 'extensions', 'support', 'credits'].includes(id);
       for (const tab of tabIds) {
         const selected = tab === id;
-        $(`section-${tab}`).hidden = !selected;
-        $(`tab-${tab}`).setAttribute('aria-selected', String(selected));
-        $(`tab-${tab}`).tabIndex = selected ? 0 : -1;
+        const section = $(`section-${tab}`), button = $(`tab-${tab}`);
+        if (section.hidden === selected) section.hidden = !selected;
+        if (button.getAttribute('aria-selected') !== String(selected)) button.setAttribute('aria-selected', String(selected));
+        if (button.tabIndex !== (selected ? 0 : -1)) button.tabIndex = selected ? 0 : -1;
       }
       dialog.querySelector('.content').scrollTop = 0;
       if (id === 'channels') renderChannelRules();
+      if (id === 'support') supportPanel?.refresh();
       if (focus) $(`tab-${id}`).focus();
     }
     for (const id of tabIds) {
@@ -187,7 +190,7 @@
     ageDescription.textContent = 'Choose how old each channel’s uploads can be: days, weeks, months or years. Watched-video filtering remains independent. Manage and save these filters separately; the settings reset buttons leave them unchanged.';
     ageLabel.append(ageDescription);
     const ageButton = document.createElement('button'); ageButton.id = 'ytms-manage-channel-age';
-    ageButton.type = 'button'; ageButton.className = 'text-button'; ageButton.textContent = 'Manage';
+    ageButton.type = 'button'; ageButton.className = 'text-button outlined-button'; ageButton.textContent = 'Manage filters';
     ageButton.setAttribute('aria-label', 'Manage channel upload filters');
     ageButton.setAttribute('aria-describedby', ageDescription.id); ageButton.setAttribute('aria-haspopup', 'dialog');
     ageButton.addEventListener('click', () => suite.openChannelAgeSettings());
@@ -217,8 +220,9 @@
         status.textContent = `Status: ${!rule.enabled ? 'Disabled' : rule.blocked ? 'All uploads hidden' : 'Enabled'}`;
         const actions = document.createElement('div'); actions.className = 'channel-filter-actions';
         for (const [label, remove] of [['Edit', false], ['Remove', true]]) {
-          const action = document.createElement('button'); action.type = 'button'; action.className = 'text-button';
-          action.textContent = label; action.setAttribute('aria-label', `${label} filter for ${rule.name || rule.channelId}`);
+          const action = document.createElement('button'); action.type = 'button';
+          action.className = `text-button ${remove ? 'danger-button' : 'outlined-button'}`;
+          action.textContent = `${label} filter`; action.setAttribute('aria-label', `${label} filter for ${rule.name || rule.channelId}`);
           action.addEventListener('click', () => suite.openChannelAgeSettings({ channelId: rule.channelId, name: rule.name, ...(remove ? { remove: true } : {}) }));
           actions.append(action);
         }
@@ -328,9 +332,12 @@
     function updatePrimaryAction() {
       const state = primaryActionState();
       const reload = !externalConflict && !state.dirty && state.pendingReload;
-      $('save-preview').textContent = reload ? 'Reload now' : 'Save';
-      $('save-preview').dataset.action = reload ? 'reload' : 'save';
-      $('save-preview').disabled = externalConflict || state.invalid || state.inaccessible || (!state.dirty && !state.pendingReload);
+      const button = $('save-preview'), label = reload ? 'Reload now' : 'Save', action = reload ? 'reload' : 'save';
+      const disabled = externalConflict || state.invalid || state.inaccessible || (!state.dirty && !state.pendingReload);
+      if (button.textContent !== label) button.textContent = label;
+      if (button.dataset.action !== action) button.dataset.action = action;
+      if (button.disabled !== disabled) button.disabled = disabled;
+      supportPanel?.updateDraftState();
       return state;
     }
     function showConflictNotice() {
@@ -353,22 +360,30 @@
       $('settings-status').hidden = false;
       return true;
     }
+    function setHidden(element, hidden) {
+      if (element.hidden !== hidden) element.hidden = hidden;
+    }
     function updateColours() {
       const custom = draft.colourMode === 'custom';
-      $('custom-colours').hidden = !custom; $('palette-row').hidden = draft.colourMode !== 'preset';
-      const pair = colours(); const preview = $('comment-preview'); preview.dataset.mode = draft.colourMode;
+      setHidden($('custom-colours'), !custom); setHidden($('palette-row'), draft.colourMode !== 'preset');
+      const pair = colours(); const preview = $('comment-preview');
+      if (preview.dataset.mode !== draft.colourMode) preview.dataset.mode = draft.colourMode;
+      function setColourStyle(element, name, value) {
+        if (element.style.getPropertyValue(name) !== value) element.style.setProperty(name, value);
+      }
       for (const [index, name] of ['viewer', 'owner'].entries()) {
-        if (pair) preview.style.setProperty(`--${name}-colour`, pair[index]); else preview.style.removeProperty(`--${name}-colour`);
-        $(`${name}-swatch`).style.setProperty('--swatch', draft[`${name}Colour`]);
+        if (pair) setColourStyle(preview, `--${name}-colour`, pair[index]);
+        else if (preview.style.getPropertyValue(`--${name}-colour`)) preview.style.removeProperty(`--${name}-colour`);
+        setColourStyle($(`${name}-swatch`), '--swatch', draft[`${name}Colour`]);
       }
       const inaccessible = draft.headerSettingsIcon === 'off' && draft.playerSettingsIcon === 'off';
-      $('button-access-error').hidden = !inaccessible;
+      setHidden($('button-access-error'), !inaccessible);
       updatePrimaryAction();
       const background = luminance(theme() === 'dark' ? '#0F0F0F' : '#FFFFFF');
-      $('contrast-warning').hidden = !pair || !pair.some(colour => {
+      setHidden($('contrast-warning'), !pair || !pair.some(colour => {
         const foreground = luminance(colour);
         return (Math.max(foreground, background) + .05) / (Math.min(foreground, background) + .05) < 4.5;
-      });
+      }));
     }
     function populate(keys) {
       const selected = keys ? new Set(keys) : null;
@@ -434,6 +449,7 @@
     function openPanel() {
       saved = settings.read(); draft = { ...saved };
       externalConflict = false;
+      supportPanel?.reset();
       menuDetails.open = false;
       $('settings-status').hidden = true;
       closePicker(false); populate(); selectTab('comments');
@@ -457,7 +473,7 @@
     });
     function markDraftChanged() {
       if (externalConflict) showConflictNotice();
-      else $('settings-status').hidden = true;
+      else setHidden($('settings-status'), true);
       updatePrimaryAction();
     }
     dialog.addEventListener('input', markDraftChanged);
@@ -499,6 +515,19 @@
         ? 'Saved. Please reload this page.'
         : 'Saved. No reload needed.';
     });
+    supportPanel = suite.createSettingsSupportPanel(document, suite, {
+      hasDraft: () => externalConflict || primaryActionState().dirty,
+      onRestored: result => {
+        saved = result.values; draft = { ...saved }; externalConflict = false;
+        closePicker(false); populate(); renderChannelRules();
+        window.dispatchEvent(new CustomEvent('yt-master-channel-age-changed'));
+        $('settings-status').hidden = false;
+        $('settings-status').textContent = primaryActionState().pendingReload
+          ? 'Backup restored. Please reload this page.' : 'Backup restored. No reload needed.';
+      },
+    });
+    $('section-support').append(supportPanel.element);
+    dialog.addEventListener('close', () => supportPanel.close());
     populate(); selectTab('comments');
     return { dialog, open: openPanel, updateTheme: updateColours, updateChannels: renderChannelRules, reconcileSaved: reconcileStoredPreferences };
 
@@ -722,7 +751,17 @@
   function scheduleInstall() {
     if (!suspended && !frame) frame = requestAnimationFrame(installButton);
   }
-  const discovery = new MutationObserver(scheduleInstall);
+  const discovery = new MutationObserver(records => {
+    // Text and comment updates cannot replace a player, control or header
+    // anchor. Keep discovery for structural changes, not native label churn.
+    for (const record of records) {
+      for (const nodes of [record.addedNodes, record.removedNodes]) {
+        for (const node of nodes) {
+          if (node.nodeType === 1) { scheduleInstall(); return; }
+        }
+      }
+    }
+  });
   const themeObserver = new MutationObserver(syncTheme);
   const tooltipVisibilityObserver = new MutationObserver(refreshPlayerTooltip);
   function start() {

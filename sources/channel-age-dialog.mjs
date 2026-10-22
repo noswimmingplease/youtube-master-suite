@@ -20,7 +20,7 @@ export function createChannelAgeDialog(document, service) {
     'Use a UC channel ID or a youtube.com/channel/ URL, not a handle. Each age limit moves forwards automatically; uncertain dates stay visible unless the whole channel is blocked. These Suite filters are separate from YouTube’s Don’t recommend channel choices.');
   const list = element('div', { id: 'ytms-age-list', role: 'list', 'aria-label': 'Channel upload filters' });
   const empty = element('p', { class: 'ytms-age-note', id: 'ytms-age-empty' }, 'No channel upload filters. Channels are unaffected until you add and save a rule.');
-  const addButton = button('ytms-age-add', 'Add channel');
+  const addButton = button('ytms-age-add', 'Add another channel', 'ytms-age-button ytms-age-outlined');
   const status = element('p', { id: 'ytms-age-status', class: 'ytms-age-status', role: 'status', hidden: true });
   const cancel = button('ytms-age-cancel', 'Cancel');
   const save = button('ytms-age-save', 'Save filters', 'ytms-age-button ytms-age-primary');
@@ -34,6 +34,7 @@ export function createChannelAgeDialog(document, service) {
   let saved = [];
   let draft = [];
   let rowSequence = 0;
+  let newRules = new WeakSet();
 
   function markChanged() {
     status.hidden = true;
@@ -51,6 +52,13 @@ export function createChannelAgeDialog(document, service) {
     for (const rule of draft) {
       const sequence = ++rowSequence;
       const card = element('div', { class: 'ytms-age-rule', role: 'listitem' });
+      const editing = rule === focusRule;
+      const heading = element('h3', {}, rule.name || rule.channelId || 'New channel filter');
+      const summary = element('div', { class: 'ytms-age-summary', hidden: editing },
+        element('p', { class: 'ytms-age-channel-id' }, service.normaliseChannelId(rule.channelId) || rule.channelId),
+        element('p', {}, rule.blocked ? 'All uploads hidden' :
+          `Maximum upload age: ${rule.maxAge} ${rule.maxAge === 1 ? rule.unit.slice(0, -1) : rule.unit}`),
+        element('p', {}, `Status: ${rule.enabled ? 'Enabled' : 'Disabled'}`));
       const labelField = (labelText, input, className = '') => {
         const label = element('span', { id: `${input.id}-label` }, labelText);
         input.setAttribute('aria-labelledby', label.id);
@@ -60,13 +68,13 @@ export function createChannelAgeDialog(document, service) {
         id: `ytms-age-name-${sequence}`, type: 'text', maxlength: 120,
         autocomplete: 'off', value: rule.name, placeholder: 'Optional display name',
       });
-      name.addEventListener('input', () => { rule.name = name.value; markChanged(); });
+      name.addEventListener('input', () => { rule.name = name.value; updateIdentity(); markChanged(); });
       const channel = element('input', {
         id: `ytms-age-channel-${sequence}`, type: 'text', maxlength: 256,
         autocomplete: 'off', spellcheck: 'false', value: rule.channelId,
         placeholder: 'UC… or https://www.youtube.com/channel/UC…',
       });
-      channel.addEventListener('input', () => { rule.channelId = channel.value; markChanged(); });
+      channel.addEventListener('input', () => { rule.channelId = channel.value; updateIdentity(); markChanged(); });
       const maxAge = element('input', {
         id: `ytms-age-value-${sequence}`, type: 'number', min: 1, max: 1000, step: 1,
         inputmode: 'numeric', value: rule.maxAge,
@@ -86,17 +94,41 @@ export function createChannelAgeDialog(document, service) {
       blocked.addEventListener('change', () => {
         rule.blocked = blocked.checked; maxAge.disabled = unit.disabled = blocked.checked; markChanged();
       });
-      const remove = button(`ytms-age-remove-${sequence}`, 'Remove');
-      remove.setAttribute('aria-label', `Remove ${rule.name || rule.channelId || 'channel rule'}`);
+      const edit = button(`ytms-age-edit-${sequence}`, 'Edit filter', 'ytms-age-button ytms-age-outlined ytms-age-edit');
+      edit.hidden = editing;
+      edit.setAttribute('aria-expanded', String(editing));
+      edit.setAttribute('aria-controls', `ytms-age-fields-${sequence}`);
+      edit.addEventListener('click', () => { if (validateDraft()) render(rule); });
+      const apply = button(`ytms-age-apply-${sequence}`, newRules.has(rule) ? 'Add filter' : 'Update filter', 'ytms-age-button ytms-age-outlined');
+      apply.hidden = !editing;
+      apply.addEventListener('click', () => {
+        if (!validateDraft()) return;
+        const added = newRules.has(rule);
+        newRules.delete(rule);
+        render();
+        showStatus(`${rule.name || service.normaliseChannelId(rule.channelId)} ${added ? 'added to' : 'updated in'} this draft. Choose Save filters to apply it.`);
+        list.children[draft.indexOf(rule)]?.querySelector('.ytms-age-edit')?.focus();
+      });
+      const remove = button(`ytms-age-remove-${sequence}`, 'Remove filter', 'ytms-age-button ytms-age-danger');
+      const updateIdentity = () => {
+        const label = rule.name || rule.channelId;
+        heading.textContent = label || 'New channel filter';
+        edit.setAttribute('aria-label', `Edit filter for ${label || 'this channel'}`);
+        remove.setAttribute('aria-label', `Remove filter for ${label || 'this channel'}`);
+      };
+      updateIdentity();
       remove.addEventListener('click', () => {
         const index = draft.indexOf(rule);
         draft.splice(index, 1); markChanged(); render(draft[Math.min(index, draft.length - 1)]);
         if (!draft.length) addButton.focus();
       });
-      card.append(labelField('Channel name', name), labelField('Channel ID or channel URL', channel, 'ytms-age-wide'),
+      const fields = element('div', { id: `ytms-age-fields-${sequence}`, class: 'ytms-age-fields', hidden: !editing },
+        labelField('Channel name', name), labelField('Channel ID or channel URL', channel, 'ytms-age-wide'),
         element('div', { class: 'ytms-age-limit' }, labelField('Maximum age', maxAge), labelField('Unit', unit)),
-        element('label', { class: 'ytms-age-blocked', for: blocked.id }, blocked, ' Hide this channel — all uploads'),
-        element('div', { class: 'ytms-age-actions' }, element('label', { for: enabled.id }, enabled, ' Enabled'), remove));
+        element('label', { class: 'ytms-age-blocked', for: blocked.id }, blocked, ' Hide this channel — all uploads'));
+      card.append(heading, summary, fields,
+        element('div', { class: 'ytms-age-actions' }, element('label', { for: enabled.id, hidden: !editing }, enabled, ' Enabled'),
+          element('span', { class: 'ytms-age-spacer' }), edit, apply, remove));
       list.append(card);
       if (rule === focusRule) channel.focus();
     }
@@ -107,10 +139,11 @@ export function createChannelAgeDialog(document, service) {
       return null;
     }
     const rule = { channelId: channel.channelId || '', name: channel.name || '', maxAge: 1, unit: 'weeks', enabled: true, blocked: channel.blocked === true };
+    newRules.add(rule);
     draft.push(rule); markChanged(); render(rule);
     return rule;
   }
-  addButton.addEventListener('click', () => appendRule());
+  addButton.addEventListener('click', () => { if (validateDraft()) appendRule(); });
   function close() { if (dialog.open) dialog.close(); }
   closeButton.addEventListener('click', close);
   cancel.addEventListener('click', close);
@@ -120,7 +153,7 @@ export function createChannelAgeDialog(document, service) {
     const bounds = dialog.getBoundingClientRect();
     if (event.clientX < bounds.left || event.clientX > bounds.right || event.clientY < bounds.top || event.clientY > bounds.bottom) close();
   });
-  save.addEventListener('click', () => {
+  function validateDraft() {
     const ids = new Set();
     const invalidIndex = draft.findIndex(rule => {
       const id = service.normaliseChannelId(rule.channelId);
@@ -131,9 +164,14 @@ export function createChannelAgeDialog(document, service) {
       return invalid;
     });
     if (invalidIndex >= 0) {
+      render(draft[invalidIndex]);
       showStatus(`Rule ${invalidIndex + 1}: enter a unique UC channel ID or channel URL and a whole-number age from 1 to 1,000. Each channel can have one rule.`, true);
-      return;
+      return false;
     }
+    return true;
+  }
+  save.addEventListener('click', () => {
+    if (!validateDraft()) return;
     let result;
     try { result = service.save(draft, saved); }
     catch { showStatus('Could not save channel upload filters. Your previous filters are unchanged.', true); return; }
@@ -142,16 +180,16 @@ export function createChannelAgeDialog(document, service) {
       return;
     }
     saved = service.getRules();
-    draft = saved.map(rule => ({ ...rule }));
-    render(); showStatus('Saved. Channel upload filters now apply; no reload is needed.');
     document.defaultView.dispatchEvent(new document.defaultView.CustomEvent('yt-master-channel-age-changed'));
+    close();
   });
   return {
     open(channel) {
       if (!dialog.open) {
         saved = service.read();
         draft = saved.map(rule => ({ ...rule }));
-        markChanged(); render(); dialog.showModal(); content.scrollTop = 0;
+        newRules = new WeakSet();
+        markChanged(); render(draft[0]); dialog.showModal(); content.scrollTop = 0;
       }
       const channelId = channel && service.normaliseChannelId(channel.channelId);
       if (channelId) {

@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         YouTube Comment Cleaner
 // @namespace    Citizen.youtube.comment-cleaner
-// @version      1.24
+// @version      1.26
 // @description  Cleans YouTube comments, prevents stale comments across SPA navigation, preserves replies, compacts spacing, and colours commenter/uploader names.
 // @author       Citizen
 // @license      GNU GPLv3
@@ -146,21 +146,30 @@
   const isWatchPath = () =>
     location.pathname === "/watch" || location.pathname.startsWith("/live/");
 
-  const queryAllDeep = (sel, root = document) => {
-    const out = [];
-
+  const collectDeepQueryScopes = (root = document) => {
+    const scopes = [];
     const crawl = (node) => {
       if (!node || !node.querySelectorAll) return;
-
-      if (node.matches && node.matches(sel)) out.push(node);
-
-      node.querySelectorAll(sel).forEach((n) => out.push(n));
+      scopes.push(node);
       node.querySelectorAll("*").forEach((el) => {
         if (el.shadowRoot) crawl(el.shadowRoot);
       });
     };
 
     crawl(root);
+    return scopes;
+  };
+
+  const queryAllDeep = (
+    sel,
+    root = document,
+    scopes = collectDeepQueryScopes(root),
+  ) => {
+    const out = [];
+    scopes.forEach((node) => {
+      if (node.matches && node.matches(sel)) out.push(node);
+      node.querySelectorAll(sel).forEach((n) => out.push(n));
+    });
     return out;
   };
 
@@ -763,12 +772,12 @@
       });
   };
 
-  const colourCommentAuthorLinks = (root = document) => {
+  const colourCommentAuthorLinks = (root = document, queryScopes) => {
     if (uploaderPathsReadyVideoKey !== getVideoKey()) return;
 
     const uploaderPaths = getUploaderPaths();
 
-    queryAllDeep(COMMENT_AUTHOR_SELECTOR, root).forEach((link) => {
+    queryAllDeep(COMMENT_AUTHOR_SELECTOR, root, queryScopes).forEach((link) => {
       const path = normalisePath(link.getAttribute("href"));
       const colour = uploaderPaths.has(path) ? UPLOADER_ORANGE : COMMENTER_BLUE;
 
@@ -788,10 +797,10 @@
     el.dataset.iowHidden = "1";
   };
 
-  const hideCommentControls = (root = document) => {
-    queryAllDeep(COMMENT_CONTROL_SELECTOR, root).forEach(hideNode);
+  const hideCommentControls = (root = document, queryScopes) => {
+    queryAllDeep(COMMENT_CONTROL_SELECTOR, root, queryScopes).forEach(hideNode);
 
-    queryAllDeep(COMMENT_OVERFLOW_BUTTON_SELECTOR, root).forEach((button) => {
+    queryAllDeep(COMMENT_OVERFLOW_BUTTON_SELECTOR, root, queryScopes).forEach((button) => {
       const rootNode = button.getRootNode && button.getRootNode();
       const shadowHost =
         rootNode && rootNode.host && rootNode.host.matches("yt-icon-button")
@@ -808,9 +817,17 @@
 
     const applyRoot =
       root === document ? document.querySelector("ytd-comments") || root : root;
+    // Share discovery only for this synchronous pass; later passes must find
+    // newly stamped comments and open shadow roots. Preserve the uploader wait.
+    const queryScopes = (
+      CONFIG.hideCommentControls ||
+      (CONFIG.colourCommenters && uploaderPathsReadyVideoKey === getVideoKey())
+    )
+      ? collectDeepQueryScopes(applyRoot)
+      : [];
 
-    if (CONFIG.hideCommentControls) hideCommentControls(applyRoot);
-    if (CONFIG.colourCommenters) colourCommentAuthorLinks(applyRoot);
+    if (CONFIG.hideCommentControls) hideCommentControls(applyRoot, queryScopes);
+    if (CONFIG.colourCommenters) colourCommentAuthorLinks(applyRoot, queryScopes);
   };
 
   const buildHideRule = (selectors) => `
@@ -950,12 +967,6 @@ yt-comment-view-model #header-author-badges {
 
   const addPendingApplyRoot = (root) => {
     if (!root || !root.querySelectorAll) return;
-
-    for (const pendingRoot of Array.from(pendingApplyRoots)) {
-      if (pendingRoot === root || pendingRoot.contains(root)) return;
-      if (root.contains(pendingRoot)) pendingApplyRoots.delete(pendingRoot);
-    }
-
     pendingApplyRoots.add(root);
   };
 
@@ -969,10 +980,16 @@ yt-comment-view-model #header-author-badges {
 
     requestAnimationFrame(() => {
       scheduled = false;
-      const roots = Array.from(pendingApplyRoots);
+      const roots = new Set(pendingApplyRoots);
       pendingApplyRoots.clear();
       roots.forEach((pendingRoot) => {
-        if (pendingRoot.isConnected !== false) applyAll(pendingRoot);
+        if (pendingRoot.isConnected === false) return;
+        // Use the current DOM tree so reparented comments are not discarded.
+        // parentNode deliberately stops at shadow roots, just like contains.
+        for (let parent = pendingRoot.parentNode; parent; parent = parent.parentNode) {
+          if (roots.has(parent)) return;
+        }
+        applyAll(pendingRoot);
       });
     });
   };

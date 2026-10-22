@@ -29,14 +29,14 @@ not inherit extensions or scripts. Existing consent preferences are not reset.
 
 | Module | Source version | Purpose |
 | --- | ---: | --- |
-| Comment Cleaner | 1.24 | Hides comment engagement and composer clutter, prevents stale comments from appearing during queue or autoplay navigation, compacts spacing, and distinguishes uploader and commenter names. Legacy and current comment components receive the same control, spacing and badge treatment. Uploader-link cache changes and comment freshness checks are batched per mutation delivery. A current permalink cannot certify a container while any retained pre-navigation renderer lacks destination provenance during the bounded recovery window. Comment Cleaner relinquishes its stale-content guard after a bounded eight-second deadline, armed even before a destination is known, preventing ambiguous recycled nodes from leaving comments permanently blank. |
-| Feed UI Cleaner | 2.10 | Removes unwanted feed shelves, chips, advertisements, mixes, members-only cards, podcasts, and resulting gaps while preserving YouTube search. Filtering is route-profiled, reconciles recycled cards, targets the nearest genuine card rather than an enclosing shelf, and provides a temporary `Filtered: N` reveal control without counting or exposing advertisements. Its broad mutation observer is disconnected on watch, live and Shorts playback routes and across suspended-page transitions. |
-| Miniplayer Button Restorer | 1.11 | Restores the native-style miniplayer control when YouTube omits it, selects the active watch container, cancels redundant retries after installation, and reinstalls after either control insertion or removal, including a back/forward-cache restore. It yields to a usable native button and reconciles native visibility and availability without duplicating controls during toolbar auto-hide. Its tooltip matches the mirror control and displays the existing native I shortcut. |
-| Page Coherence Guard | 1.13 | Detects incomplete queue and autoplay navigation, including a new URL whose player and metadata both remain on the previous video. It makes one bounded native refresh attempt for positively identified previous-video comments even when the title and controller are current, and publishes lightweight identity diagnostics without hiding YouTube's native page content. It follows the rendered current player and watch container, including a reparented scroll player, rejects hidden duplicate players, and resolves retained ended-video data only when the URL and active player confirm YouTube's live watch identity. A narrow identity observer recovers updates arriving after the bounded navigation checks. Metadata events from feed previews and inactive videos remain ignored. |
-| Player Preferences Lite | 1.70 | Applies player, feed, description, live-chat, volume, quality, Shorts, captions, horizontal mirroring, fullscreen-comment scrolling, and watch-page preferences without taking over YouTube's queue or native miniplayer. Native watch-player and inline-preview captions use readable yellow glyphs with a black shadow while retaining YouTube's positioning, size, typeface, background and opacity preferences. Hides both legacy and current grid-model Shorts shelves, including search results, while leaving ordinary result cards and search filter chips untouched; converted Shorts links retain an ID-scoped marker that is cleared when YouTube recycles the card. Keeps native like and Return YouTube Dislike counts vertically aligned. Feed filters use route profiles and module-owned markers; watched-video filtering deliberately excludes Watch History. Expanded descriptions remain responsive without repeated fixed-height writes, and live-chat hiding targets only chat surfaces rather than shared panel containers. On watch pages, rich mutation tracking is limited to the masthead, metadata and popup action surfaces while a child-list-only discovery observer retains late YouTube replacements; feed routes retain their existing full reconciliation. Active-player and scroll-placeholder ownership avoid stale duplicate watch containers. Pending animation work is cancelled across navigation and page suspension. Repeated watch-action visibility writes are avoided. Info cards, recommendation tiles, and the single autoplay up-next card have independent settings; individual end-screen recommendation tiles are visually hidden without removing YouTube's native autoplay geometry from layout. Layout refresh retries are coalesced. The known-working volume listener remains registered, while ordinary wheel events are rejected before player lookup unless the configured right-button gesture is active. Its one-shot context-menu suppression is time-bounded and cleared on navigation, window blur or the start of a fresh right-button gesture, so a later ordinary right-click is not swallowed. |
-| Scroll Miniplayer | 5.25 | Floats the active watch or live player when it leaves the viewport and shows compact current-title and queue-position context at the top, clear of native playback controls, while the full queue remains hidden. YouTube-style SVG controls close it or open a direct three-corner position chooser while preserving accessible labels, keyboard focus and the stored valid position; corner changes synchronise across already-open YouTube windows. Queue context follows panel creation, removal and selection changes, preferring an exact current-video match before safe visible or selected fallbacks. Navigation stays locked after YouTube's finish event until the destination URL and active player identify the same video, while existing bounded recovery still handles cancelled or incomplete transitions. Player restoration remains non-destructive and is deferred while the player or its video owns native fullscreen; off-route live players use event-driven finalisation instead of indefinite polling, animation work is reset across page suspension, and observation stops off eligible routes. Queue labels are created using native DOM operations compatible with Trusted Types enforcement. |
-| Watch Layout Cleaner | 1.41 | Adds a native-style Play next in queue action immediately above Add to queue. Corrects stale playing markers only when the active player, queue ID and current queue index agree. Expands watch-page content, keeps an active queue rail at the SponsorBlock-friendly `374px` width, widens metadata and comments, and provides late-loading queue-thumbnail fallbacks for both legacy and current playlist panels. Queue drag assistance reuses native edge scrolling with current visible bounds and bounded speed, and animates only inner row contents without changing native drop targets or ordering. DeArrow queue logos occupy a fixed slot to avoid hover reflow and can be hidden independently of replacement titles and thumbnails. It releases an otherwise empty rail only when related content and chat are hidden, no usable queue exists and neither SponsorBlock nor a visible engagement panel needs the space. Removed offscreen queue rows are unobserved promptly. |
-| Suite Settings | 1.25 | Opens a native-style settings dialogue beside the profile button, with a 32px embedded vector logo inside a 40px click target, validated local preferences and a dark/light in-panel colour picker. Uses the existing shared observer and stylesheet; builds the dialogue only when opened using native DOM operations compatible with Trusted Types enforcement and has no polling. |
+| Comment Cleaner | 1.26 | Hides comment engagement and composer clutter, prevents stale comments from appearing during queue or autoplay navigation, compacts spacing, and distinguishes uploader and commenter names. Legacy and current comment components receive the same control, spacing and badge treatment. Uploader-link cache changes and comment freshness checks are batched per mutation delivery. A current permalink cannot certify a container while any retained pre-navigation renderer lacks destination provenance during the bounded recovery window. Comment Cleaner relinquishes its stale-content guard after a bounded eight-second deadline, armed even before a destination is known, preventing ambiguous recycled nodes from leaving comments permanently blank. |
+| Feed UI Cleaner | 2.13 | Removes unwanted feed shelves, chips, advertisements, mixes, members-only cards, podcasts, and resulting gaps while preserving YouTube search. Filtering is route-profiled, reconciles recycled cards, targets the nearest genuine card rather than an enclosing shelf, and provides a temporary `Filtered: N` reveal control without counting or exposing advertisements. Its broad mutation observer is disconnected on watch, live and Shorts playback routes and across suspended-page transitions. |
+| Miniplayer Button Restorer | 1.14 | Restores the native-style miniplayer control when YouTube omits it, selects the active watch container, cancels redundant retries after installation, and reinstalls after either control insertion or removal, including a back/forward-cache restore. It yields to a usable native button and reconciles native visibility and availability without duplicating controls during toolbar auto-hide. Its tooltip matches the mirror control and displays the existing native I shortcut. |
+| Page Coherence Guard | 1.14 | Detects incomplete queue and autoplay navigation, including a new URL whose player and metadata both remain on the previous video. It makes one bounded native refresh attempt for positively identified previous-video comments even when the title and controller are current, and publishes lightweight identity diagnostics without hiding YouTube's native page content. It follows the rendered current player and watch container, including a reparented scroll player, rejects hidden duplicate players, and resolves retained ended-video data only when the URL and active player confirm YouTube's live watch identity. A narrow identity observer recovers updates arriving after the bounded navigation checks. Metadata events from feed previews and inactive videos remain ignored. |
+| Player Preferences Lite | 1.73 | Applies player, feed, description, live-chat, volume, quality, Shorts, captions, horizontal mirroring, fullscreen-comment scrolling, and watch-page preferences without taking over YouTube's queue or native miniplayer. Native watch-player and inline-preview captions use readable yellow glyphs with a black shadow while retaining YouTube's positioning, size, typeface, background and opacity preferences. Hides both legacy and current grid-model Shorts shelves, including search results, while leaving ordinary result cards and search filter chips untouched; converted Shorts links retain an ID-scoped marker that is cleared when YouTube recycles the card. Keeps native like and Return YouTube Dislike counts vertically aligned. Feed filters use route profiles and module-owned markers; watched-video filtering deliberately excludes Watch History. Expanded descriptions remain responsive without repeated fixed-height writes, and live-chat hiding targets only chat surfaces rather than shared panel containers. On watch pages, rich mutation tracking is limited to the masthead, metadata and popup action surfaces while a child-list-only discovery observer retains late YouTube replacements; feed routes retain their existing full reconciliation. Active-player and scroll-placeholder ownership avoid stale duplicate watch containers. Pending animation work is cancelled across navigation and page suspension. Repeated watch-action visibility writes are avoided. Info cards, recommendation tiles, and the single autoplay up-next card have independent settings; individual end-screen recommendation tiles are visually hidden without removing YouTube's native autoplay geometry from layout. Layout refresh retries are coalesced. The known-working volume listener remains registered, while ordinary wheel events are rejected before player lookup unless the configured right-button gesture is active. Its one-shot context-menu suppression is time-bounded and cleared on navigation, window blur or the start of a fresh right-button gesture, so a later ordinary right-click is not swallowed. |
+| Scroll Miniplayer | 5.27 | Floats the active watch or live player when it leaves the viewport and shows compact current-title and queue-position context at the top, clear of native playback controls, while the full queue remains hidden. YouTube-style SVG controls close it or open a direct three-corner position chooser while preserving accessible labels, keyboard focus and the stored valid position; corner changes synchronise across already-open YouTube windows. Queue context follows panel creation, removal and selection changes, preferring an exact current-video match before safe visible or selected fallbacks. Navigation stays locked after YouTube's finish event until the destination URL and active player identify the same video, while existing bounded recovery still handles cancelled or incomplete transitions. Player restoration remains non-destructive and is deferred while the player or its video owns native fullscreen; off-route live players use event-driven finalisation instead of indefinite polling, animation work is reset across page suspension, and observation stops off eligible routes. Queue labels are created using native DOM operations compatible with Trusted Types enforcement. |
+| Watch Layout Cleaner | 1.43 | Adds a native-style Play next in queue action immediately above Add to queue. Corrects stale playing markers only when the active player, queue ID and current queue index agree. Expands watch-page content, keeps an active queue rail at the SponsorBlock-friendly `374px` width, widens metadata and comments, and provides late-loading queue-thumbnail fallbacks for both legacy and current playlist panels. Queue drag assistance reuses native edge scrolling with current visible bounds and bounded speed, and animates only inner row contents without changing native drop targets or ordering. DeArrow queue logos occupy a fixed slot to avoid hover reflow and can be hidden independently of replacement titles and thumbnails. It releases an otherwise empty rail only when related content and chat are hidden, no usable queue exists and neither SponsorBlock nor a visible engagement panel needs the space. Removed offscreen queue rows are unobserved promptly. |
+| Suite Settings | 1.30 | Opens a native-style settings dialogue beside the profile button, with a 32px embedded vector logo inside a 40px click target, validated local preferences and a dark/light in-panel colour picker. Uses the existing shared observer and stylesheet; builds the dialogue only when opened using native DOM operations compatible with Trusted Types enforcement and has no polling. |
 
 The former standalone SponsorBlock Queue Width script remains superseded. Its
 required layout rules are owned directly by Watch Layout Cleaner, avoiding a
@@ -69,11 +69,16 @@ repeated accidentally from that same menu entry.
 
 The action does not reload playback, maintain a separate queue or continuously
 poll. Reordering requires one unambiguous visible player. An existing queue's ID
-must match that player, including collapsed miniplayer queues. It waits at most
-eight seconds for a coherent native queue, cancelling if navigation, the playing
-video or the active queue changes. If YouTube cannot supply a supported
-queue panel, a status message explains the failure; a newly added video may
-remain at the end of the queue. Ambiguous native operations are not retried.
+must match that player. On Home and search, where the native miniplayer can
+report no playlist ID, its own queue panel must instead match the player's exact
+ordered video IDs. A collapsed queue is expanded through its native header and
+given at most two seconds to become ready, without adding anything first.
+Existing queue rows and their native reorder bindings are checked before a new
+video is added. The subsequent add/move operation waits at most eight seconds,
+cancelling if navigation, the playing video or the active queue changes. If a
+native operation becomes unverifiable after an add was accepted, the video may
+remain at the end; a status message explains this. Ambiguous native operations
+are not retried.
 Stale playing markers are corrected through native display-data bindings only
 when one active player, its temporary queue ID and the panel's current index
 identify the same unique video. Reused row bindings are refreshed if necessary;
@@ -124,12 +129,17 @@ want this switch to restore the bar.
 
 ### Channel upload filters and video context menus
 
-Under **Channels → Channel upload filters**, select **Manage** to add a channel
+Under **Channels → Channel upload filters**, select **Manage filters** to add a channel
 ID or a canonical `/channel/UC…` URL. Give each channel a maximum upload age
 using a number and days, weeks, months or years, or select **Hide this channel —
 all uploads** to hide its supported feed cards regardless of upload date.
 Rules start empty: channels without a rule are unaffected. The Channels tab
-shows each saved name, ID, age limit and status, with Edit and Remove controls.
+shows each saved name, ID, age limit and status, with **Edit filter** and **Remove
+filter** controls. In the manager, **Add filter** or **Update filter** collapses
+the current entry into a summary without saving it. **Add another channel**
+opens a new entry and collapses the previous valid one. **Save filters** applies
+the whole list immediately and closes the dialogue; validation, storage or
+conflicting-edit errors keep it open.
 Removal is staged in the manager and requires **Save filters**; Cancel leaves
 the saved rule unchanged. Each rule can also be disabled independently.
 These limits are separate from **Hide watched videos** and its existing
@@ -322,6 +332,8 @@ no local build paths or profile data.
   browser. The uBlock Origin entry notes the difference from Origin Lite and
   Chrome's lack of full uBlock Origin support. Only the panel content scrolls.
 - Credits: logo, author, version, licence and GitHub profile link.
+- Support: local backup/restore and an on-demand, privacy-safe troubleshooting
+  report. Neither tool sends information anywhere or reloads playback.
 
 Edits are drafts until **Save**. Cancel discards unsaved edits; Restore defaults
 changes the draft only. Saved settings are local to YouTube in this browser
@@ -338,6 +350,41 @@ an unchanged draft refreshes to those values. An edited or invalid draft is
 kept without overwriting the newer settings; Cancel and reopen to resolve it.
 Invalid or unavailable stored settings fall back to the existing defaults;
 storage write failures are displayed instead of reporting a successful save.
+
+### Backup and restore
+
+In **Support**, **Download backup** exports saved Suite preferences and channel
+upload filters as versioned JSON. Unsaved edits, account data and browsing
+history are excluded. Channel names and IDs are included deliberately; treat
+the file as private. The backup is local to this browser profile and is not a
+copy of YouTube's own recommendation choices.
+
+Choose a backup to preview the setting changes and filter additions, updates
+and removals. Restoring replaces both saved settings and the complete filter
+list; it is not a merge. Confirmation is required and unsaved settings drafts
+must first be saved or discarded. Unsupported fields, invalid values, duplicate
+channels and files larger than 128 KiB are rejected before writing. A changed
+storage baseline invalidates the preview. Writes are checked and partial
+failures attempt to restore the previous records; any incomplete recovery is
+reported explicitly. Channel filters refresh after success; settings retain
+the existing explicit **Reload now** workflow. Restoring never reloads the page
+automatically.
+
+### Troubleshooting and compatibility
+
+The **Support** tab shows a local, manually refreshed health report. **Copy
+report** requests clipboard access only when clicked, with selectable text if
+access is denied. Reports include allowlisted module states, bounded error
+counts and fixed compatibility/navigation flags. They exclude raw error
+messages, stack traces, timestamps, URLs, video/channel IDs, titles, search
+terms, account data and performance traces. Timing diagnostics stay disabled.
+
+Module initialisation is not proof that every feature works. Video-menu
+compatibility is checked only after a menu is requested: not checked, loading,
+not applicable, recognised and unsupported are distinct states. Unrecognised
+layouts retain native actions. This helps identify layout changes; it cannot
+prevent YouTube from changing its private components or guarantee support for
+every experiment or language.
 
 The isolated `examples/settings-preview.html` is a design reference only. The
 functional panel is covered by the complete-suite Firefox checks in
@@ -370,6 +417,37 @@ deliberately avoids concatenating independent userscripts unchanged.
   relevant stable surfaces, and rejects ordinary wheel events before querying
   the player unless the configured right-button gesture is active.
 - All module CSS is rendered through one ordered stylesheet element.
+- Irrelevant mutation types and attribute names are rejected before DOM
+  containment checks. Logical subscription and queued-record ordering stay unchanged.
+- Comment controls and author styling share one descendant/open-shadow-root
+  discovery per application. Each later application rediscovers the current DOM.
+- Channel upload filtering evaluates each normalised card once per reconciliation
+  and shares one renderer snapshot within that evaluation, never between passes.
+- Miniplayer control discovery skips verified comment-only mutations while its
+  toolbar is connected. Unknown or structural changes retain the existing
+  discovery path; shallow watch-state observation preserves visibility changes.
+- Page Coherence selects one active player per snapshot. Later snapshots and
+  recovery attempts still select afresh; no cross-navigation cache is introduced.
+- Native preview progress, captions and controls do not trigger card filtering
+  when they are inside a recognised preview player. Real thumbnail progress,
+  metadata and outer renderer changes remain observed; unknown layouts retain
+  the existing path.
+- Miniplayer discovery ignores internal edits to the two native Suite settings
+  dialogues. Mounting, removal, mixed native changes and player topology still
+  take the recovery path. Settings avoid rewriting unchanged labels, colours
+  and tab state; Support reports are collected only when that tab is used.
+- Comment, feed and preference work queues coalesce roots against the current DOM when
+  their animation frame runs, avoiding pairwise containment checks during large
+  card bursts. Reparented and disconnected roots are handled without retaining
+  an ancestry cache or crossing shadow-root boundaries.
+- Feed-count summaries refresh for actual filter-state, membership and external
+  marker changes, not unchanged view-count text. Real date/channel changes still
+  run filtering, and initial loads, navigation and temporary reveal stay current.
+- Mirror tooltips register their complete ancestor observation set in one
+  transaction using the existing shared observer API, with the same standalone
+  fallback and cleanup. No observation scope or native recovery is removed.
+- Settings-button discovery ignores text/comment-only changes while retaining
+  element replacement and removal recovery.
 - Document-start and document-idle modules retain their original execution
   phases.
 - A failing module is caught and reported with its module ID without preventing

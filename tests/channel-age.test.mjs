@@ -244,6 +244,28 @@ test("recycled component-props channel and publication data are read afresh with
   assert.equal(service.cardFilterReason(node), "Channel age");
 });
 
+test("each filter evaluation reads one fresh component record for identity and publication", () => {
+  const service = ageService();
+  const node = componentCard();
+  let reads = 0;
+  node.componentProps.data = function () { reads += 1; return this.value; };
+  const cases = [
+    [ID, "2 weeks ago", "Channel age"],
+    [ID, "1 hour ago", null],
+    [OTHER_ID, "3 weeks ago", null],
+    [ID, "3 weeks ago", "Channel age"],
+  ];
+  for (const [channel, date, reason] of cases) {
+    // Replace, rather than mutate, the object to catch snapshots retained across calls.
+    node.componentProps.value = componentCard(channel, date).componentProps.value;
+    const before = reads;
+    assert.equal(service.cardFilterReason(node), reason);
+    assert.equal(reads - before, 1, "Identity and date checks share this invocation's model");
+  }
+  assert.deepEqual(service.channelFromCard(node), { channelId: ID, name: "Current channel" });
+  assert.equal(reads, cases.length + 1, "Standalone identity checks still read the current model");
+});
+
 test("daily and weekly limits hide only videos definitely older than the configured cutoff", () => {
   const daily = ageService({ maxAge: 2, unit: "days" });
   assert.equal(daily.isCardTooOld(card({ date: "3 days ago" })), true);

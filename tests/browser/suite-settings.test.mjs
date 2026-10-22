@@ -12,7 +12,7 @@ let browser;
 before(async () => { browser = await launchFixtureBrowser(); }, { timeout: 30000 });
 after(async () => { await browser?.close(); }, { timeout: 10000 });
 
-async function openFixture(t, seed, viewport = { width: 1280, height: 900 }, strictTrustedTypes = false) {
+async function openFixture(t, seed, viewport = { width: 1280, height: 900 }, strictTrustedTypes = false, trackSettingsDiscovery = false) {
   const context = await browser.newContext({ viewport, serviceWorkers: "block" });
   await context.route("**/*", route => route.request().url().startsWith("https://www.youtube.com/watch?")
     ? route.fulfill({ contentType: "text/html", body: FIXTURE,
@@ -24,7 +24,15 @@ async function openFixture(t, seed, viewport = { width: 1280, height: 900 }, str
       localStorage.setItem(key, raw); sessionStorage.setItem("seeded", "1");
     }
   }, { key: KEY, raw: typeof seed === "string" ? seed : JSON.stringify({ version: 1, values: seed }) });
-  await context.addInitScript({ content: SUITE });
+  const discoveryProbe = () => {
+    const nativeFrame = window.requestAnimationFrame.bind(window);
+    window.settingsDiscoveryPasses = 0;
+    window.requestAnimationFrame = callback => nativeFrame(callback.name === 'installButton' ? timestamp => {
+      window.settingsDiscoveryPasses++;
+      callback(timestamp);
+    } : callback);
+  };
+  await context.addInitScript({ content: trackSettingsDiscovery ? `(${discoveryProbe.toString()})();\n${SUITE}` : SUITE });
   const page = await context.newPage();
   page.setDefaultTimeout(7000);
   const errors = [];
@@ -317,6 +325,61 @@ test("player shortcut remains available with Mirror disabled and the masthead re
   assert.equal(await page.locator('#ytppl-video-mirror-button').count(), 0);
 });
 
+test("settings discovery ignores native text/comment churn but repairs structural replacements", async t => {
+  const page = await openFixture(t, { theatreMode: false }, undefined, false, true);
+  await page.locator('#ytms-player-settings-button').waitFor();
+  const churn = await page.evaluate(async () => {
+    const settle = () => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+    await settle();
+    const before = window.settingsDiscoveryPasses;
+    for (let index = 0; index < 20; index++) {
+      document.querySelector('.ytp-settings-button').replaceChildren(
+        document.createTextNode(`Settings ${index}`), document.createComment(`Control update ${index}`));
+      await settle();
+    }
+    const controls = window.settingsDiscoveryPasses - before;
+    const afterControls = window.settingsDiscoveryPasses;
+    for (let index = 0; index < 20; index++) {
+      document.querySelector('#avatar-btn').replaceChildren(
+        document.createTextNode(`Profile ${index}`), document.createComment(`Header update ${index}`));
+      await settle();
+    }
+    return { controls, avatar: window.settingsDiscoveryPasses - afterControls };
+  });
+  assert.deepEqual(churn, { controls: 0, avatar: 0 });
+  await page.evaluate(() => document.querySelector('#ytms-settings-button').remove());
+  await page.locator('#ytms-settings-button').waitFor();
+  assert.ok(await page.evaluate(() => window.settingsDiscoveryPasses > 0), 'The probe must observe actual installation work');
+  await page.evaluate(() => document.querySelector('#ytms-player-settings-button').remove());
+  await page.locator('#ytms-player-settings-button').waitFor();
+  await page.evaluate(async () => {
+    const controls = document.querySelector('.ytp-right-controls');
+    const parent = controls.parentElement;
+    controls.remove();
+    await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+    controls.querySelector('#ytms-player-settings-button')?.remove();
+    parent.append(controls);
+  });
+  await page.locator('#ytms-player-settings-button').waitFor();
+  await page.evaluate(() => {
+    const previous = document.querySelector('.ytp-right-controls');
+    const next = previous.cloneNode(true);
+    next.querySelector('#ytms-player-settings-button').remove();
+    next.querySelector('#ytppl-video-mirror-button').remove();
+    previous.replaceWith(next);
+  });
+  await page.waitForFunction(() => document.querySelector('#ytms-player-settings-button')?.nextElementSibling?.id === 'ytppl-video-mirror-button');
+  await page.evaluate(() => {
+    const previous = document.querySelector('ytd-masthead');
+    const next = previous.cloneNode(true);
+    next.querySelector('#ytms-settings-button').remove();
+    previous.replaceWith(next);
+  });
+  await page.waitForFunction(() => document.querySelector('#ytms-settings-button')?.nextElementSibling?.id === 'avatar-btn');
+  assert.equal(await page.locator('#ytms-settings-button').count(), 1);
+  assert.equal(await page.locator('#ytms-player-settings-button').count(), 1);
+});
+
 test("player shortcut opens its modal without leaving native page or player fullscreen", async t => {
   const page = await openFixture(t);
   for (const selector of ['#page-fullscreen', '.ytp-fullscreen-button']) {
@@ -485,7 +548,8 @@ test('red settings accents remain readable in both themes and disabled Save stay
     assert.equal(await page.locator('#ytms-tab-comments').evaluate(node => getComputedStyle(node).borderBottomColor), accent);
     await page.locator('#ytms-compactComments').uncheck();
     assert.equal(await action.isEnabled(), true);
-    assert.equal(await action.evaluate(node => getComputedStyle(node).backgroundColor), accent);
+    assert.equal(await action.evaluate(node => getComputedStyle(node).backgroundColor), 'rgb(204, 0, 0)');
+    assert.equal(await action.evaluate(node => getComputedStyle(node).color), 'rgb(255, 255, 255)');
     const contrast = await action.evaluate(node => {
       const luminance = colour => colour.match(/[\d.]+/g).slice(0, 3).map(Number).map(value => {
         const channel = value / 255;
@@ -670,7 +734,7 @@ test('separately saved channel upload filters do not create unsaved main prefere
   await page.locator('#ytms-age-add').click();
   await page.getByLabel('Channel ID or channel URL', { exact: true }).fill(`UC${'a'.repeat(22)}`);
   await page.locator('#ytms-age-save').click();
-  await page.locator('#ytms-age-cancel').click();
+  assert.equal(await page.locator('#ytms-age-dialog').isVisible(), false);
   assert.equal(await page.locator('#ytms-save-preview').textContent(), 'Save');
   assert.equal(await page.locator('#ytms-save-preview').isDisabled(), true);
   assert.equal(await page.evaluate(key => localStorage.getItem(key), KEY), null);
@@ -815,6 +879,8 @@ test("Extensions remains theme-adaptive, keyboard-accessible and contained in a 
   await content.evaluate(element => element.scrollTop = element.scrollHeight);
   const footer = await dialog.locator('footer').boundingBox();
   assert.ok(footer.y >= bounds.y && footer.y + footer.height <= bounds.y + bounds.height);
+  await page.keyboard.press('ArrowRight');
+  assert.equal(await page.evaluate(() => document.activeElement.id), 'ytms-tab-support');
   await page.keyboard.press('ArrowRight');
   assert.equal(await page.evaluate(() => document.activeElement.id), 'ytms-tab-credits');
   await page.getByRole('tab', { name: 'Extensions', exact: true }).click();
@@ -1137,7 +1203,7 @@ test("repeated opens and native navigation events retain one button and one lazi
   });
   assert.equal(await page.locator('#ytms-settings-button').count(), 1);
   assert.equal(await page.locator('#ytms-settings-dialog').count(), 1);
-  assert.equal(await page.locator('#ytms-settings-dialog [role="tab"]').count(), 9);
+  assert.equal(await page.locator('#ytms-settings-dialog [role="tab"]').count(), 10);
   assert.equal(await page.evaluate(key => localStorage.getItem(key), KEY), null);
 });
 
@@ -1180,4 +1246,47 @@ test("settings open under enforced Trusted Types without a default HTML policy",
   assert.equal(await page.locator('.ytsmp-queue-title').textContent(), 'Video A');
   await page.locator('#ytms-player-settings-button').click();
   assert.equal(await page.locator('#ytms-settings-dialog').isVisible(), true);
+});
+
+test('ordinary settings edits do not rewrite unchanged primary labels, preview colours or inactive tabs', async t => {
+  const page = await openFixture(t); await openPanel(page);
+  await page.locator('#ytms-tab-layout').click();
+  const result = await page.evaluate(async () => {
+    const root = document.getElementById('ytms-settings-dialog');
+    const records = [];
+    const observer = new MutationObserver(batch => records.push(...batch));
+    observer.observe(root, { subtree: true, childList: true, attributes: true });
+    const checkbox = document.getElementById('ytms-hideRelated');
+    for (let i = 0; i < 20; i++) checkbox.click();
+    await Promise.resolve();
+    observer.disconnect();
+    return {
+      labelWrites: records.filter(record => record.type === 'childList' && record.target.id === 'ytms-save-preview').length,
+      previewWrites: records.filter(record => record.type === 'attributes' && record.attributeName === 'style' &&
+        (record.target.id === 'ytms-comment-preview' || record.target.classList.contains('swatch'))).length,
+      tabWrites: records.filter(record => record.target.getAttribute('role') === 'tab' || record.target.getAttribute('role') === 'tabpanel').length,
+      dirty: !document.getElementById('ytms-save-preview').disabled,
+    };
+  });
+  assert.deepEqual(result, { labelWrites: 0, previewWrites: 0, tabWrites: 0, dirty: false });
+});
+
+test('Support snapshots remain lazy and each refresh reads health once', async t => {
+  const page = await openFixture(t);
+  await page.evaluate(() => {
+    const root = document.documentElement, original = root.getAttribute;
+    window.supportHealthReads = 0;
+    root.getAttribute = function(name) {
+      if (name === 'data-yt-master-suite') window.supportHealthReads++;
+      return Reflect.apply(original, this, [name]);
+    };
+  });
+  await openPanel(page);
+  assert.equal(await page.evaluate(() => window.supportHealthReads), 0);
+  await page.locator('#ytms-tab-support').click();
+  assert.equal(await page.evaluate(() => window.supportHealthReads), 1);
+  await page.locator('#ytms-refresh-support').click();
+  assert.equal(await page.evaluate(() => window.supportHealthReads), 2);
+  await page.locator('#ytms-cancel-panel').click(); await openPanel(page);
+  assert.equal(await page.evaluate(() => window.supportHealthReads), 2);
 });

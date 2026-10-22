@@ -146,5 +146,5 @@ export function createSuiteSettings(getStorage, isDarkTheme) {
     };
     return {};
   }
-  return Object.freeze({ key, defaults, initial, read, save, validate, colours, normaliseHex, overrides });
+  return Object.freeze({ key, cornerKey, defaults, initial, read, save, validate, colours, normaliseHex, overrides });
 }

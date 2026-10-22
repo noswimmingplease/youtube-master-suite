@@ -152,6 +152,68 @@ test("recycled channel hrefs and date text nodes are reassessed in both directio
   await hidden(page, "recycled", true);
 });
 
+test("one feed pass evaluates each normalised age-filter card once and reads one model snapshot", async t => {
+  const page = await open(t);
+  await page.evaluate(id => {
+    const audit = window.ageFixture.audit = { calls: 0, reads: 0 };
+    const original = window.fixtureChannelAge.cardFilterReason;
+    window.fixtureChannelAge.cardFilterReason = card => { audit.calls += 1; return original(card); };
+    for (let index = 0; index < 100; index += 1) {
+      const name = `counted-${index}`;
+      window.ageFixture.add(name);
+      const media = document.querySelector(`#${name} ytd-rich-grid-media`);
+      media.componentProps = {
+        value: { ownerText: { runs: [{ text: "Fixture channel", navigationEndpoint: { browseEndpoint: { browseId: id } } }] },
+          publishedTimeText: { simpleText: "2 weeks ago" } },
+        data() { audit.reads += 1; return this.value; },
+      };
+    }
+    window.ageFixture.add("excluded-counted", { queue: true });
+  }, ID);
+  await hidden(page, "counted-99", true);
+  await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+  assert.deepEqual(await page.evaluate(() => window.ageFixture.audit), { calls: 100, reads: 100 });
+  assert.equal(await page.locator('[data-clean-up-youtube-hidden="1"]').count(), 100);
+  await hidden(page, "excluded-counted", false);
+
+  for (const [channel, date, filtered] of [[ID, "1 hour ago", false], [OTHER_ID, "3 weeks ago", false], [ID, "3 weeks ago", true]]) {
+    await page.evaluate(({ channel, date }) => {
+      window.ageFixture.audit.calls = 0;
+      window.ageFixture.audit.reads = 0;
+      const component = document.querySelector("#counted-0 ytd-rich-grid-media").componentProps;
+      component.value = { ownerText: { runs: [{ text: "Fixture channel", navigationEndpoint: { browseEndpoint: { browseId: channel } } }] },
+        publishedTimeText: { simpleText: date } };
+      window.ageFixture.channel("counted-0", channel);
+      window.ageFixture.date("counted-0", date);
+    }, { channel, date });
+    await hidden(page, "counted-0", filtered);
+    await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+    assert.deepEqual(await page.evaluate(() => window.ageFixture.audit), { calls: 1, reads: 1 }, "Recycled data is re-read without revisiting other cards");
+  }
+});
+
+test("age-filter deduplication retains standalone lockups and excludes popup descendants", async t => {
+  const page = await open(t);
+  await page.evaluate(() => {
+    window.ageFixture.add("standalone");
+    const wrapper = document.getElementById("standalone");
+    const media = wrapper.firstElementChild;
+    const lockup = document.createElement("yt-lockup-view-model");
+    lockup.id = "standalone";
+    lockup.style.display = "block";
+    lockup.append(...media.childNodes);
+    wrapper.replaceWith(lockup);
+
+    window.ageFixture.add("popup-excluded");
+    const popup = document.createElement("ytd-popup-container");
+    document.querySelector("#contents").append(popup);
+    popup.append(document.getElementById("popup-excluded"));
+  });
+  await hidden(page, "standalone", true);
+  await hidden(page, "popup-excluded", false);
+  assert.equal(await page.locator("#popup-excluded").isVisible(), true);
+});
+
 test("current lockup component data filters handle-only cards and follows recycled identities and dates", async t => {
   const page = await open(t);
   await page.evaluate(id => {

@@ -597,8 +597,18 @@ assert(
 );
 assert.match(
   userscript,
-  /const mo = new MutationObserver\(\(muts\) => \{[\s\S]{0,300}?if \(observedControls\?\.isConnected && getPlayerEl\(\)\?\.contains\(observedControls\)\) return;/,
+  /const mo = new MutationObserver\(\(muts\) => \{[\s\S]{0,800}?if \(observedControls\?\.isConnected && getPlayerEl\(\)\?\.contains\(observedControls\)\) return;/,
   "Miniplayer Button Restorer must leave current-toolbar mutations to its narrow observer",
+);
+assert.match(
+  userscript,
+  /hideTooltipForMutations\(muts\);[\s\S]{0,600}?if \(observedControls\?\.isConnected && muts.length && muts.every\(isCommentContentMutation\)\) return;/,
+  "Miniplayer comment-only discovery shortcut must retain tooltip checks and connected-control ownership",
+);
+assert.match(
+  userscript,
+  /hideTooltipForMutations\(muts\);[\s\S]{0,260}?if \(muts.length && muts.every\(isSuiteDialogContentMutation\)\) return;/,
+  "Miniplayer dialogue shortcut must retain tooltip checks and reject only wholly owned batches",
 );
 
 const miniplayerButtonSource =
@@ -1179,7 +1189,7 @@ assert.match(
 const pageCoherenceSource = canonicalSources.get("pageCoherence") || "";
 for (const coherenceRecoveryRequirement of [
   "staleRecoveryDelaysMs: [2000, 5000, 10000]",
-  "const getActiveWatchFlexy = () => {",
+  "const getActiveWatchFlexy = (player = getActivePlayer()) => {",
   '"#ytsmp-player-placeholder"',
   'document.querySelectorAll(\'[id="movie_player"]\')',
   "const getFlexyVideoIdentity = (flexy, urlVideoId, playerVideoId) => {",

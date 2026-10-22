@@ -430,6 +430,92 @@ test("player state classes can hide native controls without observing player des
   assert.ok(registrations.filter(([target]) => target === harness.document.documentElement).every(([, options]) => !options.attributes));
 });
 
+test("two thousand unrelated comment batches perform no player discovery or layout reads", () => {
+  const harness = createHarness();
+  const watch = harness.player.closest("ytd-watch-flexy");
+  const comments = watch.appendChild(harness.document.createElement("ytd-comments"));
+  harness.settle();
+  let queries = 0;
+  let rectReads = 0;
+  const query = harness.document.querySelector.bind(harness.document);
+  const rects = watch.getClientRects.bind(watch);
+  harness.document.querySelector = selector => { queries++; return query(selector); };
+  watch.getClientRects = () => { rectReads++; return rects(); };
+  for (let index = 0; index < 1000; index++) {
+    const node = comments.appendChild(harness.document.createElement("span"));
+    harness.flushMutations();
+    node.remove();
+    harness.flushMutations();
+  }
+  assert.deepEqual({ queries, rectReads }, { queries: 0, rectReads: 0 });
+  assert.equal(harness.timers.size, 0);
+});
+
+test("unknown and player-containing comment batches retain native player discovery", () => {
+  for (const structural of [false, true]) {
+    const harness = createHarness();
+    const container = harness.document.body.appendChild(
+      harness.document.createElement(structural ? "ytd-comments" : "div"),
+    );
+    harness.settle();
+    let queries = 0;
+    const query = harness.document.querySelector.bind(harness.document);
+    harness.document.querySelector = selector => { queries++; return query(selector); };
+    const wrapper = harness.document.createElement("div");
+    if (structural) {
+      const player = wrapper.appendChild(harness.document.createElement("div"));
+      player.id = "movie_player";
+    }
+    container.appendChild(wrapper);
+    harness.flushMutations();
+    assert.ok(queries > 0, structural ? "nested player topology" : "unknown layout");
+  }
+});
+
+test("retained watch visibility changes reconcile controls before subsequent comment updates", () => {
+  const harness = createHarness({ native: false });
+  const oldWatch = harness.player.closest("ytd-watch-flexy");
+  const nextWatch = harness.document.body.appendChild(harness.document.createElement("ytd-watch-flexy"));
+  nextWatch.hidden = true;
+  const nextPlayer = nextWatch.appendChild(harness.document.createElement("div"));
+  nextPlayer.id = "movie_player";
+  nextPlayer.className = "html5-video-player";
+  const nextControls = nextPlayer.appendChild(harness.document.createElement("div"));
+  nextControls.className = "ytp-right-controls";
+  const comments = nextWatch.appendChild(harness.document.createElement("ytd-comments"));
+  harness.settle();
+  harness.custom().emit("mouseenter");
+  assert.ok(harness.tooltip());
+
+  oldWatch.hidden = true;
+  nextWatch.hidden = false;
+  comments.appendChild(harness.document.createElement("span"));
+  harness.settle();
+  assert.equal(harness.tooltip(), null);
+  assert.equal(harness.custom()?.parentElement, nextControls);
+
+  nextWatch.hidden = true;
+  oldWatch.hidden = false;
+  harness.settle();
+  assert.equal(harness.custom()?.parentElement, harness.controls);
+  assert.equal(harness.timers.size, 0);
+});
+
+test("watch identity observation is shallow and still schedules reconciliation", () => {
+  const harness = createHarness();
+  const watch = harness.player.closest("ytd-watch-flexy");
+  const registrations = harness.observers.flatMap(observer => [...observer.registrations])
+    .filter(([target]) => target === watch);
+  assert.equal(registrations.length, 1);
+  assert.equal(registrations[0][1].subtree, false);
+  assert.ok(registrations[0][1].attributeFilter.includes("video-id"));
+  watch.setAttribute("video-id", "bbbbbbbbbbb");
+  harness.flushMutations();
+  assert.ok(harness.timers.size > 0);
+  harness.settle();
+  assert.equal(harness.timers.size, 0);
+});
+
 test("replaced controls adopt native availability and release old observer targets", () => {
   for (const withNative of [false, true]) {
     const harness = createHarness({ native: false });

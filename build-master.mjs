@@ -6,10 +6,13 @@ import { createSuiteSettings } from "./sources/suite-settings.mjs";
 import { createSettingsDialog } from "./sources/settings-panel-dom.mjs";
 import { createChannelAgeService } from "./sources/channel-age.mjs";
 import { createChannelAgeDialog } from "./sources/channel-age-dialog.mjs";
+import { createSuiteBackup } from "./sources/suite-backup.mjs";
+import { createSuiteSupport } from "./sources/suite-support.mjs";
+import { createSettingsSupportPanel } from "./sources/settings-support-panel.mjs";
 import { installVideoMenu } from "./sources/video-menu.mjs";
 import { rejectYouTubeOptionalCookies } from "./sources/youtube-cookie-consent.mjs";
 
-const MASTER_VERSION = "1.2.8";
+const MASTER_VERSION = "1.2.14";
 const suiteDirectory = dirname(fileURLToPath(import.meta.url));
 const outputPath = join(suiteDirectory, "youtube-master-suite.user.js");
 const releaseManifestPath = join(suiteDirectory, "release-manifest.json");
@@ -363,20 +366,17 @@ function mutationMatchesRegistrations(
   }
 
   for (const [target, options] of registrations) {
+    // Reject irrelevant types/attributes before asking the DOM about scope.
+    // Shared delivery includes records requested only by other modules.
+    const matchesType =
+      (mutation.type === "childList" && options.childList) ||
+      (mutation.type === "characterData" && options.characterData) ||
+      (mutation.type === "attributes" && options.attributes &&
+        (!options.attributeFilter || options.attributeFilter.includes(mutation.attributeName)));
+    if (!matchesType) continue;
     if (
-      mutation.target !== target &&
-      (!options.subtree || !target.contains(mutation.target))
-    ) {
-      continue;
-    }
-
-    if (mutation.type === "childList" && options.childList) return true;
-    if (mutation.type === "characterData" && options.characterData) return true;
-    if (
-      mutation.type === "attributes" &&
-      options.attributes &&
-      (!options.attributeFilter ||
-        options.attributeFilter.includes(mutation.attributeName))
+      mutation.target === target ||
+      (options.subtree && target.contains(mutation.target))
     ) {
       return true;
     }
@@ -2285,7 +2285,10 @@ ${runtimeMutationCoverageHelpers}
     installVideoMenu: ${installVideoMenu.toString()},
     settingsAssets: ${JSON.stringify(settingsAssets)},
     createSettingsDialog: ${createSettingsDialog.toString()},
+    createSettingsSupportPanel: ${createSettingsSupportPanel.toString()},
   };
+  suite.backup = (${createSuiteBackup.toString()})(() => window.localStorage, suite.settings, suite.channelAge);
+  suite.support = (${createSuiteSupport.toString()})(document, MASTER_VERSION, STYLE_ORDER);
 
   installDiagnostics();
 ${moduleInitialisers}

@@ -310,7 +310,7 @@ function createHarness({ enabled = true } = {}) {
     "refreshVideoMirrorTooltip",
     "isVideoMirrorTooltipOwnerVisible", "handleVideoMirrorTooltipPointerMove", "handleVideoMirrorTooltipVisibility",
     "handleVideoMirrorTooltipDocumentLeave",
-    "showVideoMirrorTooltip", "handleVideoMirrorKeyDown",
+    "showVideoMirrorTooltip", "handleVideoMirrorKeyDown", "replaceObserverRegistrations",
     "placeVideoMirrorButton", "syncVideoMirror", "scheduleVideoMirrorSync", "mutationAffectsVideoMirror",
     "handleVideoMirrorMetadata", "handleNavigateStart", "handleNavigateFinish",
     "applyRoutePreferences", "cancelScheduledAnimationWork",

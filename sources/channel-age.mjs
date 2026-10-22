@@ -137,8 +137,7 @@ export function createChannelAgeService(getStorage, now = () => Date.now()) {
     return Array.isArray(rows) ? rows.slice(0, 4).flatMap(row => Array.isArray(row?.metadataParts) ? row.metadataParts.slice(0, 5) : []) : [];
   }
 
-  function channelFromCard(card) {
-    if (!card?.querySelectorAll) return null;
+  function channelFromRecords(card, data) {
     const candidates = new Map();
     function add(id, name) {
       const channelId = normaliseChannelId(id);
@@ -155,7 +154,7 @@ export function createChannelAgeService(getStorage, now = () => Date.now()) {
       const href = anchor.getAttribute("href") || "";
       add(href.startsWith("/channel/") ? `https://www.youtube.com${href}` : href, anchor.textContent);
     }
-    for (const record of records(card)) {
+    for (const record of data) {
       // Current History lockups keep the owner endpoint on the avatar, while
       // their visible byline is plain text rather than a clickable channel link.
       const avatar = record.metadata?.lockupMetadataViewModel?.image?.decoratedAvatarViewModel;
@@ -176,6 +175,10 @@ export function createChannelAgeService(getStorage, now = () => Date.now()) {
     if (candidates.size !== 1) return null;
     const [channelId, name] = candidates.entries().next().value;
     return { channelId, name: name || channelId };
+  }
+
+  function channelFromCard(card) {
+    return card?.querySelectorAll ? channelFromRecords(card, records(card)) : null;
   }
 
   function liveOrUpcoming(card, data) {
@@ -236,10 +239,9 @@ export function createChannelAgeService(getStorage, now = () => Date.now()) {
     return result.getTime() + day - 1;
   }
 
-  function isOlderThanRule(card, rule) {
+  function isOlderThanRule(card, rule, data) {
     const timestamp = Number(now());
     if (!Number.isFinite(timestamp)) return false;
-    const data = records(card);
     if (liveOrUpcoming(card, data)) return false;
     const dates = [];
     for (const record of data) {
@@ -258,14 +260,16 @@ export function createChannelAgeService(getStorage, now = () => Date.now()) {
 
   function cardFilterReason(card) {
     if (!enabledRules.size || !card?.querySelectorAll) return null;
-    const owner = channelFromCard(card);
+    // Renderers can be recycled between calls; share this snapshot only here.
+    const data = records(card);
+    const owner = channelFromRecords(card, data);
     const rule = owner && enabledRules.get(owner.channelId);
     if (!rule) return null;
     // Suite-owned blocks are not YouTube recommendation-feedback history.
     // Deliberately hide all uploads, including undated/live cards, but only
     // on the feed surfaces selected by the caller.
     if (rule.blocked) return "Channel hidden";
-    return isOlderThanRule(card, rule) ? "Channel age" : null;
+    return isOlderThanRule(card, rule, data) ? "Channel age" : null;
   }
 
   function isCardTooOld(card) {
