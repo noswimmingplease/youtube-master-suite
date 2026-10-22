@@ -153,7 +153,7 @@ test("reveal clicks and route reconciliation retain explicit summary refreshes",
   await page.waitForFunction(() => document.getElementById("yt-master-filter-toggle").getAttribute("aria-pressed") === "true");
   assert.equal(await page.locator("#card-1").isVisible(), true);
   await page.evaluate(() => window.dispatchEvent(new Event("yt-navigate-finish")));
-  await page.waitForFunction(() => document.getElementById("yt-master-filter-toggle").getAttribute("aria-pressed") === "false");
+  await page.waitForFunction(() => document.getElementById("yt-master-filter-toggle")?.getAttribute("aria-pressed") === "false");
   assert.equal(await page.locator("#card-1").isVisible(), false);
   assert.ok(await page.evaluate(() => window.feedAudit.scans >= 2));
 });

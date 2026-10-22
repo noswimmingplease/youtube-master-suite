@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         YouTube Master Suite
 // @namespace    youtube.master-suite
-// @version      1.2.14
+// @version      1.2.19
 // @description  Video mirroring, volume and quality controls, scrolling miniplayer, fullscreen comments, play next in queue, queue layout, feed and comment cleanup, colour settings, clean video links and optional-cookie rejection.
 // @author       Citizen
 // @license      GNU GPLv3
@@ -89,7 +89,7 @@
   // Consent pages need only the rejection action, not player/feed modules.
   if (window.location.hostname !== "www.youtube.com") return;
 
-  const MASTER_VERSION = "1.2.14";
+  const MASTER_VERSION = "1.2.19";
   const EXPECTED_MODULE_COUNT = 8;
   const HEALTH_ATTRIBUTE = "data-yt-master-suite";
   const ENABLED_MODULES = Object.freeze({
@@ -1153,7 +1153,7 @@
     compactComments: true, hideCommentControls: true,
     hideShorts: true, hideWatchedVideos: true, hideMixes: true, hidePodcasts: true, hideMembersOnly: true,
     watchedThreshold: "90", yellowCaptions: true, mirrorButton: true, theatreMode: true,
-    preferredVideoQuality: "off",
+    preferredVideoQuality: "off", hideFullscreenQuickActions: false,
     wheelVolume: true, wheelStep: "5", hideRelated: true, hideChat: true, hideInfoCards: true,
     hideEndScreens: true, fullscreenComments: true, disableTitleHashtagLinks: false, miniplayerEnabled: true,
     corner: "top-right", queueInfo: true,
@@ -1273,7 +1273,7 @@
       watchedVideoThresholdPercent: Number(values.watchedThreshold),
       useReadableYellowCaptions: values.yellowCaptions, enableVideoMirrorButton: values.mirrorButton,
       enableTheaterMode: values.theatreMode, enablePlayerWheelVolume: values.wheelVolume,
-      preferredVideoQuality: values.preferredVideoQuality,
+      preferredVideoQuality: values.preferredVideoQuality, hideFullscreenQuickActions: values.hideFullscreenQuickActions,
       wheelVolumeStep: Number(values.wheelStep), hideRelatedVideos: values.hideRelated,
       hideChat: values.hideChat, hideInfoCards: values.hideInfoCards,
       hideEndScreenRecommendationGrid: values.hideEndScreens, enableFullscreenComments: values.fullscreenComments,
@@ -1926,7 +1926,8 @@
     reset();
     const videoId = videoIdFromCard(card);
     if (!videoId) { trigger = null; triggerReason = 'card-identity'; diagnostic(triggerReason); return; }
-    trigger = { button, card, videoId, time: performance.now(), nativeSignature: nativeMenuSignature(button, card) };
+    trigger = { button, card, videoId, time: performance.now(), nativeSignature: nativeMenuSignature(button, card),
+      keyboard: event.type === 'keydown' || event.detail === 0 };
     triggerReason = 'captured-trigger';
     diagnostic(triggerReason);
     startDiscovery(trigger);
@@ -1946,6 +1947,9 @@
       .ytms-video-menu-action svg { width: 24px; height: 24px; flex: 0 0 24px; fill: currentColor; }
       .ytms-video-menu-action small { display: block; white-space: normal; max-width: 240px; font-size: 12px; line-height: 16px; margin-top: 3px; }
       .ytms-video-menu-action[hidden] { display: none !important; }
+      [data-ytms-video-menu="1"]:focus { outline: none; }
+      /* Native mouseover classes can outlive row movement; retain real hover and keyboard focus. */
+      [data-ytms-video-menu="1"] .ytListItemViewModelHovered:not(:hover):not(:focus-within) { background-color: transparent !important; }
     `;
     (document.head || document.documentElement).append(style);
   }
@@ -1969,7 +1973,63 @@
   }
 
   function focusable(row) {
-    return row.matches('button, [tabindex]') ? row : row.querySelector('button, [role="menuitem"], [tabindex]') || row;
+    // Current sheets can put tabindex on a presentation wrapper as well as on
+    // their real button. Focus the action, not its non-activating wrapper.
+    const actions = 'button, a[href], [role="menuitem"]';
+    const candidates = [...(row.matches(actions) ? [row] : []), ...row.querySelectorAll(actions),
+      ...(row.hasAttribute('tabindex') ? [row] : []), ...row.querySelectorAll('[tabindex]')];
+    return candidates.find(element => element.getAttribute('role') !== 'presentation' &&
+      !element.matches(':disabled, [disabled]') && !element.closest('[inert]') &&
+      (element.matches('button, a[href]') || element.hasAttribute('tabindex')) && visiblePopup(element)) || null;
+  }
+
+  function navigableRows(current) {
+    return [...current.parent.children].filter(row => row === current.back ? current.tools :
+      row === current.group ? !current.group.hidden :
+        current.entries.some(entry => entry.row === row && entry.enabled && (current.tools ? entry.grouped : !entry.grouped)))
+      .map(row => ({ row, target: focusable(row) })).filter(entry => entry.target);
+  }
+
+  function focusTarget(current, target) {
+    if (!target || active !== current || current.redirectingFocus) return;
+    current.redirectingFocus = true;
+    try { if (document.activeElement !== target) target.focus({ preventScroll: true }); }
+    finally { current.redirectingFocus = false; }
+  }
+
+  function focusPage(current) {
+    const target = current.keyboard ? (current.tools ? current.back : current.group) : current.popup;
+    focusTarget(current, target === current.popup ? target : focusable(target));
+  }
+
+  function focused(event) {
+    const current = active;
+    if (!current || current.redirectingFocus || !current.popup.contains(event.target) || event.target === current.popup) return;
+    // A late native autofocus can otherwise light up the original Add to queue
+    // after Play next was inserted above it. Keep neutral container focus for
+    // pointer input; the native :hover styling and action handlers stay intact.
+    if (current.keyboard && current.interacted) return;
+    if (event.target.matches('input, textarea, select, [contenteditable]')) return;
+    // Finish native focus handlers first, including their focus/blur classes.
+    // No timer, frame loop or page-wide mutation observer is needed.
+    if (current.focusQueued) return;
+    current.focusQueued = true;
+    queueMicrotask(() => {
+      current.focusQueued = false;
+      if (active !== current || !current.popup.contains(document.activeElement)) return;
+      if (!current.keyboard) focusTarget(current, current.popup);
+      else if (!current.interacted) focusTarget(current, navigableRows(current)[0]?.target);
+    });
+  }
+
+  function pointer(event) {
+    const current = active;
+    if (!current || !event.isTrusted || !current.popup.contains(event.target)) return;
+    current.interacted = true;
+    if (current.keyboard) {
+      current.keyboard = false;
+      focusTarget(current, current.popup);
+    }
   }
 
   function refit() {
@@ -1983,7 +2043,16 @@
     if (refitFrame) cancelAnimationFrame(refitFrame);
     // Legacy popup rows settle after their first native measurement. One
     // coalesced frame avoids retaining the submenu's stale size constraints.
-    refitFrame = requestAnimationFrame(() => { refitFrame = 0; resize(); });
+    refitFrame = requestAnimationFrame(() => {
+      refitFrame = 0;
+      resize();
+      // Legacy menus briefly hide their native rows while reopening/refitting.
+      // Recheck initial keyboard focus once they settle, without moving focus
+      // after the user has navigated, switched input or left the popup.
+      if (active === current && current.keyboard && !current.interacted && current.popup.contains(document.activeElement)) {
+        focusTarget(current, navigableRows(current)[0]?.target);
+      }
+    });
   }
 
   function restoreRow(row, saved) {
@@ -2004,7 +2073,7 @@
     current.group.hidden = tools || !current.entries.some(entry => entry.enabled && entry.grouped);
     current.group.setAttribute('aria-expanded', String(tools));
     refit();
-    if (focus) focusable(tools ? current.back : current.group).focus();
+    if (focus) focusPage(current);
   }
 
   function reset() {
@@ -2022,6 +2091,7 @@
     if (!active) return;
     const current = active;
     active = null;
+    if (current.ownsTabIndex && current.popup.getAttribute('tabindex') === '-1') current.popup.removeAttribute('tabindex');
     current.back.remove();
     current.group.remove();
     current.age?.remove();
@@ -2100,10 +2170,16 @@
     const nodes = arranged.map(entry => entry.row);
     nodes.splice(beforeGroup < 0 ? nodes.length : beforeGroup, 0, group);
     active = { popup, parent, original: rows, entries, age, group, back, channel, card: selection.card, videoId: selection.videoId,
-      trigger: selection.button, tools: false };
+      trigger: selection.button, tools: false, keyboard: selection.keyboard, interacted: false, redirectingFocus: false,
+      ownsTabIndex: !popup.hasAttribute('tabindex') };
+    if (active.ownsTabIndex) popup.setAttribute('tabindex', '-1');
     parent.append(back, ...nodes);
     popup.setAttribute('data-ytms-video-menu', '1');
     setPage(false, false);
+    const focusedElement = document.activeElement;
+    if (focusedElement === selection.button || focusedElement === document.body || popup.contains(focusedElement)) {
+      focusTarget(active, selection.keyboard ? navigableRows(active)[0]?.target || popup : popup);
+    }
     diagnostic('ready');
     return true;
   }
@@ -2203,6 +2279,8 @@
     event.preventDefault();
     event.stopImmediatePropagation();
     if (!event.isTrusted) return;
+    current.keyboard = event.detail === 0;
+    current.interacted = true;
     if (action === 'channelTools') setPage(true);
     else if (action === 'back') setPage(false);
     else if (action === 'channelAge' && current.channel?.channelId) {
@@ -2218,22 +2296,32 @@
   function keyboard(event) {
     const current = active;
     if (!current || !current.popup.contains(event.target) || !event.isTrusted) return;
+    current.keyboard = true;
+    current.interacted = true;
     if ((event.key === 'ArrowRight' && event.target.closest?.('[data-ytms-menu-action="channelTools"]')) ||
         ((event.key === 'ArrowLeft' || event.key === 'Escape') && current.tools)) {
       event.preventDefault(); event.stopImmediatePropagation();
       setPage(!current.tools); return;
     }
     if (event.key === 'Escape') { reset(); trigger = null; triggerReason = 'missing-trigger'; return; }
-    if (!['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) return;
-    const rows = [...current.parent.children].filter(row => row === current.back ? current.tools :
-      row === current.group ? !current.group.hidden :
-        current.entries.some(entry => entry.row === row && entry.enabled && (current.tools ? entry.grouped : !entry.grouped)));
+    if (!['ArrowDown', 'ArrowUp', 'Home', 'End', 'Enter', ' '].includes(event.key)) return;
+    const rows = navigableRows(current);
     if (!rows.length) return;
-    const focused = rows.findIndex(row => row === event.target || row.contains(event.target));
+    const focused = rows.findIndex(({ row }) => row === event.target || row.contains(event.target));
+    if (event.key === 'Enter' || event.key === ' ') {
+      if (focused < 0) {
+        // A neutral pointer-open menu has no selected action. The first key
+        // selects a visible action; it must not execute a stale native default.
+        event.preventDefault(); event.stopImmediatePropagation();
+        focusTarget(current, rows[0].target);
+      }
+      return;
+    }
     const next = event.key === 'Home' ? 0 : event.key === 'End' ? rows.length - 1 :
-      (focused + (event.key === 'ArrowDown' ? 1 : -1) + rows.length) % rows.length;
+      focused < 0 ? (event.key === 'ArrowDown' ? 0 : rows.length - 1) :
+        (focused + (event.key === 'ArrowDown' ? 1 : -1) + rows.length) % rows.length;
     event.preventDefault(); event.stopImmediatePropagation();
-    focusable(rows[next]).focus();
+    focusTarget(current, rows[next].target);
   }
 
   function closed(event) {
@@ -2249,6 +2337,9 @@
   document.addEventListener('keydown', captureTrigger, true);
   document.addEventListener('click', activate, true);
   document.addEventListener('keydown', keyboard, true);
+  document.addEventListener('focusin', focused, true);
+  document.addEventListener('pointerdown', pointer, true);
+  document.addEventListener('pointermove', pointer, { capture: true, passive: true });
   window.addEventListener('yt-popup-opened', opened, true);
   const closeEvents = ['yt-popup-closed', 'iron-overlay-closed'];
   closeEvents.forEach(type => window.addEventListener(type, closed, true));
@@ -2263,6 +2354,9 @@
     document.removeEventListener('keydown', captureTrigger, true);
     document.removeEventListener('click', activate, true);
     document.removeEventListener('keydown', keyboard, true);
+    document.removeEventListener('focusin', focused, true);
+    document.removeEventListener('pointerdown', pointer, true);
+    document.removeEventListener('pointermove', pointer, true);
     window.removeEventListener('yt-popup-opened', opened, true);
     closeEvents.forEach(type => window.removeEventListener(type, closed, true));
     resetEvents.forEach(type => window.removeEventListener(type, navigated, true));
@@ -2520,6 +2614,9 @@
   const limit = 128 * 1024;
   const keys = [settings.key, settings.cornerKey, channelAge.key];
   const settingNames = Object.keys(settings.defaults);
+  // Version 1 backups from before this opt-in setting remain importable.
+  // Keep every pre-existing field required, and still validate the new field if present.
+  const requiredSettingNames = settingNames.filter(name => name !== "hideFullscreenQuickActions");
   const ruleNames = ["channelId", "name", "maxAge", "unit", "enabled", "blocked"];
   const previews = new WeakMap();
   const warning = "Restoring replaces all saved Suite settings and channel upload filters. Channel names and IDs are included; history and account data are not.";
@@ -2538,7 +2635,7 @@
   }
 
   function checkedSettings(input, complete = true) {
-    checkObject(input, settingNames, complete ? settingNames : []);
+    checkObject(input, settingNames, complete ? requiredSettingNames : []);
     const values = settings.validate(input);
     for (const name of Object.keys(input)) {
       if (!same(input[name], values[name])) fail(`The backup contains an invalid setting: ${name}.`);
@@ -5427,7 +5524,7 @@
 
   suite.registerModule(
     "pageCoherence",
-    "Page Coherence Guard v1.14",
+    "Page Coherence Guard v1.15",
     "document-idle",
     () => {
       const MutationObserver = suite.SharedMutationObserver;
@@ -5972,8 +6069,7 @@
           return true;
         };
 
-        const runCoherenceCheck = () => {
-          let snapshot = buildSnapshot();
+        const checkSnapshot = (snapshot) => {
           if (recoverCompletedWatchResponse(snapshot)) snapshot = buildSnapshot();
           const responseRecoveryPending = Boolean(
             (snapshot.nativeLoading ||
@@ -6005,6 +6101,9 @@
           return publishState(snapshot);
         };
 
+        // Public/manual checks and delayed work always read current native state.
+        const runCoherenceCheck = () => checkSnapshot(buildSnapshot());
+
         const clearScheduledChecks = () => {
           checkTimers.forEach((timerId) => clearTimeout(timerId));
           checkTimers.clear();
@@ -6034,10 +6133,13 @@
           return true;
         };
 
-        const scheduleChecks = () => {
+        const scheduleChecks = (eventSnapshot = null) => {
           if (!isWatchPath()) {
             clearStaleRecoveryChecks();
-            runCoherenceCheck();
+            // The event recorder just read this same off-watch state synchronously.
+            // Reuse only that call's snapshot, not data from an earlier event/check.
+            if (eventSnapshot) checkSnapshot(eventSnapshot);
+            else runCoherenceCheck();
             return;
           }
 
@@ -6078,7 +6180,7 @@
           if (navigationEvents.length > CONFIG.eventHistoryLimit) {
             navigationEvents.splice(0, navigationEvents.length - CONFIG.eventHistoryLimit);
           }
-          publishState(snapshot);
+          return publishState(snapshot);
         };
 
         const handleNavigateStart = () => {
@@ -6094,8 +6196,7 @@
           if (event.type === "yt-page-data-updated") {
             navigationRecoveryEvidenceVideoId = getVideoIdFromUrl(location.href);
           }
-          recordNavigationEvent(event.type);
-          scheduleChecks();
+          scheduleChecks(recordNavigationEvent(event.type));
         };
 
         const handleNativeCommentsReady = (event) => {
@@ -6137,8 +6238,7 @@
           pageSuspended = false;
           beginNavigationGeneration(getVideoIdFromUrl(location.href));
           navigationInProgress = false;
-          recordNavigationEvent("pageshow");
-          scheduleChecks();
+          scheduleChecks(recordNavigationEvent("pageshow"));
         };
 
         globalThis.__YT_MASTER_STATE__ = Object.freeze({
@@ -6216,7 +6316,7 @@
 
   suite.registerModule(
     "playerPreferencesLite",
-    "Player Preferences Lite v1.73",
+    "Player Preferences Lite v1.76",
     "document-idle",
     () => {
       const MutationObserver = suite.SharedMutationObserver;
@@ -6259,6 +6359,7 @@
           enablePlayerWheelVolume: true,
           enableVideoMirrorButton: true,
           enableFullscreenComments: true,
+          hideFullscreenQuickActions: false,
           enableCleanVideoUrlCopy: true,
           requireRightMouseButtonForWheelVolume: true,
           wheelVolumeStep: 5,
@@ -7347,7 +7448,10 @@
         }
 
         function normaliseRydLikeButton(button) {
-          if (!button || closestElement(button, EXCLUDED_SURFACE_SELECTOR)) {
+          // Quick actions retain their native artwork even while their strip is hidden.
+          if (!button ||
+              closestElement(button, ".ytp-fullscreen-quick-actions, yt-player-quick-action-buttons") ||
+              closestElement(button, EXCLUDED_SURFACE_SELECTOR)) {
             return;
           }
 
@@ -7366,7 +7470,9 @@
         }
 
         function normaliseRydDislikeButton(button) {
-          if (!button || closestElement(button, EXCLUDED_SURFACE_SELECTOR)) {
+          if (!button ||
+              closestElement(button, ".ytp-fullscreen-quick-actions, yt-player-quick-action-buttons") ||
+              closestElement(button, EXCLUDED_SURFACE_SELECTOR)) {
             return;
           }
 
@@ -7449,10 +7555,10 @@
           );
         }
 
-        function isWatchActionMatch(actionElement, label) {
+        function isWatchActionMatch(actionElement, label, labels = getWatchActionLabels(actionElement)) {
           const normalisedLabel = label.toLowerCase();
 
-          return getWatchActionLabels(actionElement).some((candidate) => {
+          return labels.some((candidate) => {
             const normalisedCandidate = candidate.toLowerCase();
             return (
               normalisedCandidate === normalisedLabel ||
@@ -7497,18 +7603,22 @@
           );
         }
 
-        function isConfiguredWatchActionMatch(actionElement) {
-          return WATCH_ACTION_BUTTON_RULES.some(
-            ({ configKey, label }) =>
-              CONFIG[configKey] && isWatchActionMatch(actionElement, label),
-          );
+        function isConfiguredWatchActionMatch(actionElement, readLabels) {
+          let labels;
+          return WATCH_ACTION_BUTTON_RULES.some(({ configKey, label }) => {
+            if (!CONFIG[configKey]) return false;
+            labels ||= readLabels ? readLabels() : getWatchActionLabels(actionElement);
+            return isWatchActionMatch(actionElement, label, labels);
+          });
         }
 
-        function isConfiguredInlineWatchActionMatch(actionElement) {
-          return WATCH_ACTION_INLINE_BUTTON_RULES.some(
-            ({ configKey, label }) =>
-              CONFIG[configKey] && isWatchActionMatch(actionElement, label),
-          );
+        function isConfiguredInlineWatchActionMatch(actionElement, readLabels) {
+          let labels;
+          return WATCH_ACTION_INLINE_BUTTON_RULES.some(({ configKey, label }) => {
+            if (!CONFIG[configKey]) return false;
+            labels ||= readLabels ? readLabels() : getWatchActionLabels(actionElement);
+            return isWatchActionMatch(actionElement, label, labels);
+          });
         }
 
         function hideWatchActionButtons(root = document) {
@@ -7519,10 +7629,14 @@
                 return;
               }
 
+              // Labels are stable only within this synchronous row reconciliation.
+              // Share its lazy read across menu rules and the inline Save rule.
+              let labels;
+              const readLabels = () => (labels ||= getWatchActionLabels(buttonModel));
               setWatchActionHidden(
                 buttonModel,
-                isConfiguredWatchActionMatch(buttonModel) ||
-                  isConfiguredInlineWatchActionMatch(buttonModel),
+                isConfiguredWatchActionMatch(buttonModel, readLabels) ||
+                  isConfiguredInlineWatchActionMatch(buttonModel, readLabels),
               );
             },
           );
@@ -8611,6 +8725,17 @@
             `;
         }
 
+        function buildFullscreenQuickActionsCss() {
+          if (!CONFIG.hideFullscreenQuickActions) return "";
+
+          // Hide only the separate quick-action strip, not the main playback controls.
+          return `
+              .html5-video-player .ytp-fullscreen-quick-actions {
+                display: none !important;
+              }
+            `;
+        }
+
         function buildFullscreenCommentsCss() {
           if (!CONFIG.enableFullscreenComments) return "";
 
@@ -8780,6 +8905,7 @@
             buildWatchCleanupCss(),
             buildTitleHashtagCss(),
             buildWatchLayoutCss(),
+            buildFullscreenQuickActionsCss(),
             buildFullscreenCommentsCss(),
             buildInfoCardCss(),
             buildEndScreenRecommendationCss(),
@@ -12543,7 +12669,7 @@
 
   suite.registerModule(
     "watchLayoutCleaner",
-    "Watch Layout Cleaner v1.43",
+    "Watch Layout Cleaner v1.46",
     "document-start",
     () => {
       const MutationObserver = suite.SharedMutationObserver;
@@ -13500,16 +13626,30 @@
               const videos = data.contents.map(item => item.playlistPanelVideoRenderer);
               if (!videos.length || videos.some(video => !validId(video?.videoId))) return { unavailable: true };
               if (missingListId && !sameIds(videos.map(video => video.videoId), miniQueue.ids)) return { unavailable: true };
-              const selected = videos.filter(video => video.selected === true);
-              if (selected.length !== 1 || selected[0].videoId !== anchor ||
+              // Native display selection can retain the previous playing marker,
+              // especially on Home where the miniplayer reports no playlist ID.
+              // Prefer the independently verified index and unique playing video;
+              // only older models without an index use the strict selection fallback.
+              let currentIndex = data.currentIndex;
+              if (!("currentIndex" in data)) {
+                const selected = videos.filter(video => video.selected === true);
+                if (selected.length !== 1 || selected[0].videoId !== anchor) return { unavailable: true };
+                currentIndex = videos.indexOf(selected[0]);
+              }
+              if (!Number.isInteger(currentIndex) || videos[currentIndex]?.videoId !== anchor ||
+                  videos.filter(video => video.videoId === anchor).length !== 1 ||
                   (Number.isInteger(data.totalVideos) && data.totalVideos > videos.length)) return { unavailable: true };
-              queues.push({ panel, owner, data, videos, listId: data.playlistId, mini: ownedMini ? mini : null });
+              queues.push({ panel, owner, data, videos, currentIndex, listId: data.playlistId, mini: ownedMini ? mini : null });
             }
             // A collapsed Home queue may not have stamped a panel yet. Never mistake
             // its existing playlist for no queue and send an append-only command.
             if (!queues.length && miniQueue?.mini && (missingListId || activeListId?.startsWith("TLPQ"))) {
               return { awaitingPanel: true, ...miniQueue };
             }
+            // A known queue ID still identifies an existing queue when its player
+            // playlist API is unavailable or temporarily empty. Without a verified
+            // panel there is no safe reorder path, so never fall through to append.
+            if (!queues.length && mini && activeListId?.startsWith("TLPQ")) return { unavailable: true };
             return queues.length > 1 ? { unavailable: true } : queues[0] || null;
           }
 
@@ -13558,7 +13698,6 @@
 
           function tryMoveNext() {
             if (!pending) return;
-            pending.frame = 0;
             const operation = pending;
             try {
               if (activeVideoId() !== operation.anchor) {
@@ -13593,7 +13732,7 @@
               }
               const index = queue.videos.findIndex(video => video.videoId === operation.videoId);
               if (index < 0) return;
-              const currentIndex = queue.videos.findIndex(video => video.selected === true);
+              const currentIndex = queue.currentIndex;
               if (index === currentIndex || index === currentIndex + 1) { finish("Playing next in queue"); return; }
               if (operation.committed) return; // Wait for native data to confirm, never commit twice.
               const binding = reorderRows(queue);
@@ -13618,7 +13757,28 @@
           }
 
           function scheduleMove() {
-            if (pending && !pending.frame) pending.frame = requestAnimationFrame(tryMoveNext);
+            if (!pending) return;
+            const operation = pending;
+            // Native stamping can finish inside an animation frame. Waiting for a
+            // second frame paints the temporary tail position before moving it next.
+            // Coalesce after the native stack, but before paint; readiness and commit
+            // guards in tryMoveNext still own every move and confirmation attempt.
+            if (!operation.moveQueued) {
+              operation.moveQueued = true;
+              queueMicrotask(() => {
+                if (pending !== operation) return;
+                operation.moveQueued = false;
+                tryMoveNext();
+              });
+            }
+            // A native row/model binding may settle in a later microtask without
+            // another observable mutation. Retain one coalesced frame as a backstop,
+            // not a polling loop; an unready attempt waits for the next native signal.
+            if (!operation.frame) operation.frame = requestAnimationFrame(() => {
+              if (pending !== operation) return;
+              operation.frame = 0;
+              tryMoveNext();
+            });
           }
 
           function queueDispatcher(popup) {
@@ -13664,7 +13824,7 @@
               return;
             }
             pending = { anchor, videoId: entry.videoId, entry, popup, preparing: true,
-              mini: queue.mini, ids: queue.ids, observer: observeQueue(), frame: 0, timer: 0 };
+              mini: queue.mini, ids: queue.ids, observer: observeQueue(), moveQueued: false, frame: 0, timer: 0 };
             pending.timer = setTimeout(() => finish("Could not prepare Play next. Nothing was added; please try again."), 2000);
             // The native queue header is outside the player's unrelated expand controls.
             if (toggles[0].getAttribute("aria-expanded") === "false") toggles[0].click();
@@ -13693,10 +13853,9 @@
             const dispatch = existing ? null : queueDispatcher(popup);
             if (!existing && !dispatch) { notify("Play next is unavailable in this menu."); return; }
             entry.used = true; // Only consume a selection once a native operation can start.
-            popup.closest("tp-yt-iron-dropdown")?.close?.();
             if (anchor) {
               pending = { anchor, videoId: entry.videoId, listId: queue?.listId, mini: queue?.mini,
-                observer: observeQueue(), frame: 0, timer: 0 };
+                observer: observeQueue(), moveQueued: false, frame: 0, timer: 0 };
               pending.timer = setTimeout(() => finish(pending.committed
                 ? "Could not confirm Play next. Please check the queue."
                 : existing ? "Could not move the queued video next. Please try again."
@@ -13717,6 +13876,20 @@
               }
             }
             scheduleMove();
+          }
+
+          function dismissMenu(popup) {
+            const dropdown = popup.closest("tp-yt-iron-dropdown");
+            for (const owner of new Set([dropdown, controller(dropdown)])) {
+              if (typeof owner?.close !== "function") continue;
+              owner.close();
+              return; // A throwing native close is not retried through another route.
+            }
+            // Current sheet hosts can omit the dropdown method. Ask YouTube's popup
+            // owner to close this renderer, without hiding DOM or clicking elsewhere.
+            popup.dispatchEvent(new CustomEvent("yt-action", { bubbles: true, composed: true,
+              detail: { actionName: "yt-close-popup-action", optionalAction: false,
+                args: [popup.localName], returnValue: [] } }));
           }
 
           function openMenu(event) {
@@ -13790,6 +13963,12 @@
             event.stopImmediatePropagation();
             try { begin(entry, popup); }
             catch { finish("Play next could not be completed. Please check the queue."); }
+            finally {
+              // Native activation is suppressed above, so dismiss rejected and
+              // preparing selections too. Resolve/dispatch before native teardown.
+              try { dismissMenu(popup); }
+              catch { /* Closing an already disposed native popup is harmless. */ }
+            }
           }
 
           function reset() {
@@ -14354,7 +14533,7 @@
 
   suite.registerModule(
     "suiteSettings",
-    "Suite Settings v1.30",
+    "Suite Settings v1.31",
     "document-idle",
     () => {
       const MutationObserver = suite.SharedMutationObserver;
@@ -14407,6 +14586,7 @@
             ],
             player: [
               ['yellowCaptions', 'Readable yellow captions'], ['mirrorButton', 'Show mirror button'],
+              ['hideFullscreenQuickActions', 'Hide fullscreen action strip'],
               ['theatreMode', 'Automatic theatre mode'], ['wheelVolume', 'Right-button wheel volume'],
               ['wheelStep', 'Volume step', ['1', '2', '5', '10'], value => `${value}%`],
               ['preferredVideoQuality', 'Preferred video quality', ['off', 'highest', 'tiny', 'small', 'medium', 'large', 'hd720', 'hd1080', 'hd1440', 'hd2160'],
@@ -14446,6 +14626,7 @@
             watchedThreshold: 'Choose how much watched progress is required before a video card is hidden.',
             yellowCaptions: 'Use readable yellow subtitles with a black shadow in the player and inline previews.',
             mirrorButton: 'Show the horizontal flip control. Only the video image is mirrored, not captions or controls.',
+            hideFullscreenQuickActions: 'Hide the fullscreen Likes, Dislikes, Comments, Share and More action strip. The main playback controls are unchanged. Off by default; applies after reload.',
             theatreMode: 'Start watch videos in YouTube’s theatre view.',
             wheelVolume: 'Hold the right mouse button and scroll over the player to adjust volume.',
             wheelStep: 'Choose the volume change for each wheel step during the right-button gesture.',

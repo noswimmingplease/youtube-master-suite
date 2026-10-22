@@ -14,11 +14,12 @@ test('video menu installer is closure-free when embedded in the master and remov
     suite: { settings: { initial: {} } } });
   const dispose = vm.runInContext(`(${installVideoMenu.toString()})(suite)`, context);
   assert.equal(typeof dispose, 'function');
-  assert.equal(listeners.filter(entry => entry.name === 'document').length, 4);
+  assert.equal(listeners.filter(entry => entry.name === 'document').length, 7);
   assert.equal(listeners.filter(entry => entry.name === 'window').length, 5);
-  assert.ok(listeners.every(entry => entry.capture === true));
+  assert.ok(listeners.every(entry => entry.capture === true || entry.capture?.capture === true));
+  assert.equal(listeners.find(entry => entry.type === 'pointermove').capture.passive, true);
   dispose();
-  assert.deepEqual(removed, listeners);
+  assert.deepEqual(removed, listeners.map(entry => ({ ...entry, capture: entry.capture?.capture ?? entry.capture })));
 });
 
 test('menu setup performs no native command, queue operation, DOM scan or periodic work before a trusted card menu opens', () => {

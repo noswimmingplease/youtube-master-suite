@@ -135,7 +135,8 @@ export function installVideoMenu(suite) {
     reset();
     const videoId = videoIdFromCard(card);
     if (!videoId) { trigger = null; triggerReason = 'card-identity'; diagnostic(triggerReason); return; }
-    trigger = { button, card, videoId, time: performance.now(), nativeSignature: nativeMenuSignature(button, card) };
+    trigger = { button, card, videoId, time: performance.now(), nativeSignature: nativeMenuSignature(button, card),
+      keyboard: event.type === 'keydown' || event.detail === 0 };
     triggerReason = 'captured-trigger';
     diagnostic(triggerReason);
     startDiscovery(trigger);
@@ -155,6 +156,9 @@ export function installVideoMenu(suite) {
       .ytms-video-menu-action svg { width: 24px; height: 24px; flex: 0 0 24px; fill: currentColor; }
       .ytms-video-menu-action small { display: block; white-space: normal; max-width: 240px; font-size: 12px; line-height: 16px; margin-top: 3px; }
       .ytms-video-menu-action[hidden] { display: none !important; }
+      [data-ytms-video-menu="1"]:focus { outline: none; }
+      /* Native mouseover classes can outlive row movement; retain real hover and keyboard focus. */
+      [data-ytms-video-menu="1"] .ytListItemViewModelHovered:not(:hover):not(:focus-within) { background-color: transparent !important; }
     `;
     (document.head || document.documentElement).append(style);
   }
@@ -178,7 +182,63 @@ export function installVideoMenu(suite) {
   }
 
   function focusable(row) {
-    return row.matches('button, [tabindex]') ? row : row.querySelector('button, [role="menuitem"], [tabindex]') || row;
+    // Current sheets can put tabindex on a presentation wrapper as well as on
+    // their real button. Focus the action, not its non-activating wrapper.
+    const actions = 'button, a[href], [role="menuitem"]';
+    const candidates = [...(row.matches(actions) ? [row] : []), ...row.querySelectorAll(actions),
+      ...(row.hasAttribute('tabindex') ? [row] : []), ...row.querySelectorAll('[tabindex]')];
+    return candidates.find(element => element.getAttribute('role') !== 'presentation' &&
+      !element.matches(':disabled, [disabled]') && !element.closest('[inert]') &&
+      (element.matches('button, a[href]') || element.hasAttribute('tabindex')) && visiblePopup(element)) || null;
+  }
+
+  function navigableRows(current) {
+    return [...current.parent.children].filter(row => row === current.back ? current.tools :
+      row === current.group ? !current.group.hidden :
+        current.entries.some(entry => entry.row === row && entry.enabled && (current.tools ? entry.grouped : !entry.grouped)))
+      .map(row => ({ row, target: focusable(row) })).filter(entry => entry.target);
+  }
+
+  function focusTarget(current, target) {
+    if (!target || active !== current || current.redirectingFocus) return;
+    current.redirectingFocus = true;
+    try { if (document.activeElement !== target) target.focus({ preventScroll: true }); }
+    finally { current.redirectingFocus = false; }
+  }
+
+  function focusPage(current) {
+    const target = current.keyboard ? (current.tools ? current.back : current.group) : current.popup;
+    focusTarget(current, target === current.popup ? target : focusable(target));
+  }
+
+  function focused(event) {
+    const current = active;
+    if (!current || current.redirectingFocus || !current.popup.contains(event.target) || event.target === current.popup) return;
+    // A late native autofocus can otherwise light up the original Add to queue
+    // after Play next was inserted above it. Keep neutral container focus for
+    // pointer input; the native :hover styling and action handlers stay intact.
+    if (current.keyboard && current.interacted) return;
+    if (event.target.matches('input, textarea, select, [contenteditable]')) return;
+    // Finish native focus handlers first, including their focus/blur classes.
+    // No timer, frame loop or page-wide mutation observer is needed.
+    if (current.focusQueued) return;
+    current.focusQueued = true;
+    queueMicrotask(() => {
+      current.focusQueued = false;
+      if (active !== current || !current.popup.contains(document.activeElement)) return;
+      if (!current.keyboard) focusTarget(current, current.popup);
+      else if (!current.interacted) focusTarget(current, navigableRows(current)[0]?.target);
+    });
+  }
+
+  function pointer(event) {
+    const current = active;
+    if (!current || !event.isTrusted || !current.popup.contains(event.target)) return;
+    current.interacted = true;
+    if (current.keyboard) {
+      current.keyboard = false;
+      focusTarget(current, current.popup);
+    }
   }
 
   function refit() {
@@ -192,7 +252,16 @@ export function installVideoMenu(suite) {
     if (refitFrame) cancelAnimationFrame(refitFrame);
     // Legacy popup rows settle after their first native measurement. One
     // coalesced frame avoids retaining the submenu's stale size constraints.
-    refitFrame = requestAnimationFrame(() => { refitFrame = 0; resize(); });
+    refitFrame = requestAnimationFrame(() => {
+      refitFrame = 0;
+      resize();
+      // Legacy menus briefly hide their native rows while reopening/refitting.
+      // Recheck initial keyboard focus once they settle, without moving focus
+      // after the user has navigated, switched input or left the popup.
+      if (active === current && current.keyboard && !current.interacted && current.popup.contains(document.activeElement)) {
+        focusTarget(current, navigableRows(current)[0]?.target);
+      }
+    });
   }
 
   function restoreRow(row, saved) {
@@ -213,7 +282,7 @@ export function installVideoMenu(suite) {
     current.group.hidden = tools || !current.entries.some(entry => entry.enabled && entry.grouped);
     current.group.setAttribute('aria-expanded', String(tools));
     refit();
-    if (focus) focusable(tools ? current.back : current.group).focus();
+    if (focus) focusPage(current);
   }
 
   function reset() {
@@ -231,6 +300,7 @@ export function installVideoMenu(suite) {
     if (!active) return;
     const current = active;
     active = null;
+    if (current.ownsTabIndex && current.popup.getAttribute('tabindex') === '-1') current.popup.removeAttribute('tabindex');
     current.back.remove();
     current.group.remove();
     current.age?.remove();
@@ -309,10 +379,16 @@ export function installVideoMenu(suite) {
     const nodes = arranged.map(entry => entry.row);
     nodes.splice(beforeGroup < 0 ? nodes.length : beforeGroup, 0, group);
     active = { popup, parent, original: rows, entries, age, group, back, channel, card: selection.card, videoId: selection.videoId,
-      trigger: selection.button, tools: false };
+      trigger: selection.button, tools: false, keyboard: selection.keyboard, interacted: false, redirectingFocus: false,
+      ownsTabIndex: !popup.hasAttribute('tabindex') };
+    if (active.ownsTabIndex) popup.setAttribute('tabindex', '-1');
     parent.append(back, ...nodes);
     popup.setAttribute('data-ytms-video-menu', '1');
     setPage(false, false);
+    const focusedElement = document.activeElement;
+    if (focusedElement === selection.button || focusedElement === document.body || popup.contains(focusedElement)) {
+      focusTarget(active, selection.keyboard ? navigableRows(active)[0]?.target || popup : popup);
+    }
     diagnostic('ready');
     return true;
   }
@@ -412,6 +488,8 @@ export function installVideoMenu(suite) {
     event.preventDefault();
     event.stopImmediatePropagation();
     if (!event.isTrusted) return;
+    current.keyboard = event.detail === 0;
+    current.interacted = true;
     if (action === 'channelTools') setPage(true);
     else if (action === 'back') setPage(false);
     else if (action === 'channelAge' && current.channel?.channelId) {
@@ -427,22 +505,32 @@ export function installVideoMenu(suite) {
   function keyboard(event) {
     const current = active;
     if (!current || !current.popup.contains(event.target) || !event.isTrusted) return;
+    current.keyboard = true;
+    current.interacted = true;
     if ((event.key === 'ArrowRight' && event.target.closest?.('[data-ytms-menu-action="channelTools"]')) ||
         ((event.key === 'ArrowLeft' || event.key === 'Escape') && current.tools)) {
       event.preventDefault(); event.stopImmediatePropagation();
       setPage(!current.tools); return;
     }
     if (event.key === 'Escape') { reset(); trigger = null; triggerReason = 'missing-trigger'; return; }
-    if (!['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) return;
-    const rows = [...current.parent.children].filter(row => row === current.back ? current.tools :
-      row === current.group ? !current.group.hidden :
-        current.entries.some(entry => entry.row === row && entry.enabled && (current.tools ? entry.grouped : !entry.grouped)));
+    if (!['ArrowDown', 'ArrowUp', 'Home', 'End', 'Enter', ' '].includes(event.key)) return;
+    const rows = navigableRows(current);
     if (!rows.length) return;
-    const focused = rows.findIndex(row => row === event.target || row.contains(event.target));
+    const focused = rows.findIndex(({ row }) => row === event.target || row.contains(event.target));
+    if (event.key === 'Enter' || event.key === ' ') {
+      if (focused < 0) {
+        // A neutral pointer-open menu has no selected action. The first key
+        // selects a visible action; it must not execute a stale native default.
+        event.preventDefault(); event.stopImmediatePropagation();
+        focusTarget(current, rows[0].target);
+      }
+      return;
+    }
     const next = event.key === 'Home' ? 0 : event.key === 'End' ? rows.length - 1 :
-      (focused + (event.key === 'ArrowDown' ? 1 : -1) + rows.length) % rows.length;
+      focused < 0 ? (event.key === 'ArrowDown' ? 0 : rows.length - 1) :
+        (focused + (event.key === 'ArrowDown' ? 1 : -1) + rows.length) % rows.length;
     event.preventDefault(); event.stopImmediatePropagation();
-    focusable(rows[next]).focus();
+    focusTarget(current, rows[next].target);
   }
 
   function closed(event) {
@@ -458,6 +546,9 @@ export function installVideoMenu(suite) {
   document.addEventListener('keydown', captureTrigger, true);
   document.addEventListener('click', activate, true);
   document.addEventListener('keydown', keyboard, true);
+  document.addEventListener('focusin', focused, true);
+  document.addEventListener('pointerdown', pointer, true);
+  document.addEventListener('pointermove', pointer, { capture: true, passive: true });
   window.addEventListener('yt-popup-opened', opened, true);
   const closeEvents = ['yt-popup-closed', 'iron-overlay-closed'];
   closeEvents.forEach(type => window.addEventListener(type, closed, true));
@@ -472,6 +563,9 @@ export function installVideoMenu(suite) {
     document.removeEventListener('keydown', captureTrigger, true);
     document.removeEventListener('click', activate, true);
     document.removeEventListener('keydown', keyboard, true);
+    document.removeEventListener('focusin', focused, true);
+    document.removeEventListener('pointerdown', pointer, true);
+    document.removeEventListener('pointermove', pointer, true);
     window.removeEventListener('yt-popup-opened', opened, true);
     closeEvents.forEach(type => window.removeEventListener(type, closed, true));
     resetEvents.forEach(type => window.removeEventListener(type, navigated, true));

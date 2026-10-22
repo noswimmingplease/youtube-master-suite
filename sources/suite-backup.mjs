@@ -5,6 +5,9 @@ export function createSuiteBackup(getStorage, settings, channelAge) {
   const limit = 128 * 1024;
   const keys = [settings.key, settings.cornerKey, channelAge.key];
   const settingNames = Object.keys(settings.defaults);
+  // Version 1 backups from before this opt-in setting remain importable.
+  // Keep every pre-existing field required, and still validate the new field if present.
+  const requiredSettingNames = settingNames.filter(name => name !== "hideFullscreenQuickActions");
   const ruleNames = ["channelId", "name", "maxAge", "unit", "enabled", "blocked"];
   const previews = new WeakMap();
   const warning = "Restoring replaces all saved Suite settings and channel upload filters. Channel names and IDs are included; history and account data are not.";
@@ -23,7 +26,7 @@ export function createSuiteBackup(getStorage, settings, channelAge) {
   }
 
   function checkedSettings(input, complete = true) {
-    checkObject(input, settingNames, complete ? settingNames : []);
+    checkObject(input, settingNames, complete ? requiredSettingNames : []);
     const values = settings.validate(input);
     for (const name of Object.keys(input)) {
       if (!same(input[name], values[name])) fail(`The backup contains an invalid setting: ${name}.`);

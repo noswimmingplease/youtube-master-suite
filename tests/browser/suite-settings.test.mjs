@@ -800,7 +800,7 @@ test("panel dimensions stay fixed across every tab, colour picker, field errors 
   await page.locator('#ytms-save-preview').click();
   assert.equal(await page.locator('#ytms-settings-status').isVisible(), true);
   assert.deepEqual(await dialog.boundingBox(), bounds);
-  assert.equal(await page.locator('#ytms-section-player .row .description').count(), 6);
+  assert.equal(await page.locator('#ytms-section-player .row .description').count(), 7);
   assert.equal(await page.locator('#ytms-section-interface .row .description').count(), 11);
 });
 
@@ -997,6 +997,77 @@ test('Restore this section resets Feed only, preserves other drafts, and remains
   const saved = await page.evaluate(key => JSON.parse(localStorage.getItem(key)).values, KEY);
   assert.equal(saved.hideShorts, true); assert.equal(saved.hideWatchedVideos, true); assert.equal(saved.watchedThreshold, '90');
   assert.equal(saved.mirrorButton, false); assert.equal(saved.menuShowDownload, true);
+});
+
+test('fullscreen action-strip setting defaults off and changes the strip only after Save and reload', async t => {
+  const page = await openFixture(t, { hideChat: false, showRydTooltipBar: true });
+  async function addStrip() {
+    await page.evaluate(() => {
+      const player = document.querySelector('#movie_player');
+      player.classList.add('ytp-fullscreen');
+      const strip = document.createElement('div');
+      strip.className = 'ytp-fullscreen-quick-actions'; strip.textContent = 'Native fullscreen actions';
+      player.append(strip);
+    });
+  }
+  await addStrip();
+  const strip = page.locator('#movie_player .ytp-fullscreen-quick-actions');
+  assert.equal(await strip.isVisible(), true);
+  await openPanel(page);
+  await page.getByRole('tab', { name: 'Player', exact: true }).click();
+  const toggle = page.locator('#ytms-hideFullscreenQuickActions');
+  const action = page.locator('#ytms-save-preview');
+  assert.equal(await toggle.isChecked(), false);
+  assert.equal(await toggle.getAttribute('role'), 'switch');
+  assert.match(await page.locator('[for="ytms-hideFullscreenQuickActions"]').textContent(), /^Hide fullscreen action strip/);
+  assert.match(await page.locator('#ytms-hideFullscreenQuickActions-description').textContent(), /main playback controls are unchanged/);
+  await toggle.check();
+  assert.equal(await action.isEnabled(), true);
+  await toggle.uncheck();
+  assert.equal(await action.isDisabled(), true, 'Reverting the draft must not enable Save');
+  await toggle.check();
+  await action.click();
+  assert.equal(await action.textContent(), 'Reload now');
+  assert.equal(await page.locator('#ytms-settings-status').textContent(), 'Saved. Please reload this page.');
+  assert.equal(await strip.evaluate(node => getComputedStyle(node).display !== 'none'), true, 'Saving must not alter the running configuration');
+  assert.deepEqual(await page.evaluate(key => {
+    const values = JSON.parse(localStorage.getItem(key)).values;
+    return [values.hideFullscreenQuickActions, values.hideChat, values.showRydTooltipBar];
+  }, KEY), [true, false, true]);
+  await page.reload();
+  await healthy(page);
+  await addStrip();
+  assert.equal(await strip.isVisible(), false);
+  assert.equal(await page.locator('.ytp-right-controls').isVisible(), true);
+  assert.equal(await page.locator('.ytp-settings-button').isVisible(), true);
+  assert.equal(await page.locator('.ytp-fullscreen-button').isVisible(), true);
+  await openPanel(page);
+  await page.getByRole('tab', { name: 'Player', exact: true }).click();
+  assert.equal(await toggle.isChecked(), true);
+});
+
+test('Player section defaults restore fullscreen action-strip visibility in the draft without resetting other sections', async t => {
+  const page = await openFixture(t, { hideFullscreenQuickActions: true, hideChat: false, showRydTooltipBar: true });
+  const original = await page.evaluate(key => localStorage.getItem(key), KEY);
+  await openPanel(page);
+  await page.getByRole('tab', { name: 'Player', exact: true }).click();
+  const toggle = page.locator('#ytms-hideFullscreenQuickActions');
+  await page.locator('#ytms-restore-section-defaults').click();
+  assert.equal(await toggle.isChecked(), false);
+  assert.equal(await page.evaluate(key => localStorage.getItem(key), KEY), original);
+  await page.locator('#ytms-cancel-panel').click();
+  await openPanel(page);
+  await page.getByRole('tab', { name: 'Player', exact: true }).click();
+  assert.equal(await toggle.isChecked(), true, 'Cancelling the draft must retain the saved choice');
+  await page.locator('#ytms-restore-section-defaults').click();
+  await page.locator('#ytms-save-preview').click();
+  assert.deepEqual(await page.evaluate(key => {
+    const values = JSON.parse(localStorage.getItem(key)).values;
+    return [values.hideFullscreenQuickActions, values.hideChat, values.showRydTooltipBar];
+  }, KEY), [false, false, true]);
+  await toggle.check();
+  await page.locator('#ytms-restore-defaults').click();
+  assert.equal(await toggle.isChecked(), false, 'Whole-Suite defaults must also restore the opt-in setting to off');
 });
 
 test('video context-menu controls and order share one collapsible group which starts closed on every settings open', async t => {

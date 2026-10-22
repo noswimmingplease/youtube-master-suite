@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         YouTube Player Preferences Lite
 // @namespace    Citizen.youtube.player-preferences-lite
-// @version      1.73
+// @version      1.76
 // @description  Applies small YouTube player preferences without touching Enhancer-style miniplayer, queue, autoplay, or background playback controls.
 // @author       Citizen
 // @homepageURL  https://github.com/noswimmingplease/youtube-player-preferences-lite
@@ -52,6 +52,7 @@
     enablePlayerWheelVolume: true,
     enableVideoMirrorButton: true,
     enableFullscreenComments: true,
+    hideFullscreenQuickActions: false,
     enableCleanVideoUrlCopy: true,
     requireRightMouseButtonForWheelVolume: true,
     wheelVolumeStep: 5,
@@ -1139,7 +1140,10 @@
   }
 
   function normaliseRydLikeButton(button) {
-    if (!button || closestElement(button, EXCLUDED_SURFACE_SELECTOR)) {
+    // Quick actions retain their native artwork even while their strip is hidden.
+    if (!button ||
+        closestElement(button, ".ytp-fullscreen-quick-actions, yt-player-quick-action-buttons") ||
+        closestElement(button, EXCLUDED_SURFACE_SELECTOR)) {
       return;
     }
 
@@ -1158,7 +1162,9 @@
   }
 
   function normaliseRydDislikeButton(button) {
-    if (!button || closestElement(button, EXCLUDED_SURFACE_SELECTOR)) {
+    if (!button ||
+        closestElement(button, ".ytp-fullscreen-quick-actions, yt-player-quick-action-buttons") ||
+        closestElement(button, EXCLUDED_SURFACE_SELECTOR)) {
       return;
     }
 
@@ -1241,10 +1247,10 @@
     );
   }
 
-  function isWatchActionMatch(actionElement, label) {
+  function isWatchActionMatch(actionElement, label, labels = getWatchActionLabels(actionElement)) {
     const normalisedLabel = label.toLowerCase();
 
-    return getWatchActionLabels(actionElement).some((candidate) => {
+    return labels.some((candidate) => {
       const normalisedCandidate = candidate.toLowerCase();
       return (
         normalisedCandidate === normalisedLabel ||
@@ -1289,18 +1295,22 @@
     );
   }
 
-  function isConfiguredWatchActionMatch(actionElement) {
-    return WATCH_ACTION_BUTTON_RULES.some(
-      ({ configKey, label }) =>
-        CONFIG[configKey] && isWatchActionMatch(actionElement, label),
-    );
+  function isConfiguredWatchActionMatch(actionElement, readLabels) {
+    let labels;
+    return WATCH_ACTION_BUTTON_RULES.some(({ configKey, label }) => {
+      if (!CONFIG[configKey]) return false;
+      labels ||= readLabels ? readLabels() : getWatchActionLabels(actionElement);
+      return isWatchActionMatch(actionElement, label, labels);
+    });
   }
 
-  function isConfiguredInlineWatchActionMatch(actionElement) {
-    return WATCH_ACTION_INLINE_BUTTON_RULES.some(
-      ({ configKey, label }) =>
-        CONFIG[configKey] && isWatchActionMatch(actionElement, label),
-    );
+  function isConfiguredInlineWatchActionMatch(actionElement, readLabels) {
+    let labels;
+    return WATCH_ACTION_INLINE_BUTTON_RULES.some(({ configKey, label }) => {
+      if (!CONFIG[configKey]) return false;
+      labels ||= readLabels ? readLabels() : getWatchActionLabels(actionElement);
+      return isWatchActionMatch(actionElement, label, labels);
+    });
   }
 
   function hideWatchActionButtons(root = document) {
@@ -1311,10 +1321,14 @@
           return;
         }
 
+        // Labels are stable only within this synchronous row reconciliation.
+        // Share its lazy read across menu rules and the inline Save rule.
+        let labels;
+        const readLabels = () => (labels ||= getWatchActionLabels(buttonModel));
         setWatchActionHidden(
           buttonModel,
-          isConfiguredWatchActionMatch(buttonModel) ||
-            isConfiguredInlineWatchActionMatch(buttonModel),
+          isConfiguredWatchActionMatch(buttonModel, readLabels) ||
+            isConfiguredInlineWatchActionMatch(buttonModel, readLabels),
         );
       },
     );
@@ -2403,6 +2417,17 @@
       `;
   }
 
+  function buildFullscreenQuickActionsCss() {
+    if (!CONFIG.hideFullscreenQuickActions) return "";
+
+    // Hide only the separate quick-action strip, not the main playback controls.
+    return `
+        .html5-video-player .ytp-fullscreen-quick-actions {
+          display: none !important;
+        }
+      `;
+  }
+
   function buildFullscreenCommentsCss() {
     if (!CONFIG.enableFullscreenComments) return "";
 
@@ -2572,6 +2597,7 @@
       buildWatchCleanupCss(),
       buildTitleHashtagCss(),
       buildWatchLayoutCss(),
+      buildFullscreenQuickActionsCss(),
       buildFullscreenCommentsCss(),
       buildInfoCardCss(),
       buildEndScreenRecommendationCss(),

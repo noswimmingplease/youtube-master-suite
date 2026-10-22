@@ -366,7 +366,8 @@ test('a preflight failure does not consume an otherwise reusable menu selection'
   const action = page.getByRole('menuitem', { name: 'Play next in queue', exact: true });
   await action.click();
   assert.match(await page.locator('[data-yt-master-queue-status]').textContent(), /still updating/);
-  await page.evaluate(() => { queueFixture.owner.canReorder = true; });
+  assert.equal(await action.isVisible(), false);
+  await page.evaluate(id => { queueFixture.owner.canReorder = true; queueFixture.open(id); }, D);
   await action.click();
   await page.waitForFunction(() => queueFixture.moves.length === 1);
   assert.equal((await snapshot(page)).adds.length, 1);
@@ -385,6 +386,156 @@ for (const suite of [false, true]) for (const homePath of ['/', '/results?search
   assert.equal(after.url, before.url);
   assert.equal(after.title, before.title);
   assert.equal(after.comments, before.comments);
+});
+
+for (const homePath of ['/', '/results?search_query=fixture']) for (const staleSelection of ['duplicate', 'wrong-only', 'missing']) test(`${homePath === '/' ? 'Home' : 'search'} Play next uses the verified current index despite ${staleSelection} display selection`, async t => {
+  const page = await open(t, { sheet: true, homeMiniplayer: true, homePath });
+  await page.evaluate(staleSelection => {
+    const videos = queueFixture.owner.data.contents.map(item => item.playlistPanelVideoRenderer);
+    for (const video of videos) video.selected = staleSelection === 'duplicate'
+      ? ['aaaaaaaaaaa', 'ccccccccccc'].includes(video.videoId)
+      : staleSelection === 'wrong-only' && video.videoId === 'ccccccccccc';
+  }, staleSelection);
+  await choose(page, D);
+  await page.waitForFunction(() => queueFixture.moves.length === 1);
+  assert.deepEqual((await snapshot(page)).ids, [A, D, B, C]);
+  assert.equal((await snapshot(page)).adds.length, 1);
+  assert.equal((await snapshot(page)).playing, A);
+});
+
+test('a stale first-row marker cannot override the verified middle playing index for an existing queued video', async t => {
+  const page = await open(t, { sheet: true, homeMiniplayer: true, current: B });
+  await page.evaluate(() => {
+    for (const item of queueFixture.owner.data.contents) {
+      item.playlistPanelVideoRenderer.selected = item.playlistPanelVideoRenderer.videoId === 'aaaaaaaaaaa';
+    }
+  });
+  await choose(page, A);
+  await page.waitForFunction(() => queueFixture.moves.length === 1);
+  assert.deepEqual((await snapshot(page)).ids, [B, A, C]);
+  assert.equal((await snapshot(page)).adds.length, 0);
+  assert.equal((await snapshot(page)).playing, B);
+});
+
+for (const fault of ['wrong-index', 'negative-index', 'out-of-range-index', 'invalid-index', 'null-index', 'undefined-index', 'ambiguous-current', 'incomplete']) test(`Play next refuses ${fault} even when display selection identifies the player`, async t => {
+  const page = await open(t, { sheet: true, homeMiniplayer: true });
+  await page.evaluate(fault => {
+    const data = queueFixture.owner.data;
+    if (fault === 'wrong-index') data.currentIndex = 1;
+    if (fault === 'negative-index') data.currentIndex = -1;
+    if (fault === 'out-of-range-index') data.currentIndex = 99;
+    if (fault === 'invalid-index') data.currentIndex = '0';
+    if (fault === 'null-index') data.currentIndex = null;
+    if (fault === 'undefined-index') data.currentIndex = undefined;
+    if (fault === 'ambiguous-current') data.contents[2].playlistPanelVideoRenderer.videoId = 'aaaaaaaaaaa';
+    if (fault === 'incomplete') data.totalVideos++;
+  }, fault);
+  const before = await snapshot(page);
+  await choose(page, D);
+  assert.match(await page.locator('[data-yt-master-queue-status]').textContent(), /still updating/);
+  assert.deepEqual(await snapshot(page), before);
+});
+
+for (const sheet of [false, true]) for (const state of ['accepted', 'rejected', 'already-playing', 'preparing']) test(`${sheet ? 'current sheet' : 'legacy menu'} dismisses Play next for an ${state} selection`, async t => {
+  const page = await open(t, { sheet, homeMiniplayer: true, collapsed: state === 'preparing', stampDelay: 120 });
+  if (state === 'rejected') await page.evaluate(() => { queueFixture.owner.canReorder = false; });
+  await choose(page, state === 'already-playing' ? A : D);
+  assert.equal(await page.evaluate(() => queueFixture.popup.getClientRects().length), 0);
+  if (state === 'accepted' || state === 'preparing') {
+    await page.waitForFunction(() => queueFixture.moves.length === 1);
+    assert.deepEqual((await snapshot(page)).ids, [A, D, B, C]);
+    assert.equal((await snapshot(page)).adds.length, 1);
+  } else {
+    assert.equal((await snapshot(page)).adds.length, 0);
+    assert.deepEqual((await snapshot(page)).moves, []);
+  }
+});
+
+test('Play next uses the dropdown controller close with its original receiver when the host method is absent', async t => {
+  const page = await open(t, { sheet: true });
+  await page.evaluate(() => {
+    const dropdown = queueFixture.popup.closest('tp-yt-iron-dropdown');
+    delete dropdown.close;
+    const owner = dropdown.polymerController = {
+      close() { queueFixture.correctCloseReceiver = this === owner; queueFixture.popup.style.display = 'none'; },
+    };
+  });
+  await choose(page, D);
+  assert.equal(await page.evaluate(() => queueFixture.correctCloseReceiver), true);
+  assert.equal(await page.evaluate(() => queueFixture.popup.getClientRects().length), 0);
+  await page.waitForFunction(() => queueFixture.moves.length === 1);
+});
+
+for (const sheet of [false, true]) test(`${sheet ? 'current sheet' : 'legacy menu'} uses the scoped native close action when no dropdown close is exposed`, async t => {
+  const page = await open(t, { sheet });
+  await page.evaluate(() => {
+    const dropdown = queueFixture.popup.closest('tp-yt-iron-dropdown');
+    delete dropdown.close;
+    queueFixture.closeActions = [];
+    document.querySelector('ytd-app').addEventListener('yt-action', event => {
+      if (event.detail.actionName !== 'yt-close-popup-action') return;
+      queueFixture.closeActions.push({ args: event.detail.args, optional: event.detail.optionalAction,
+        target: event.target.localName, bubbles: event.bubbles, composed: event.composed });
+      queueFixture.popup.style.display = 'none';
+    });
+  });
+  await choose(page, D);
+  assert.deepEqual(await page.evaluate(() => queueFixture.closeActions), [{
+    args: [sheet ? 'yt-sheet-view-model' : 'ytd-menu-popup-renderer'], optional: false,
+    target: sheet ? 'yt-sheet-view-model' : 'ytd-menu-popup-renderer', bubbles: true, composed: true,
+  }]);
+  assert.equal(await page.evaluate(() => queueFixture.popup.getClientRects().length), 0);
+  await page.waitForFunction(() => queueFixture.moves.length === 1);
+});
+
+test('native popup teardown happens after direct dispatch and cannot discard the command', async t => {
+  const page = await open(t, { sheet: true });
+  await page.evaluate(() => {
+    const dropdown = queueFixture.popup.closest('tp-yt-iron-dropdown');
+    dropdown.close = () => {
+      queueFixture.addsAtClose = queueFixture.adds.length;
+      delete document.querySelector('ytd-app').resolveCommand;
+      queueFixture.popup.remove();
+    };
+  });
+  await choose(page, D);
+  assert.equal(await page.evaluate(() => queueFixture.addsAtClose), 1);
+  await page.waitForFunction(() => queueFixture.moves.length === 1);
+  assert.equal((await snapshot(page)).adds.length, 1);
+});
+
+test('Home preparation can dispatch once after the selected native popup has been dismissed and disposed', async t => {
+  const page = await open(t, { sheet: true, homeMiniplayer: true, collapsed: true, stampDelay: 120 });
+  await page.evaluate(() => {
+    const dropdown = queueFixture.popup.closest('tp-yt-iron-dropdown');
+    dropdown.close = () => {
+      queueFixture.popup.remove();
+      queueFixture.popup.componentProps.data = () => { throw new Error('disposed sheet'); };
+    };
+  });
+  await choose(page, D);
+  assert.equal(await page.evaluate(() => queueFixture.popup.isConnected), false);
+  await page.waitForFunction(() => queueFixture.moves.length === 1);
+  assert.deepEqual((await snapshot(page)).ids, [A, D, B, C]);
+  assert.equal((await snapshot(page)).adds.length, 1);
+});
+
+for (const ambiguous of [false, true]) test(`a legacy model without currentIndex ${ambiguous ? 'rejects ambiguous' : 'retains single-current'} selection`, async t => {
+  const page = await open(t, { sheet: true, homeMiniplayer: true });
+  await page.evaluate(ambiguous => {
+    delete queueFixture.owner.data.currentIndex;
+    if (ambiguous) queueFixture.owner.data.contents[2].playlistPanelVideoRenderer.selected = true;
+  }, ambiguous);
+  await choose(page, D);
+  if (ambiguous) {
+    assert.match(await page.locator('[data-yt-master-queue-status]').textContent(), /still updating/);
+    assert.equal((await snapshot(page)).adds.length, 0);
+    assert.deepEqual((await snapshot(page)).moves, []);
+  } else {
+    await page.waitForFunction(() => queueFixture.moves.length === 1);
+    assert.deepEqual((await snapshot(page)).ids, [A, D, B, C]);
+    assert.equal((await snapshot(page)).adds.length, 1);
+  }
 });
 
 test('collapsed Home queue is expanded and verified before adding, then moves the video exactly once', async t => {
@@ -410,6 +561,44 @@ for (const fault of ['wrong-native-list', 'wrong-order', 'wrong-owner', 'missing
   assert.match(await page.locator('[data-yt-master-queue-status]').textContent(), /still updating/);
   assert.equal((await snapshot(page)).adds.length, 0);
   assert.deepEqual((await snapshot(page)).moves, []);
+});
+
+for (const fault of ['missing', 'invalid', 'empty']) test(`a known miniplayer queue without a panel fails closed when its playlist API is ${fault}`, async t => {
+  const page = await open(t, { sheet: true, homeMiniplayer: true, collapsed: true });
+  await page.evaluate(fault => {
+    const player = document.getElementById('movie_player');
+    player.getPlaylistId = () => 'TLPQfixture';
+    if (fault === 'missing') delete player.getPlaylist;
+    if (fault === 'invalid') player.getPlaylist = () => ['not-a-video-id'];
+    if (fault === 'empty') player.getPlaylist = () => [];
+  }, fault);
+  const before = await snapshot(page);
+  await choose(page, D);
+  assert.match(await page.locator('[data-yt-master-queue-status]').textContent(), /still updating/);
+  await page.waitForTimeout(100);
+  assert.deepEqual(await snapshot(page), before);
+  assert.equal(await page.evaluate(() => queueFixture.queueToggle.getAttribute('aria-expanded')), 'false');
+});
+
+for (const fault of ['missing', 'invalid', 'empty']) test(`a known miniplayer queue retains its verified panel fallback when its playlist API is ${fault}`, async t => {
+  const page = await open(t, { sheet: true, homeMiniplayer: true });
+  await page.evaluate(fault => {
+    const player = document.getElementById('movie_player');
+    player.getPlaylistId = () => 'TLPQfixture';
+    if (fault === 'missing') delete player.getPlaylist;
+    if (fault === 'invalid') player.getPlaylist = () => ['not-a-video-id'];
+    if (fault === 'empty') player.getPlaylist = () => [];
+  }, fault);
+  const before = await snapshot(page);
+  await choose(page, D);
+  await page.waitForFunction(() => queueFixture.moves.length === 1);
+  const after = await snapshot(page);
+  assert.deepEqual(after.ids, [A, D, B, C]);
+  assert.equal(after.adds.length, 1);
+  assert.equal(after.playing, before.playing);
+  assert.equal(after.url, before.url);
+  assert.equal(after.title, before.title);
+  assert.equal(after.comments, before.comments);
 });
 
 test('a Home warning followed by a collapsed-queue retry adds and moves only once', async t => {
@@ -786,6 +975,197 @@ test("success waits for native queue data rather than the optimistic DOM move", 
   await page.waitForFunction(() => document.querySelector('[data-yt-master-queue-status]')?.textContent === 'Playing next in queue');
   assert.deepEqual((await snapshot(page)).moves, [C]);
   assert.deepEqual((await snapshot(page)).ids, [A, C, B]);
+});
+
+for (const sheet of [false, true]) test(`${sheet ? 'current sheet' : 'legacy menu'} moves a delayed native frame append before its pre-paint checkpoint`, async t => {
+  const page = await open(t, { sheet });
+  await page.evaluate(() => {
+    const f = queueFixture;
+    f.paintCheckpoints = [];
+    const resolve = endpoint => {
+      const command = endpoint.signalServiceEndpoint.actions[0].addToPlaylistCommand;
+      f.adds.push(structuredClone(command));
+      // The first scheduled attempt has already run by the time a delayed
+      // native stamp lands in a later animation frame.
+      setTimeout(() => requestAnimationFrame(() => {
+        f.ids.push(command.videoId);
+        f.render();
+        queueMicrotask(() => f.paintCheckpoints.push({
+          model: [...f.ids],
+          rows: [...document.querySelector('ytd-playlist-panel-renderer #items').children].map(row => row.data.videoId),
+          commits: f.moves.length,
+        }));
+      }), 70);
+      return true;
+    };
+    document.querySelector('ytd-app').resolveCommand = resolve;
+    if (f.popup.polymerController) f.popup.polymerController.resolveCommand = resolve;
+  });
+  await choose(page, D);
+  await page.waitForFunction(() => queueFixture.paintCheckpoints.length === 1);
+  assert.deepEqual(await page.evaluate(() => queueFixture.paintCheckpoints), [{
+    model: [A, D, B, C], rows: [A, D, B, C], commits: 1,
+  }]);
+  assert.equal((await snapshot(page)).adds.length, 1);
+  assert.deepEqual((await snapshot(page)).moves, [D]);
+});
+
+test('a cancelled operation cannot run its queued microtask or frame against a newer Play next selection', async t => {
+  const page = await open(t);
+  await page.evaluate(() => {
+    queueFixture.nativeQueueMicrotask = window.queueMicrotask;
+    queueFixture.nativeRequestAnimationFrame = window.requestAnimationFrame;
+    queueFixture.nativeCancelAnimationFrame = window.cancelAnimationFrame;
+    queueFixture.queuedMoves = [];
+    queueFixture.queuedFrames = new Map();
+    queueFixture.frameId = 100000000;
+    window.queueMicrotask = callback => queueFixture.queuedMoves.push(callback);
+    window.requestAnimationFrame = callback => {
+      const id = ++queueFixture.frameId;
+      queueFixture.queuedFrames.set(id, callback);
+      return id;
+    };
+    window.cancelAnimationFrame = id => queueFixture.queuedFrames.delete(id);
+  });
+  await choose(page, C);
+  assert.equal(await page.evaluate(() => queueFixture.queuedMoves.length), 1);
+  await page.evaluate(() => { queueFixture.staleMoveFrame = queueFixture.queuedFrames.get(queueFixture.frameId); });
+  await page.evaluate(() => window.dispatchEvent(new Event('yt-navigate-start')));
+  await choose(page, C);
+  assert.equal(await page.evaluate(() => queueFixture.queuedMoves.length), 2);
+  await page.evaluate(() => {
+    queueFixture.queuedMoves[0]();
+    queueFixture.staleMoveFrame(0);
+  });
+  assert.deepEqual((await snapshot(page)).moves, []);
+  await page.evaluate(() => {
+    window.queueMicrotask = queueFixture.nativeQueueMicrotask;
+    window.requestAnimationFrame = queueFixture.nativeRequestAnimationFrame;
+    window.cancelAnimationFrame = queueFixture.nativeCancelAnimationFrame;
+    queueFixture.queuedMoves[1]();
+    queueFixture.queuedFrames.clear();
+  });
+  await page.waitForFunction(() => queueFixture.moves.length === 1);
+  assert.deepEqual((await snapshot(page)).ids, [A, C, B]);
+  assert.equal((await snapshot(page)).adds.length, 0);
+});
+
+test('synchronous native append and commit notifications never re-enter the dispatcher or commit twice', async t => {
+  const page = await open(t);
+  await page.evaluate(() => {
+    const f = queueFixture;
+    f.commitDepth = 0; f.maxCommitDepth = 0; f.committedDuringDispatch = false;
+    f.popup.polymerController.resolveCommand = endpoint => {
+      f.inDispatch = true;
+      const command = endpoint.signalServiceEndpoint.actions[0].addToPlaylistCommand;
+      f.adds.push(structuredClone(command)); f.ids.push(command.videoId); f.render();
+      window.dispatchEvent(new Event('yt-page-data-updated'));
+      f.inDispatch = false;
+      return true;
+    };
+    const drop = f.owner.handleDrop;
+    f.owner.handleDrop = event => {
+      f.committedDuringDispatch ||= Boolean(f.inDispatch);
+      f.commitDepth++;
+      f.maxCommitDepth = Math.max(f.maxCommitDepth, f.commitDepth);
+      window.dispatchEvent(new Event('yt-playlist-data-updated'));
+      drop(event);
+      window.dispatchEvent(new Event('yt-page-data-updated'));
+      f.commitDepth--;
+    };
+  });
+  await choose(page, D);
+  await page.waitForFunction(() => document.querySelector('[data-yt-master-queue-status]')?.textContent === 'Playing next in queue');
+  assert.deepEqual(await page.evaluate(() => ({
+    maxDepth: queueFixture.maxCommitDepth, duringDispatch: queueFixture.committedDuringDispatch,
+  })), { maxDepth: 1, duringDispatch: false });
+  assert.deepEqual((await snapshot(page)).ids, [A, D, B, C]);
+  assert.deepEqual((await snapshot(page)).moves, [D]);
+  assert.equal((await snapshot(page)).adds.length, 1);
+});
+
+test('a partially stamped append waits for matching native rows without spinning or moving early', async t => {
+  const page = await open(t);
+  await page.evaluate(() => {
+    const f = queueFixture, bind = f.bind;
+    f.bind = data => {
+      f.owner.data = data;
+      f.completeStamp = () => { f.bind = bind; bind(data); };
+    };
+  });
+  await choose(page, D);
+  await page.waitForFunction(() => queueFixture.ids.length === 4 && typeof queueFixture.completeStamp === 'function');
+  assert.deepEqual((await snapshot(page)).moves, []);
+  assert.equal(await page.locator('[data-yt-master-queue-status]').count(), 0);
+  assert.equal(await page.locator('ytd-playlist-panel-renderer #items > *').count(), 3);
+  await page.evaluate(() => queueFixture.completeStamp());
+  await page.waitForFunction(() => queueFixture.moves.length === 1);
+  assert.deepEqual((await snapshot(page)).ids, [A, D, B, C]);
+  assert.equal((await snapshot(page)).adds.length, 1);
+});
+
+test('the bounded frame backstop observes native row bindings that settle after the fast microtask without another signal', async t => {
+  const page = await open(t);
+  await page.evaluate(() => {
+    const f = queueFixture, bind = f.bind;
+    f.bind = data => {
+      bind(data);
+      const rows = [...document.querySelector('ytd-playlist-panel-renderer #items').children];
+      const bindings = rows.map(row => row.data);
+      rows.forEach(row => { row.data = undefined; });
+      window.dispatchEvent(new Event('yt-playlist-data-updated'));
+      // A property-only binding emits neither a DOM mutation nor another event.
+      queueMicrotask(() => rows.forEach((row, i) => { row.data = bindings[i]; }));
+    };
+  });
+  await choose(page, D);
+  await page.waitForFunction(() => document.querySelector('[data-yt-master-queue-status]')?.textContent === 'Playing next in queue');
+  assert.deepEqual((await snapshot(page)).ids, [A, D, B, C]);
+  assert.deepEqual((await snapshot(page)).moves, [D]);
+  assert.equal((await snapshot(page)).adds.length, 1);
+});
+
+test('the bounded frame backstop confirms a native model-only commit that settles after the fast microtask', async t => {
+  const page = await open(t);
+  await page.evaluate(() => {
+    const f = queueFixture;
+    f.owner.handleDrop = ({ currDragItem }) => {
+      f.moves.push(currDragItem.data.videoId);
+      const next = [...currDragItem.parentNode.children].map(row => row.data.videoId);
+      queueMicrotask(() => queueMicrotask(() => {
+        f.ids = next;
+        const data = f.owner.data;
+        f.owner.data = { ...data, currentIndex: next.indexOf(f.current),
+          contents: next.map(id => data.contents.find(item => item.playlistPanelVideoRenderer.videoId === id)) };
+      }));
+    };
+  });
+  await choose(page, C);
+  await page.waitForFunction(() => document.querySelector('[data-yt-master-queue-status]')?.textContent === 'Playing next in queue');
+  assert.deepEqual((await snapshot(page)).ids, [A, C, B]);
+  assert.deepEqual((await snapshot(page)).moves, [C]);
+  assert.equal((await snapshot(page)).adds.length, 0);
+});
+
+for (const sheet of [false, true]) for (const result of ['false', 'throw']) test(`${sheet ? 'current sheet' : 'legacy menu'} cancels queued microtasks when a synchronous native dispatch returns ${result}`, async t => {
+  const page = await open(t, { sheet });
+  await page.evaluate(result => {
+    const f = queueFixture;
+    const resolve = endpoint => {
+      const command = endpoint.signalServiceEndpoint.actions[0].addToPlaylistCommand;
+      f.adds.push(structuredClone(command)); f.ids.push(command.videoId); f.render();
+      if (result === 'throw') throw new Error('ambiguous native dispatch');
+      return false;
+    };
+    document.querySelector('ytd-app').resolveCommand = resolve;
+    if (f.popup.polymerController) f.popup.polymerController.resolveCommand = resolve;
+  }, result);
+  await choose(page, D);
+  await page.waitForFunction(() => document.querySelector('[data-yt-master-queue-status]'));
+  assert.deepEqual((await snapshot(page)).moves, []);
+  assert.deepEqual((await snapshot(page)).ids, [A, B, C, D]);
+  assert.equal((await snapshot(page)).adds.length, 1);
+  assert.match(await page.locator('[data-yt-master-queue-status]').textContent(), result === 'throw' ? /could not be completed/ : /could not accept/);
 });
 
 test("a silent native no-op cannot report success or trigger another commit", { timeout: 16000 }, async t => {

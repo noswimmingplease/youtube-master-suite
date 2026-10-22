@@ -161,3 +161,61 @@ test("coherence source selects once per snapshot and rereads a replaced or float
   });
   assert.deepEqual(floated, { scans: 1, player: "bbbbbbbbbbb", flexy: "bbbbbbbbbbb" });
 });
+
+test("coherence source scans retained comments once per off-watch event and keeps later snapshots fresh", async t => {
+  const page = await open(t);
+  await page.evaluate(() => {
+    history.replaceState(null, "", "/");
+    fixture.first.hidden = true;
+    const comments = fixture.first.querySelector("ytd-comments");
+    const fragment = document.createDocumentFragment();
+    for (let index = 0; index < 500; index++) {
+      const renderer = document.createElement("ytd-comment-thread-renderer");
+      const published = document.createElement("span"); published.id = "published-time-text";
+      const link = document.createElement("a");
+      link.href = `/watch?v=aaaaaaaaaaa&lc=fixture-${index}`;
+      published.append(link); renderer.append(published); fragment.append(renderer);
+    }
+    comments.append(fragment);
+    const links = [...comments.querySelectorAll("a")];
+    fixture.replaceCommentIds = videoId => links.forEach((link, index) => {
+      link.href = `/watch?v=${videoId}&lc=fixture-${index}`;
+    });
+    fixture.commentScans = fixture.linksRead = 0;
+    const queryAll = comments.querySelectorAll.bind(comments);
+    comments.querySelectorAll = selector => {
+      const result = queryAll(selector);
+      fixture.commentScans++; fixture.linksRead += result.length;
+      return result;
+    };
+  });
+  await page.addScriptTag({ content: COHERENCE });
+  const keys = await page.evaluate(() => Object.keys(__YT_MASTER_STATE__.snapshot()).sort());
+  for (const type of ["yt-page-data-updated", "yt-navigate-finish", "pageshow"]) {
+    const result = await page.evaluate(type => {
+      fixture.commentScans = fixture.linksRead = 0;
+      window.dispatchEvent(new Event(type));
+      return { scans: fixture.commentScans, linksRead: fixture.linksRead,
+        state: JSON.parse(document.documentElement.getAttribute("data-yt-master-state")) };
+    }, type);
+    assert.deepEqual({ scans: result.scans, linksRead: result.linksRead }, { scans: 1, linksRead: 500 });
+    assert.deepEqual(Object.keys(result.state).sort(), keys);
+    assert.deepEqual(result.state.commentVideoIds, ["aaaaaaaaaaa"]);
+    assert.equal(result.state.identityStatus, "not-watch-page");
+  }
+  const nextEvent = await page.evaluate(() => {
+    fixture.replaceCommentIds("bbbbbbbbbbb"); fixture.commentScans = fixture.linksRead = 0;
+    window.dispatchEvent(new Event("yt-page-data-updated"));
+    return { scans: fixture.commentScans, linksRead: fixture.linksRead,
+      ids: JSON.parse(document.documentElement.getAttribute("data-yt-master-state")).commentVideoIds };
+  });
+  assert.deepEqual(nextEvent, { scans: 1, linksRead: 500, ids: ["bbbbbbbbbbb"] });
+  for (const [method, videoId] of [["snapshot", "ccccccccccc"], ["check", "aaaaaaaaaaa"]]) {
+    const fresh = await page.evaluate(({ method, videoId }) => {
+      fixture.replaceCommentIds(videoId); fixture.commentScans = fixture.linksRead = 0;
+      const state = __YT_MASTER_STATE__[method]({ commentVideoIds: ["aaaaaaaaaaa"] });
+      return { scans: fixture.commentScans, linksRead: fixture.linksRead, ids: state.commentVideoIds };
+    }, { method, videoId });
+    assert.deepEqual(fresh, { scans: 1, linksRead: 500, ids: [videoId] });
+  }
+});

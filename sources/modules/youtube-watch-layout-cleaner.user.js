@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         YouTube Watch Layout Cleaner
 // @namespace    Citizen.youtube.watch-layout-cleaner
-// @version      1.43
+// @version      1.46
 // @description  Expands YouTube watch pages, keeps the right rail fixed at SponsorBlock-friendly width, preserves its visible popup, and widens metadata/comments.
 // @author       Citizen
 // @homepageURL  https://github.com/noswimmingplease/youtube-watch-layout-cleaner
@@ -958,16 +958,30 @@ ${buildQueueCompatibilityCss()}
         const videos = data.contents.map(item => item.playlistPanelVideoRenderer);
         if (!videos.length || videos.some(video => !validId(video?.videoId))) return { unavailable: true };
         if (missingListId && !sameIds(videos.map(video => video.videoId), miniQueue.ids)) return { unavailable: true };
-        const selected = videos.filter(video => video.selected === true);
-        if (selected.length !== 1 || selected[0].videoId !== anchor ||
+        // Native display selection can retain the previous playing marker,
+        // especially on Home where the miniplayer reports no playlist ID.
+        // Prefer the independently verified index and unique playing video;
+        // only older models without an index use the strict selection fallback.
+        let currentIndex = data.currentIndex;
+        if (!("currentIndex" in data)) {
+          const selected = videos.filter(video => video.selected === true);
+          if (selected.length !== 1 || selected[0].videoId !== anchor) return { unavailable: true };
+          currentIndex = videos.indexOf(selected[0]);
+        }
+        if (!Number.isInteger(currentIndex) || videos[currentIndex]?.videoId !== anchor ||
+            videos.filter(video => video.videoId === anchor).length !== 1 ||
             (Number.isInteger(data.totalVideos) && data.totalVideos > videos.length)) return { unavailable: true };
-        queues.push({ panel, owner, data, videos, listId: data.playlistId, mini: ownedMini ? mini : null });
+        queues.push({ panel, owner, data, videos, currentIndex, listId: data.playlistId, mini: ownedMini ? mini : null });
       }
       // A collapsed Home queue may not have stamped a panel yet. Never mistake
       // its existing playlist for no queue and send an append-only command.
       if (!queues.length && miniQueue?.mini && (missingListId || activeListId?.startsWith("TLPQ"))) {
         return { awaitingPanel: true, ...miniQueue };
       }
+      // A known queue ID still identifies an existing queue when its player
+      // playlist API is unavailable or temporarily empty. Without a verified
+      // panel there is no safe reorder path, so never fall through to append.
+      if (!queues.length && mini && activeListId?.startsWith("TLPQ")) return { unavailable: true };
       return queues.length > 1 ? { unavailable: true } : queues[0] || null;
     }
 
@@ -1016,7 +1030,6 @@ ${buildQueueCompatibilityCss()}
 
     function tryMoveNext() {
       if (!pending) return;
-      pending.frame = 0;
       const operation = pending;
       try {
         if (activeVideoId() !== operation.anchor) {
@@ -1051,7 +1064,7 @@ ${buildQueueCompatibilityCss()}
         }
         const index = queue.videos.findIndex(video => video.videoId === operation.videoId);
         if (index < 0) return;
-        const currentIndex = queue.videos.findIndex(video => video.selected === true);
+        const currentIndex = queue.currentIndex;
         if (index === currentIndex || index === currentIndex + 1) { finish("Playing next in queue"); return; }
         if (operation.committed) return; // Wait for native data to confirm, never commit twice.
         const binding = reorderRows(queue);
@@ -1076,7 +1089,28 @@ ${buildQueueCompatibilityCss()}
     }
 
     function scheduleMove() {
-      if (pending && !pending.frame) pending.frame = requestAnimationFrame(tryMoveNext);
+      if (!pending) return;
+      const operation = pending;
+      // Native stamping can finish inside an animation frame. Waiting for a
+      // second frame paints the temporary tail position before moving it next.
+      // Coalesce after the native stack, but before paint; readiness and commit
+      // guards in tryMoveNext still own every move and confirmation attempt.
+      if (!operation.moveQueued) {
+        operation.moveQueued = true;
+        queueMicrotask(() => {
+          if (pending !== operation) return;
+          operation.moveQueued = false;
+          tryMoveNext();
+        });
+      }
+      // A native row/model binding may settle in a later microtask without
+      // another observable mutation. Retain one coalesced frame as a backstop,
+      // not a polling loop; an unready attempt waits for the next native signal.
+      if (!operation.frame) operation.frame = requestAnimationFrame(() => {
+        if (pending !== operation) return;
+        operation.frame = 0;
+        tryMoveNext();
+      });
     }
 
     function queueDispatcher(popup) {
@@ -1122,7 +1156,7 @@ ${buildQueueCompatibilityCss()}
         return;
       }
       pending = { anchor, videoId: entry.videoId, entry, popup, preparing: true,
-        mini: queue.mini, ids: queue.ids, observer: observeQueue(), frame: 0, timer: 0 };
+        mini: queue.mini, ids: queue.ids, observer: observeQueue(), moveQueued: false, frame: 0, timer: 0 };
       pending.timer = setTimeout(() => finish("Could not prepare Play next. Nothing was added; please try again."), 2000);
       // The native queue header is outside the player's unrelated expand controls.
       if (toggles[0].getAttribute("aria-expanded") === "false") toggles[0].click();
@@ -1151,10 +1185,9 @@ ${buildQueueCompatibilityCss()}
       const dispatch = existing ? null : queueDispatcher(popup);
       if (!existing && !dispatch) { notify("Play next is unavailable in this menu."); return; }
       entry.used = true; // Only consume a selection once a native operation can start.
-      popup.closest("tp-yt-iron-dropdown")?.close?.();
       if (anchor) {
         pending = { anchor, videoId: entry.videoId, listId: queue?.listId, mini: queue?.mini,
-          observer: observeQueue(), frame: 0, timer: 0 };
+          observer: observeQueue(), moveQueued: false, frame: 0, timer: 0 };
         pending.timer = setTimeout(() => finish(pending.committed
           ? "Could not confirm Play next. Please check the queue."
           : existing ? "Could not move the queued video next. Please try again."
@@ -1175,6 +1208,20 @@ ${buildQueueCompatibilityCss()}
         }
       }
       scheduleMove();
+    }
+
+    function dismissMenu(popup) {
+      const dropdown = popup.closest("tp-yt-iron-dropdown");
+      for (const owner of new Set([dropdown, controller(dropdown)])) {
+        if (typeof owner?.close !== "function") continue;
+        owner.close();
+        return; // A throwing native close is not retried through another route.
+      }
+      // Current sheet hosts can omit the dropdown method. Ask YouTube's popup
+      // owner to close this renderer, without hiding DOM or clicking elsewhere.
+      popup.dispatchEvent(new CustomEvent("yt-action", { bubbles: true, composed: true,
+        detail: { actionName: "yt-close-popup-action", optionalAction: false,
+          args: [popup.localName], returnValue: [] } }));
     }
 
     function openMenu(event) {
@@ -1248,6 +1295,12 @@ ${buildQueueCompatibilityCss()}
       event.stopImmediatePropagation();
       try { begin(entry, popup); }
       catch { finish("Play next could not be completed. Please check the queue."); }
+      finally {
+        // Native activation is suppressed above, so dismiss rejected and
+        // preparing selections too. Resolve/dispatch before native teardown.
+        try { dismissMenu(popup); }
+        catch { /* Closing an already disposed native popup is harmless. */ }
+      }
     }
 
     function reset() {

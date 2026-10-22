@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         YouTube Page Coherence Guard
 // @namespace    Citizen.youtube.page-coherence
-// @version      1.14
+// @version      1.15
 // @description  Detects incomplete YouTube queue navigation, publishes identity diagnostics, and rechecks restored foreground pages without hiding native page content.
 // @author       Citizen
 // @license      GNU GPLv3
@@ -555,8 +555,7 @@
     return true;
   };
 
-  const runCoherenceCheck = () => {
-    let snapshot = buildSnapshot();
+  const checkSnapshot = (snapshot) => {
     if (recoverCompletedWatchResponse(snapshot)) snapshot = buildSnapshot();
     const responseRecoveryPending = Boolean(
       (snapshot.nativeLoading ||
@@ -588,6 +587,9 @@
     return publishState(snapshot);
   };
 
+  // Public/manual checks and delayed work always read current native state.
+  const runCoherenceCheck = () => checkSnapshot(buildSnapshot());
+
   const clearScheduledChecks = () => {
     checkTimers.forEach((timerId) => clearTimeout(timerId));
     checkTimers.clear();
@@ -617,10 +619,13 @@
     return true;
   };
 
-  const scheduleChecks = () => {
+  const scheduleChecks = (eventSnapshot = null) => {
     if (!isWatchPath()) {
       clearStaleRecoveryChecks();
-      runCoherenceCheck();
+      // The event recorder just read this same off-watch state synchronously.
+      // Reuse only that call's snapshot, not data from an earlier event/check.
+      if (eventSnapshot) checkSnapshot(eventSnapshot);
+      else runCoherenceCheck();
       return;
     }
 
@@ -661,7 +666,7 @@
     if (navigationEvents.length > CONFIG.eventHistoryLimit) {
       navigationEvents.splice(0, navigationEvents.length - CONFIG.eventHistoryLimit);
     }
-    publishState(snapshot);
+    return publishState(snapshot);
   };
 
   const handleNavigateStart = () => {
@@ -677,8 +682,7 @@
     if (event.type === "yt-page-data-updated") {
       navigationRecoveryEvidenceVideoId = getVideoIdFromUrl(location.href);
     }
-    recordNavigationEvent(event.type);
-    scheduleChecks();
+    scheduleChecks(recordNavigationEvent(event.type));
   };
 
   const handleNativeCommentsReady = (event) => {
@@ -720,8 +724,7 @@
     pageSuspended = false;
     beginNavigationGeneration(getVideoIdFromUrl(location.href));
     navigationInProgress = false;
-    recordNavigationEvent("pageshow");
-    scheduleChecks();
+    scheduleChecks(recordNavigationEvent("pageshow"));
   };
 
   globalThis.__YT_MASTER_STATE__ = Object.freeze({

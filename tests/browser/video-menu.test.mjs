@@ -12,6 +12,10 @@ const HTML = `<!doctype html><html lang="en-GB"><head><meta charset="utf-8"><sty
   ytd-menu-popup-renderer,yt-sheet-view-model,yt-list-view-model{display:block}
   ytd-menu-service-item-renderer,ytd-menu-service-item-download-renderer,yt-list-item-view-model,yt-download-list-item-view-model{display:block}
   ytd-menu-service-item-renderer,yt-list-item-view-model button{box-sizing:border-box;min-height:40px;padding:10px 16px;width:100%;text-align:left;border:0;background:transparent;color:inherit;cursor:pointer}
+  ytd-menu-service-item-renderer:hover,ytd-menu-service-item-renderer:focus,yt-list-item-view-model button:hover,yt-list-item-view-model button:focus{background:rgb(65,65,65)}
+  /* Native modern menu states are class-driven as well as pseudo-class-driven. */
+  .ytListItemViewModelHovered,.ytListItemViewModelTappable.ytListItemViewModelTappableHover:hover{background-color:rgb(65,65,65)}
+  .ytListItemViewModelKeyboardFocused:focus-within{background-color:rgb(65,65,65);outline:2px solid currentColor;outline-offset:-2px}
   [hidden]{display:none!important}
   </style></head><body><ytd-video-renderer id="card"><a href="/watch?v=bbbbbbbbbbb">Video</a><ytd-menu-renderer><button id="trigger" aria-label="Video actions">⋮</button></ytd-menu-renderer></ytd-video-renderer>
   <button id="outside">Outside</button><tp-yt-iron-dropdown hidden></tp-yt-iron-dropdown></body></html>`;
@@ -37,7 +41,7 @@ async function open(t, options = {}) {
   page.on('pageerror', error => errors.push(error.message));
   t.after(async () => { try { assert.deepEqual(errors, []); } finally { await context.close(); } });
   await page.goto(fixtureUrl);
-  await page.evaluate(({ sheet, settings, missingChannel, wrongVideo, unknown, unsupported, ambiguous, delayed, eventless, delayMs, nativeContract, unknownWrapper, cardTag, containerTag, noQueue, nativeBinding, bindingFault, libraryActions, contentType, modelVideo }) => {
+  await page.evaluate(({ sheet, settings, missingChannel, wrongVideo, unknown, unsupported, ambiguous, delayed, eventless, delayMs, nativeContract, unknownWrapper, cardTag, containerTag, noQueue, nativeBinding, bindingFault, libraryActions, contentType, modelVideo, nativeAutofocus, presentationRows, lateNativeLayout, nativeHover }) => {
     let card = document.getElementById('card');
     if (cardTag) {
       const replacement = document.createElement(cardTag); replacement.id = card.id;
@@ -51,7 +55,16 @@ async function open(t, options = {}) {
     dropdown.append(popup);
     popup.setAttribute('role', 'menu');
     const fixture = window.menuFixture = { nativeCalls: [], refits: 0, openedSettings: [], popup, dropdown, originals: [] };
-    dropdown.refit = () => { fixture.refits++; };
+    dropdown.refit = () => {
+      fixture.refits++;
+      if (fixture.nativeLayoutPending) {
+        fixture.layoutRefits++;
+        if (fixture.layoutRefits >= 2) {
+          fixture.nativeLayoutPending = false;
+          for (const row of fixture.originals) row.hidden = false;
+        }
+      }
+    };
     dropdown.close = () => { dropdown.hidden = true; dropdown.dispatchEvent(new CustomEvent('iron-overlay-closed', { bubbles: true })); };
     const queue = { signalServiceEndpoint: { actions: [{ addToPlaylistCommand: {
       videoId: wrongVideo ? 'ccccccccccc' : 'bbbbbbbbbbb', videoIds: [wrongVideo ? 'ccccccccccc' : 'bbbbbbbbbbb'],
@@ -107,12 +120,31 @@ async function open(t, options = {}) {
         if (sheet) {
           Object.defineProperty(row, 'data', { get: () => Symbol('opaque') });
           target = document.createElement('button'); target.type = 'button'; row.append(target);
+          if (nativeHover) {
+            const layout = document.createElement('div');
+            layout.className = 'ytListItemViewModelLayoutWrapper ytListItemViewModelTappable ytListItemViewModelTappableHover';
+            row.append(layout); layout.append(target);
+            layout.addEventListener('mouseover', event => {
+              if (!event.hoverHandled) { layout.classList.add('ytListItemViewModelHovered'); event.hoverHandled = true; }
+            });
+            layout.addEventListener('mouseout', () => layout.classList.remove('ytListItemViewModelHovered'));
+            row.addEventListener('focusin', () => row.classList.add('ytListItemViewModelKeyboardFocused'));
+            row.addEventListener('focusout', () => row.classList.remove('ytListItemViewModelKeyboardFocused'));
+          }
+          if (presentationRows) { row.tabIndex = 0; row.setAttribute('role', 'presentation'); }
         } else row.polymerController = { data: items[index].menuServiceItemRenderer || items[index].menuServiceItemDownloadRenderer };
         target.setAttribute('role', 'menuitem'); target.tabIndex = 0; target.textContent = label;
         target.onclick = () => { fixture.nativeCalls.push(id); dropdown.close(); };
+        if (lateNativeLayout) host.hidden = true;
         parent.append(host);
       });
       fixture.originals = [...parent.children];
+      fixture.nativeLayoutPending = lateNativeLayout;
+      fixture.layoutRefits = 0;
+    };
+    fixture.focusNative = id => {
+      const row = popup.querySelector(`[data-native-id="${id}"]`);
+      (row?.querySelector('button') || row)?.focus();
     };
     data = sheet ? { content: { listViewModel: { listItems: items } } } : { items };
     if (sheet) popup.componentProps = { data: () => data };
@@ -121,10 +153,14 @@ async function open(t, options = {}) {
       if (delayed || fixture.delayNext) { popup.replaceChildren(); setTimeout(stamp, delayMs); }
       else stamp();
       dropdown.hidden = false;
+      if (nativeAutofocus) fixture.focusNative(nativeAutofocus);
       if (!eventless) popup.dispatchEvent(new CustomEvent('yt-popup-opened', { bubbles: true }));
     };
     fixture.items = items;
     document.getElementById('trigger').addEventListener('click', fixture.open);
+    document.getElementById('trigger').addEventListener('keydown', event => {
+      if (event.key === 'ArrowDown') { event.preventDefault(); fixture.open(); }
+    });
     window.suite = { settings: { initial: settings || {} },
       channelAge: { channelFromCard: () => missingChannel ? null : ({ channelId: 'UCabcdefghijklmnopqrstuv', name: 'News channel' }) },
       openChannelAgeSettings: channel => fixture.openedSettings.push(channel),
@@ -132,7 +168,9 @@ async function open(t, options = {}) {
   }, { sheet: Boolean(options.sheet), settings: options.settings, missingChannel: Boolean(options.missingChannel),
     wrongVideo: Boolean(options.wrongVideo), unknown: Boolean(options.unknown), unsupported: Boolean(options.unsupported), ambiguous: Boolean(options.ambiguous), delayed: Boolean(options.delayed), eventless: Boolean(options.eventless), delayMs: options.delayMs || 180, nativeContract: Boolean(options.nativeContract), unknownWrapper: Boolean(options.unknownWrapper),
     cardTag: options.cardTag, containerTag: options.containerTag, noQueue: Boolean(options.noQueue), nativeBinding: Boolean(options.nativeBinding), bindingFault: options.bindingFault,
-    libraryActions: Boolean(options.libraryActions), contentType: options.contentType, modelVideo: options.modelVideo });
+    libraryActions: Boolean(options.libraryActions), contentType: options.contentType, modelVideo: options.modelVideo,
+    nativeAutofocus: options.nativeAutofocus, presentationRows: Boolean(options.presentationRows),
+    lateNativeLayout: Boolean(options.lateNativeLayout), nativeHover: Boolean(options.nativeHover) });
   await page.addScriptTag({ content: `window.disposeVideoMenu = (${installVideoMenu.toString()})(window.suite);` });
   return page;
 }
@@ -496,6 +534,292 @@ test('submenu supports Right/Left, Escape, arrow focus, Home and End without act
   await group.press('Enter'); await page.keyboard.press('Escape');
   assert.equal(await page.evaluate(() => document.activeElement.dataset.ytmsMenuAction), 'channelTools');
   assert.deepEqual(await page.evaluate(() => menuFixture.nativeCalls), []);
+});
+
+for (const sheet of [false, true]) {
+  const design = sheet ? 'modern' : 'legacy';
+  test(`${design}: pointer opening clears the native Add to queue autofocus without focusing a row`, async t => {
+    const page = await open(t, { sheet, nativeAutofocus: 'addToQueue' });
+    await show(page);
+    assert.equal(await page.evaluate(() => document.activeElement === menuFixture.popup), true);
+    assert.equal(await page.locator('[role="menuitem"]:focus-visible').count(), 0);
+    const nativeQueue = page.getByRole('menuitem', { name: 'Add to queue', exact: true });
+    assert.equal(await nativeQueue.evaluate(row => getComputedStyle(row).backgroundColor), 'rgba(0, 0, 0, 0)');
+    await nativeQueue.hover();
+    assert.equal(await nativeQueue.evaluate(row => getComputedStyle(row).backgroundColor), 'rgb(65, 65, 65)');
+    assert.equal(await page.evaluate(() => document.activeElement === menuFixture.popup), true,
+      'Pointer hovering must remain visual and must not claim keyboard focus');
+    await page.mouse.move(0, 0);
+    await page.evaluate(() => menuFixture.focusNative('addToQueue'));
+    assert.equal(await page.evaluate(() => document.activeElement === menuFixture.popup), true,
+      'A late native autofocus must not highlight Add to queue after pointer opening');
+    await page.keyboard.press('ArrowDown');
+    assert.equal(await page.evaluate(() => document.activeElement.closest('[data-native-id]')?.dataset.nativeId), 'playNext');
+    assert.equal(await page.locator('[role="menuitem"]:focus-visible').count(), 1);
+    await page.getByRole('menuitem', { name: 'Share', exact: true }).hover();
+    assert.equal(await page.evaluate(() => document.activeElement === menuFixture.popup), true,
+      'Moving back to pointer input must clear the previous keyboard row selection');
+    assert.equal(await page.locator('[role="menuitem"]:focus-visible').count(), 0);
+    assert.deepEqual(await page.evaluate(() => menuFixture.nativeCalls), []);
+  });
+
+  for (const key of ['Enter', 'Space', 'ArrowDown']) {
+    test(`${design}: ${key} opening focuses the first visible action rather than the native queue row`, async t => {
+      const page = await open(t, { sheet, nativeAutofocus: 'addToQueue', settings: { menuItemOrder: ['download', 'share'] } });
+      await page.locator('#trigger').focus();
+      await page.keyboard.press(key);
+      await page.locator('[data-ytms-video-menu="1"]').waitFor();
+      assert.equal(await page.evaluate(() => document.activeElement.closest('[data-native-id]')?.dataset.nativeId), 'share');
+      assert.equal(await page.locator('[role="menuitem"]:focus-visible').count(), 1);
+      await page.evaluate(() => menuFixture.focusNative('addToQueue'));
+      assert.equal(await page.evaluate(() => document.activeElement.closest('[data-native-id]')?.dataset.nativeId), 'share',
+        'Late native autofocus must not replace the keyboard opening selection');
+      assert.deepEqual(await page.evaluate(() => menuFixture.nativeCalls), []);
+    });
+  }
+
+  test(`${design}: moving from a keyboard-open menu to the pointer clears focus and executes the clicked native action once`, async t => {
+    const page = await open(t, { sheet, nativeAutofocus: 'addToQueue' });
+    await page.locator('#trigger').focus();
+    await page.keyboard.press('ArrowDown');
+    await page.locator('[data-ytms-video-menu="1"]').waitFor();
+    assert.equal(await page.evaluate(() => document.activeElement.closest('[data-native-id]')?.dataset.nativeId), 'playNext');
+    const share = page.getByRole('menuitem', { name: 'Share', exact: true });
+    await share.hover();
+    assert.equal(await page.evaluate(() => document.activeElement === menuFixture.popup), true);
+    assert.equal(await page.locator('[role="menuitem"]:focus-visible').count(), 0);
+    await share.click();
+    assert.deepEqual(await page.evaluate(() => menuFixture.nativeCalls), ['share']);
+    assert.equal(await page.locator('[data-ytms-menu-action]').count(), 0);
+  });
+
+  test(`${design}: keyboard opening selects the first native action after its initial layout settles`, async t => {
+    const page = await open(t, { sheet, lateNativeLayout: true });
+    for (let attempt = 0; attempt < 2; attempt++) {
+      await page.locator('#trigger').focus();
+      await page.keyboard.press('ArrowDown');
+      await page.locator('[data-ytms-video-menu="1"]').waitFor();
+      await page.waitForFunction(() => menuFixture.layoutRefits >= 2 &&
+        menuFixture.originals.every(row => !row.hidden));
+      assert.equal(await page.evaluate(() => document.activeElement.closest('[data-native-id]')?.dataset.nativeId), 'playNext');
+      assert.equal(await page.locator('[role="menuitem"]:focus-visible').count(), 1);
+      assert.deepEqual(await page.evaluate(() => menuFixture.nativeCalls), []);
+      await page.evaluate(() => menuFixture.dropdown.close());
+    }
+  });
+
+  test(`${design}: ArrowUp from the neutral popup starts at the last row and ArrowDown wraps to the first`, async t => {
+    const page = await open(t, { sheet });
+    await show(page);
+    // Give the old implementation a focusable container too, so this specifically
+    // catches its -1 index arithmetic rather than the opening-focus behaviour.
+    await page.evaluate(() => { menuFixture.popup.tabIndex = -1; menuFixture.popup.focus(); });
+    await page.keyboard.press('ArrowUp');
+    assert.equal(await page.evaluate(() => document.activeElement.dataset.ytmsMenuAction), 'channelTools');
+    await page.keyboard.press('ArrowDown');
+    assert.equal(await page.evaluate(() => document.activeElement.closest('[data-native-id]')?.dataset.nativeId), 'playNext');
+  });
+
+  for (const key of ['Enter', 'Space']) {
+    test(`${design}: neutral ${key} selects the first action without executing a stale native default`, async t => {
+      const page = await open(t, { sheet, nativeAutofocus: 'addToQueue' });
+      await show(page);
+      await page.evaluate(() => menuFixture.popup.addEventListener('keydown', event => {
+        if (event.target === menuFixture.popup && ['Enter', ' '].includes(event.key)) {
+          menuFixture.nativeCalls.push('stale-native-default');
+        }
+      }));
+      await page.keyboard.press(key);
+      assert.equal(await page.evaluate(() => document.activeElement.closest('[data-native-id]')?.dataset.nativeId), 'playNext');
+      assert.deepEqual(await page.evaluate(() => menuFixture.nativeCalls), []);
+      if (sheet) {
+        await page.keyboard.press(key);
+        assert.deepEqual(await page.evaluate(() => menuFixture.nativeCalls), ['playNext']);
+      }
+    });
+  }
+
+  test(`${design}: keyboard navigation skips native hidden, inert and unfocusable action rows`, async t => {
+    const page = await open(t, { sheet });
+    await show(page);
+    await page.evaluate(sheet => {
+      const row = id => menuFixture.popup.querySelector(`[data-native-id="${id}"]`);
+      row('playNext').hidden = true;
+      row('addToQueue').setAttribute('aria-hidden', 'true');
+      row('watchLater').style.visibility = 'hidden';
+      row('savePlaylist').inert = true;
+      if (sheet) row('share').querySelector('button').disabled = true;
+      else { row('share').removeAttribute('tabindex'); row('share').setAttribute('role', 'presentation'); }
+      menuFixture.popup.tabIndex = -1; menuFixture.popup.focus();
+    }, sheet);
+    await page.keyboard.press('ArrowDown');
+    assert.equal(await page.evaluate(() => document.activeElement.closest('[data-native-id]')?.dataset.nativeId), 'notInterested');
+    await page.keyboard.press('ArrowDown');
+    assert.equal(await page.evaluate(() => document.activeElement.dataset.ytmsMenuAction), 'channelTools');
+    await page.keyboard.press('ArrowDown');
+    assert.equal(await page.evaluate(() => document.activeElement.closest('[data-native-id]')?.dataset.nativeId), 'notInterested');
+    await page.keyboard.press('ArrowUp');
+    assert.equal(await page.evaluate(() => document.activeElement.dataset.ytmsMenuAction), 'channelTools');
+    assert.deepEqual(await page.evaluate(() => menuFixture.nativeCalls), []);
+  });
+
+  test(`${design}: pointer submenu transitions stay neutral while keyboard transitions retain visible focus`, async t => {
+    const page = await open(t, { sheet });
+    await show(page);
+    await page.getByRole('menuitem', { name: 'Channel tools', exact: true }).click();
+    assert.equal(await page.evaluate(() => document.activeElement === menuFixture.popup), true);
+    assert.equal(await page.locator('[role="menuitem"]:focus-visible').count(), 0);
+    await page.getByRole('menuitem', { name: 'Back', exact: true }).click();
+    assert.equal(await page.evaluate(() => document.activeElement === menuFixture.popup), true);
+    await page.keyboard.press('End');
+    await page.keyboard.press('Enter');
+    assert.equal(await page.evaluate(() => document.activeElement.dataset.ytmsMenuAction), 'back');
+    assert.equal(await page.locator('[data-ytms-menu-action="back"]:focus-visible').count(), 1);
+    await page.keyboard.press('Escape');
+    assert.equal(await page.evaluate(() => document.activeElement.dataset.ytmsMenuAction), 'channelTools');
+    assert.equal(await page.locator('[data-ytms-menu-action="channelTools"]:focus-visible').count(), 1);
+    assert.deepEqual(await page.evaluate(() => menuFixture.nativeCalls), []);
+  });
+
+  test(`${design}: close, reuse and disposal restore native popup tabindex and remove focus ownership`, async t => {
+    const page = await open(t, { sheet });
+    for (const original of [null, '4']) {
+      await page.evaluate(value => {
+        if (value === null) menuFixture.popup.removeAttribute('tabindex');
+        else menuFixture.popup.setAttribute('tabindex', value);
+      }, original);
+      await show(page);
+      assert.equal(await page.evaluate(() => document.activeElement === menuFixture.popup), true);
+      await page.evaluate(() => menuFixture.dropdown.close());
+      assert.equal(await page.evaluate(() => menuFixture.popup.getAttribute('tabindex')), original);
+      assert.equal(await page.locator('[data-ytms-menu-action]').count(), 0);
+    }
+    await show(page);
+    await page.evaluate(() => disposeVideoMenu());
+    assert.equal(await page.evaluate(() => menuFixture.popup.getAttribute('tabindex')), '4');
+    await page.evaluate(() => menuFixture.focusNative('addToQueue'));
+    assert.equal(await page.evaluate(() => document.activeElement.closest('[data-native-id]')?.dataset.nativeId), 'addToQueue',
+      'Disposal must release the popup focusin guard');
+  });
+}
+
+test('modern native hover: stale Add to queue styling does not compete with the actually hovered action', async t => {
+  const page = await open(t, { sheet: true, nativeHover: true, nativeAutofocus: 'addToQueue' });
+  await show(page);
+  const queueLayout = page.locator('[data-native-id="addToQueue"] .ytListItemViewModelLayoutWrapper');
+  const interestedLayout = page.locator('[data-native-id="notInterested"] .ytListItemViewModelLayoutWrapper');
+  await page.getByRole('menuitem', { name: 'Not interested', exact: true }).hover();
+  // Row movement can retain this native mouseover class without actual hover.
+  // Do not remove its class or alter the native action/ARIA to correct styling.
+  await queueLayout.evaluate(layout => layout.classList.add('ytListItemViewModelHovered'));
+  assert.equal(await queueLayout.evaluate(layout => layout.matches(':hover')), false);
+  assert.equal(await queueLayout.evaluate(layout => getComputedStyle(layout).backgroundColor), 'rgba(0, 0, 0, 0)');
+  assert.equal(await interestedLayout.evaluate(layout => getComputedStyle(layout).backgroundColor), 'rgb(65, 65, 65)');
+  assert.equal(await page.evaluate(() => document.activeElement === menuFixture.popup), true);
+  assert.equal(await queueLayout.evaluate(layout => layout.classList.contains('ytListItemViewModelHovered')), true);
+  await page.mouse.move(0, 0);
+  assert.equal(await interestedLayout.evaluate(layout => getComputedStyle(layout).backgroundColor), 'rgba(0, 0, 0, 0)');
+  assert.equal(await queueLayout.evaluate(layout => getComputedStyle(layout).backgroundColor), 'rgba(0, 0, 0, 0)');
+  await page.getByRole('menuitem', { name: 'Not interested', exact: true }).click();
+  assert.deepEqual(await page.evaluate(() => menuFixture.nativeCalls), ['notInterested']);
+});
+
+test('modern native hover: descendant keyboard focus retains native row styling while stale unfocused rows stay neutral', async t => {
+  const page = await open(t, { sheet: true, nativeHover: true });
+  await show(page);
+  await page.mouse.move(0, 0);
+  const queueLayout = page.locator('[data-native-id="addToQueue"] .ytListItemViewModelLayoutWrapper');
+  await queueLayout.evaluate(layout => layout.classList.add('ytListItemViewModelHovered'));
+  await page.keyboard.press('ArrowDown');
+  await page.keyboard.press('ArrowDown');
+  assert.equal(await page.evaluate(() => document.activeElement.closest('[data-native-id]')?.dataset.nativeId), 'addToQueue');
+  assert.equal(await queueLayout.evaluate(layout => layout.matches(':hover')), false);
+  assert.equal(await queueLayout.evaluate(layout => layout.matches(':focus-within')), true);
+  assert.equal(await queueLayout.evaluate(layout => getComputedStyle(layout).backgroundColor), 'rgb(65, 65, 65)');
+  assert.equal(await page.getByRole('menuitem', { name: 'Add to queue', exact: true }).evaluate(button => button.matches(':focus-visible')), true);
+  await page.keyboard.press('ArrowDown');
+  assert.equal(await page.evaluate(() => document.activeElement.closest('[data-native-id]')?.dataset.nativeId), 'watchLater');
+  assert.equal(await queueLayout.evaluate(layout => getComputedStyle(layout).backgroundColor), 'rgba(0, 0, 0, 0)');
+  assert.equal(await page.locator('[data-native-id="watchLater"]').evaluate(row => getComputedStyle(row).backgroundColor), 'rgb(65, 65, 65)');
+  assert.deepEqual(await page.evaluate(() => menuFixture.nativeCalls), []);
+});
+
+test('modern native hover: channel tools and Back keep real hover without restoring stale main-menu backgrounds', async t => {
+  const page = await open(t, { sheet: true, nativeHover: true });
+  await show(page);
+  const queueLayout = page.locator('[data-native-id="addToQueue"] .ytListItemViewModelLayoutWrapper');
+  await queueLayout.evaluate(layout => layout.classList.add('ytListItemViewModelHovered'));
+  await page.getByRole('menuitem', { name: 'Channel tools', exact: true }).click();
+  const dontRecommendLayout = page.locator('[data-native-id="dontRecommend"] .ytListItemViewModelLayoutWrapper');
+  await page.getByRole('menuitem', { name: 'Report', exact: true }).hover();
+  await dontRecommendLayout.evaluate(layout => layout.classList.add('ytListItemViewModelHovered'));
+  assert.equal(await dontRecommendLayout.evaluate(layout => getComputedStyle(layout).backgroundColor), 'rgba(0, 0, 0, 0)');
+  assert.equal(await page.locator('[data-native-id="report"] .ytListItemViewModelLayoutWrapper').evaluate(layout => getComputedStyle(layout).backgroundColor), 'rgb(65, 65, 65)');
+  await page.getByRole('menuitem', { name: 'Back', exact: true }).click();
+  assert.equal(await queueLayout.evaluate(layout => getComputedStyle(layout).backgroundColor), 'rgba(0, 0, 0, 0)');
+  assert.equal(await queueLayout.evaluate(layout => layout.classList.contains('ytListItemViewModelHovered')), true);
+  assert.equal(await page.evaluate(() => document.activeElement === menuFixture.popup), true);
+  assert.deepEqual(await page.evaluate(() => menuFixture.nativeCalls), []);
+});
+
+test('modern native hover: normalisation is scoped to managed menus and released on close or disposal', async t => {
+  const page = await open(t, { sheet: true, nativeHover: true });
+  await show(page);
+  await page.mouse.move(0, 0);
+  const queueLayout = page.locator('yt-sheet-view-model[data-ytms-video-menu="1"] [data-native-id="addToQueue"] .ytListItemViewModelLayoutWrapper');
+  await queueLayout.evaluate(layout => {
+    layout.classList.add('ytListItemViewModelHovered');
+    const unmanaged = document.createElement('yt-sheet-view-model');
+    unmanaged.id = 'unmanaged-menu';
+    unmanaged.style.cssText = 'position:fixed;left:10px;top:600px';
+    unmanaged.append(layout.closest('[data-native-id]').cloneNode(true));
+    document.body.append(unmanaged);
+  });
+  assert.equal(await queueLayout.evaluate(layout => getComputedStyle(layout).backgroundColor), 'rgba(0, 0, 0, 0)');
+  assert.equal(await page.locator('#unmanaged-menu .ytListItemViewModelLayoutWrapper').evaluate(layout => getComputedStyle(layout).backgroundColor), 'rgb(65, 65, 65)');
+  await page.evaluate(() => menuFixture.dropdown.close());
+  assert.equal(await page.evaluate(() => menuFixture.popup.hasAttribute('data-ytms-video-menu')), false);
+  assert.equal(await page.evaluate(() => getComputedStyle(menuFixture.popup.querySelector('[data-native-id="addToQueue"] .ytListItemViewModelLayoutWrapper')).backgroundColor), 'rgb(65, 65, 65)');
+  await show(page);
+  await page.mouse.move(0, 0);
+  await queueLayout.evaluate(layout => layout.classList.add('ytListItemViewModelHovered'));
+  assert.equal(await queueLayout.evaluate(layout => getComputedStyle(layout).backgroundColor), 'rgba(0, 0, 0, 0)');
+  await page.evaluate(() => disposeVideoMenu());
+  assert.equal(await page.evaluate(() => menuFixture.popup.hasAttribute('data-ytms-video-menu')), false);
+  assert.equal(await page.evaluate(() => getComputedStyle(menuFixture.popup.querySelector('[data-native-id="addToQueue"] .ytListItemViewModelLayoutWrapper')).backgroundColor), 'rgb(65, 65, 65)');
+  await page.locator('yt-sheet-view-model:not(#unmanaged-menu)').getByRole('menuitem', { name: 'Add to queue', exact: true }).click();
+  assert.deepEqual(await page.evaluate(() => menuFixture.nativeCalls), ['addToQueue']);
+});
+
+test('modern presentation wrappers do not receive keyboard focus instead of their native button', async t => {
+  const page = await open(t, { sheet: true, presentationRows: true });
+  await show(page);
+  await page.evaluate(() => { menuFixture.popup.tabIndex = -1; menuFixture.popup.focus(); });
+  await page.keyboard.press('ArrowDown');
+  assert.deepEqual(await page.evaluate(() => ({ tag: document.activeElement.localName,
+    id: document.activeElement.closest('[data-native-id]')?.dataset.nativeId })), { tag: 'button', id: 'playNext' });
+});
+
+test('aria-disabled explanatory channel actions remain keyboard discoverable but cannot activate', async t => {
+  const page = await open(t, { sheet: true, missingChannel: true, settings: { menuGroupChannelTools: false } });
+  await show(page);
+  await page.keyboard.press('End');
+  assert.equal(await page.evaluate(() => document.activeElement.dataset.ytmsMenuAction), 'channelAge');
+  assert.match(await page.evaluate(() => document.activeElement.textContent), /Channel ID unavailable/);
+  await page.keyboard.press('Enter');
+  await page.keyboard.press('Space');
+  assert.deepEqual(await page.evaluate(() => menuFixture.openedSettings), []);
+  assert.deepEqual(await page.evaluate(() => menuFixture.nativeCalls), []);
+});
+
+for (const key of ['Enter', 'Space']) test(`modern native ${key} activation still executes the original action exactly once`, async t => {
+  const page = await open(t, { sheet: true, settings: { menuItemOrder: ['share'] } });
+  await show(page);
+  await page.keyboard.press('ArrowDown');
+  assert.equal(await page.evaluate(() => document.activeElement.closest('[data-native-id]')?.dataset.nativeId), 'share');
+  await page.keyboard.press(key);
+  assert.deepEqual(await page.evaluate(() => menuFixture.nativeCalls), ['share']);
+  assert.equal(await page.locator('[data-ytms-menu-action]').count(), 0);
 });
 
 test('missing stable channel ID disables only the age action and explains manual settings', async t => {

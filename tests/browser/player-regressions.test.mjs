@@ -16,7 +16,7 @@ before(async () => {
 }, { timeout: 30000 });
 after(async () => { await browser?.close(); }, { timeout: 10000 });
 
-async function openFixture(t) {
+async function openFixture(t, settings) {
   const context = await browser.newContext({
     viewport: { width: 1280, height: 720 }, serviceWorkers: "block",
   });
@@ -24,7 +24,9 @@ async function openFixture(t) {
   await context.route("**/*", route => route.request().url() === WATCH_URL
     ? route.fulfill({ contentType: "text/html", body: FIXTURE })
     : route.abort());
-  await context.addInitScript({ content: SUITE });
+  const content = settings === undefined ? SUITE :
+    `localStorage.setItem("yt-master-suite.settings.v1", ${JSON.stringify(JSON.stringify({ version: 1, values: settings }))});\n${SUITE}`;
+  await context.addInitScript({ content });
   const page = await context.newPage();
   page.setDefaultTimeout(10000);
   const errors = [];
@@ -215,4 +217,143 @@ test("native player-only fullscreen never enables page-comment scrolling", { tim
   assert.equal(await page.locator("ytd-app").getAttribute("fullscreen"), null);
   await page.evaluate(() => document.exitFullscreen());
   await page.waitForFunction(() => !document.fullscreenElement);
+});
+
+async function installQuickActionsFixture(page, { stamp = true } = {}) {
+  await page.evaluate(({ stamp }) => {
+    const player = document.getElementById("movie_player");
+    const overlay = document.createElement("div");
+    overlay.className = "ytp-overlay-bottom-right";
+    player.append(overlay);
+    fixture.stampQuickActions = () => {
+      const strip = document.createElement("div");
+      strip.id = "fixture-fullscreen-quick-actions";
+      strip.className = "ytp-fullscreen-quick-actions";
+      const actions = document.createElement("yt-player-quick-action-buttons");
+      for (const label of ["Like", "Dislike", "Comments", "Share", "Ask", "More"]) {
+        const button = document.createElement("button");
+        button.textContent = label;
+        actions.append(button);
+      }
+      strip.append(actions);
+      const before = document.createElement("button");
+      before.id = "fixture-quick-actions-before";
+      before.textContent = "Before strip";
+      const after = document.createElement("button");
+      after.id = "fixture-quick-actions-after";
+      after.textContent = "After strip";
+      overlay.replaceChildren(before, strip, after);
+    };
+    if (stamp) fixture.stampQuickActions();
+
+    const outside = document.createElement("div");
+    outside.id = "fixture-quick-actions-outside-player";
+    outside.className = "ytp-fullscreen-quick-actions";
+    outside.textContent = "Outside-player decoy";
+    document.body.append(outside);
+    const title = document.createElement("div");
+    title.id = "fixture-player-title";
+    title.className = "ytp-title-text";
+    title.textContent = "Player title";
+    player.append(title);
+    const chrome = document.createElement("div");
+    chrome.className = "ytp-chrome-bottom";
+    const progress = document.createElement("div");
+    progress.id = "fixture-player-progress";
+    progress.className = "ytp-progress-bar-container";
+    progress.style.cssText = "height: 4px; width: 200px; background: red;";
+    const play = document.createElement("button");
+    play.id = "fixture-native-play";
+    play.className = "ytp-play-button ytp-button";
+    play.textContent = "Play";
+    fixture.playClicks = 0;
+    play.onclick = () => fixture.playClicks++;
+    chrome.append(progress, play);
+    player.append(chrome);
+    for (const [id, className] of [
+      ["fixture-autoplay", "ytp-autonav-endscreen-upnext-container"],
+      ["fixture-endscreen", "ytp-endscreen-content"],
+    ]) {
+      const surface = document.createElement("div");
+      surface.id = id;
+      surface.className = className;
+      surface.textContent = "Native playback surface";
+      player.append(surface);
+    }
+    const like = document.createElement("button");
+    like.id = "fixture-watch-like";
+    like.textContent = "Like";
+    document.querySelector("ytd-watch-metadata").append(like);
+  }, { stamp });
+}
+
+async function assertQuickActionsScope(page) {
+  assert.equal(await page.locator("#fixture-fullscreen-quick-actions").isVisible(), false,
+    "The whole dedicated action strip must be removed from layout");
+  assert.equal(await page.locator("#fixture-fullscreen-quick-actions").evaluate(strip => getComputedStyle(strip).display), "none");
+  for (const selector of [
+    "video", ".ytp-right-controls", ".ytp-settings-button", ".ytp-fullscreen-button",
+    "#ytppl-video-mirror-button", "#ytms-player-settings-button", ".ytp-caption-window-container",
+    "#fixture-player-title", "#fixture-player-progress", "#fixture-native-play", "#fixture-autoplay", "#fixture-endscreen",
+  ]) assert.equal(await page.locator(selector).isVisible(), true, `${selector} must remain visible`);
+  for (const selector of ["#fixture-watch-like", "#fixture-quick-actions-outside-player"]) {
+    assert.notEqual(await page.locator(selector).evaluate(element => getComputedStyle(element).display), "none",
+      `${selector} is outside the dedicated player strip`);
+  }
+  await page.locator("#fixture-quick-actions-before").focus();
+  await page.keyboard.press("Tab");
+  assert.equal(await page.locator("#fixture-quick-actions-after").evaluate(element => element === document.activeElement), true,
+    "Keyboard navigation must skip every hidden quick-action button");
+}
+
+for (const mode of ["page", "player"]) {
+  for (const hide of [undefined, false]) {
+    test(`${mode} fullscreen keeps the native action strip visible when hiding is ${hide === undefined ? "unset" : "off"}`, { timeout: 20000 }, async t => {
+      const page = await openFixture(t, hide === undefined ? undefined : { hideFullscreenQuickActions: hide });
+      await installQuickActionsFixture(page);
+      await page.locator(mode === "page" ? "#page-fullscreen" : ".ytp-fullscreen-button").click();
+      await page.waitForFunction(mode => document.fullscreenElement ===
+        (mode === "page" ? document.documentElement : document.getElementById("movie_player")), mode);
+      assert.equal(await page.locator("#fixture-fullscreen-quick-actions").isVisible(), true);
+      await page.locator("#fixture-quick-actions-before").focus();
+      await page.keyboard.press("Tab");
+      assert.equal(await page.locator("#fixture-fullscreen-quick-actions button").first().evaluate(element => element === document.activeElement), true);
+      await page.evaluate(() => document.exitFullscreen());
+      await page.waitForFunction(() => !document.fullscreenElement);
+    });
+  }
+
+  test(`${mode} fullscreen removes only the dedicated quick-action strip and preserves playback controls`, { timeout: 20000 }, async t => {
+    const page = await openFixture(t, { hideFullscreenQuickActions: true });
+    await installQuickActionsFixture(page);
+    await page.locator(mode === "page" ? "#page-fullscreen" : ".ytp-fullscreen-button").click();
+    await page.waitForFunction(mode => document.fullscreenElement ===
+      (mode === "page" ? document.documentElement : document.getElementById("movie_player")), mode);
+    await assertQuickActionsScope(page);
+    await page.locator("#fixture-native-play").click();
+    assert.equal(await page.evaluate(() => fixture.playClicks), 1, "Native playback handler remains clickable");
+    await page.locator("#ytppl-video-mirror-button").click();
+    assert.equal(await page.locator("video").getAttribute("data-ytppl-video-mirrored"), "1");
+    await page.evaluate(() => document.exitFullscreen());
+    await page.waitForFunction(() => !document.fullscreenElement);
+    assert.equal(await page.locator("#fixture-watch-like").isVisible(), true);
+    assert.equal(await page.locator("#fixture-quick-actions-outside-player").isVisible(), true);
+    await assertQuickActionsScope(page);
+  });
+}
+
+test("late and replaced fullscreen quick actions stay hidden with fullscreen comments disabled", { timeout: 20000 }, async t => {
+  const page = await openFixture(t, { fullscreenComments: false, hideFullscreenQuickActions: true });
+  await installQuickActionsFixture(page, { stamp: false });
+  await page.locator("#page-fullscreen").click();
+  await page.waitForFunction(() => document.fullscreenElement === document.documentElement);
+  assert.equal(await page.locator("html").getAttribute("data-ytppl-fullscreen-comments"), null);
+  for (let pass = 0; pass < 2; pass++) {
+    await page.evaluate(() => fixture.stampQuickActions());
+    await assertQuickActionsScope(page);
+  }
+  await page.evaluate(() => document.exitFullscreen());
+  await page.waitForFunction(() => !document.fullscreenElement);
+  await page.evaluate(() => fixture.stampQuickActions());
+  await assertQuickActionsScope(page);
 });

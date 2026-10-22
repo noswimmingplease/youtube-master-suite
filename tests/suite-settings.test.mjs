@@ -215,6 +215,37 @@ test("both settings buttons cannot be saved as Off, and a manually hidden pair r
   assert.equal(settings.read().playerSettingsIcon, 'off');
 });
 
+test('fullscreen action-strip hiding defaults off and migrates older records without changing existing choices', () => {
+  const { settings } = fixture({ 'yt-master-suite.settings.v1': JSON.stringify({ version: 1, values: {
+    hideChat: false, showRydTooltipBar: true, preferredVideoQuality: 'hd1080',
+  } }) });
+  assert.equal(settings.defaults.hideFullscreenQuickActions, false);
+  assert.equal(settings.initial.hideFullscreenQuickActions, false);
+  assert.equal(settings.initial.hideChat, false);
+  assert.equal(settings.initial.showRydTooltipBar, true);
+  assert.equal(settings.initial.preferredVideoQuality, 'hd1080');
+  for (const value of ['true', 'false', 0, 1, null, [], {}]) {
+    assert.equal(settings.validate({ hideFullscreenQuickActions: value }).hideFullscreenQuickActions, false);
+  }
+  assert.equal(settings.validate({ hideFullscreenQuickActions: true }).hideFullscreenQuickActions, true);
+});
+
+test('fullscreen action-strip preference saves for reload and restores to off without changing other player options', () => {
+  const { settings, storage } = fixture();
+  const config = { feedFilterProfiles: {} };
+  const before = settings.overrides('playerPreferencesLite', config);
+  assert.equal(before.hideFullscreenQuickActions, false);
+  assert.equal(settings.save({ ...settings.defaults, hideFullscreenQuickActions: true, hideChat: false }).ok, true);
+  assert.equal(settings.read().hideFullscreenQuickActions, true);
+  assert.deepEqual(settings.overrides('playerPreferencesLite', config), before, 'Saving leaves the running snapshot unchanged');
+  const next = createSuiteSettings(() => storage, () => true);
+  assert.deepEqual(next.overrides('playerPreferencesLite', config), { ...before, hideFullscreenQuickActions: true, hideChat: false });
+  assert.equal(next.save({ ...next.read(), hideFullscreenQuickActions: next.defaults.hideFullscreenQuickActions }).ok, true);
+  const restored = createSuiteSettings(() => storage, () => true);
+  assert.equal(restored.initial.hideFullscreenQuickActions, false);
+  assert.equal(restored.initial.hideChat, false);
+});
+
 test('quality preference migrates as Off, validates the whitelist and preserves existing choices', () => {
   const { settings } = fixture({ 'yt-master-suite.settings.v1': JSON.stringify({ version: 1, values: {
     disableTitleHashtagLinks: true, hideShorts: false, showDeArrowQueueButton: false,

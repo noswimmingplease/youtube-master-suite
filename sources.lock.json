@@ -18,13 +18,13 @@
     },
     "pageCoherence": {
       "path": "sources/modules/youtube-page-coherence.user.js",
-      "version": "1.14",
-      "sha256": "5c0557345ffacf19850769459cc491d0c1fdee12d7101dceb51e03e98ac17994"
+      "version": "1.15",
+      "sha256": "65d85949aa5b1f725391b79a33821c75ca7677e29b15ac812bc09ae594afc189"
     },
     "playerPreferencesLite": {
       "path": "sources/modules/youtube-player-preferences-lite.user.js",
-      "version": "1.73",
-      "sha256": "8e22b44064cda59d984b847fd527035470f1ac85d6246a2c9b2022d7f3740aa8"
+      "version": "1.76",
+      "sha256": "4bb93ee68438326a02beeb3d00604b79c4af5bc816b92f01700c1cc818aaa86b"
     },
     "scrollMiniplayer": {
       "path": "sources/modules/youtube-scroll-miniplayer.user.js",
@@ -33,13 +33,13 @@
     },
     "suiteSettings": {
       "path": "sources/modules/youtube-suite-settings.user.js",
-      "version": "1.30",
-      "sha256": "904b52026b67de929c4f4bc63a34f13083be917a6861f689b5088da2e64acc40"
+      "version": "1.31",
+      "sha256": "feb829c93886ce1669cb1fbc3bd8eeab083545c2a1d78d60353171a64fe5247e"
     },
     "watchLayoutCleaner": {
       "path": "sources/modules/youtube-watch-layout-cleaner.user.js",
-      "version": "1.43",
-      "sha256": "8ffd502b3b5482fe855c8c540b37d5b88464391a77a4e95a579e020a7f0de1e5"
+      "version": "1.46",
+      "sha256": "15be57f79a0cf58a7147d0d1ba6aa10ac957ce5f9d8ee998f23fd84776b7fbde"
     }
   }
 }

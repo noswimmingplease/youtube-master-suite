@@ -1452,6 +1452,58 @@ test("Page Coherence selects the active player once per snapshot, with no cross-
   assert.equal(floated.flexyVideoId, VIDEO_B);
 });
 
+for (const eventType of ["yt-page-data-updated", "yt-navigate-finish", "pageshow"]) {
+  test(`Page Coherence reuses one off-watch snapshot for ${eventType} without caching later reads`, () => {
+    const harness = createHarness(PAGE_COHERENCE_SOURCE);
+    harness.document.title = "Home fixture";
+    const watch = createWatchDom(harness, VIDEO_A);
+    watch.flexy.hidden = true;
+    const { comments } = createCommentsContainer({ permalinkVideoId: VIDEO_A, rendererCount: 100 });
+    watch.flexy.appendChild(comments);
+    const links = comments.querySelectorAll('a[href*="lc="]');
+    const queryAll = comments.querySelectorAll.bind(comments);
+    let scans = 0;
+    let linksRead = 0;
+    comments.querySelectorAll = selector => {
+      const result = queryAll(selector);
+      scans++;
+      linksRead += result.length;
+      return result;
+    };
+    const freshSnapshot = harness.context.__YT_MASTER_STATE__.snapshot;
+    const keys = Object.keys(freshSnapshot()).sort();
+    scans = linksRead = 0;
+
+    harness.dispatchWindow(eventType);
+    assert.deepEqual({ scans, linksRead }, { scans: 1, linksRead: 100 });
+    const first = readJsonAttribute(harness.document.documentElement, "data-yt-master-state");
+    assert.deepEqual(Object.keys(first).sort(), keys, "same-stack reuse must retain every diagnostic field");
+    assert.deepEqual(first.commentVideoIds, [VIDEO_A]);
+    assert.equal(first.identityStatus, "not-watch-page");
+    assert.equal(harness.clock.pendingCount, 0, "off-watch events must not create check timers");
+
+    const replaceIds = videoId => links.forEach(link => {
+      link.href = `https://www.youtube.com/watch?v=${videoId}&lc=current`;
+    });
+    replaceIds(VIDEO_B);
+    scans = linksRead = 0;
+    harness.dispatchWindow(eventType);
+    assert.deepEqual({ scans, linksRead }, { scans: 1, linksRead: 100 });
+    const second = readJsonAttribute(harness.document.documentElement, "data-yt-master-state");
+    assert.deepEqual(second.commentVideoIds, [VIDEO_B], "the next event must reread current comment provenance");
+
+    replaceIds(VIDEO_C);
+    scans = linksRead = 0;
+    assert.deepEqual(Array.from(freshSnapshot().commentVideoIds), [VIDEO_C]);
+    assert.deepEqual({ scans, linksRead }, { scans: 1, linksRead: 100 });
+    replaceIds(VIDEO_A);
+    scans = linksRead = 0;
+    const checked = harness.context.__YT_MASTER_STATE__.check({ commentVideoIds: [VIDEO_C] });
+    assert.deepEqual(Array.from(checked.commentVideoIds), [VIDEO_A], "public checks must obtain a fresh snapshot");
+    assert.deepEqual({ scans, linksRead }, { scans: 1, linksRead: 100 });
+  });
+}
+
 test("Page Coherence selects the player-owned or placeholder-owned active flexy", () => {
   const harness = createHarness(PAGE_COHERENCE_SOURCE);
   const staleFlexy = new FakeElement("ytd-watch-flexy", {

@@ -12,7 +12,7 @@ import { createSettingsSupportPanel } from "./sources/settings-support-panel.mjs
 import { installVideoMenu } from "./sources/video-menu.mjs";
 import { rejectYouTubeOptionalCookies } from "./sources/youtube-cookie-consent.mjs";
 
-const MASTER_VERSION = "1.2.14";
+const MASTER_VERSION = "1.2.19";
 const suiteDirectory = dirname(fileURLToPath(import.meta.url));
 const outputPath = join(suiteDirectory, "youtube-master-suite.user.js");
 const releaseManifestPath = join(suiteDirectory, "release-manifest.json");

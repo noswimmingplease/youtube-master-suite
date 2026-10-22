@@ -91,7 +91,39 @@ test("valid legacy saved records gain missing defaults and filter flags without 
   assert.equal(result.ok, true, result.error);
   assert.deepEqual(JSON.parse(result.text).channelFilters, [rule(ID, { name: "", maxAge: 2, unit: "days" })]);
   assert.equal(JSON.parse(result.text).settings.hideShorts, false);
+  assert.equal(JSON.parse(result.text).settings.hideFullscreenQuickActions, false);
   assert.deepEqual(f.writes, []);
+});
+
+test('fullscreen action-strip preference round-trips through exported backups without changing the running snapshot', () => {
+  const f = fixture();
+  assert.equal(f.settings.save({ ...f.settings.defaults, hideFullscreenQuickActions: true }).ok, true);
+  const exported = f.backup.exportData();
+  assert.equal(exported.ok, true, exported.error);
+  assert.equal(JSON.parse(exported.text).settings.hideFullscreenQuickActions, true);
+  assert.equal(f.settings.save(f.settings.defaults).ok, true);
+  const preview = f.backup.preview(exported.text);
+  assert.equal(preview.ok, true, preview.error);
+  assert.deepEqual(preview.summary.settingChanges, [{ name: 'hideFullscreenQuickActions', before: false, after: true }]);
+  assert.equal(f.backup.restore(preview.preview).ok, true);
+  assert.equal(f.settings.read().hideFullscreenQuickActions, true);
+  assert.equal(f.settings.initial.hideFullscreenQuickActions, false);
+});
+
+test('preference-less v1.2.18 backups default the fullscreen action strip to visible without relaxing other required fields', () => {
+  const f = fixture({ [SETTINGS]: JSON.stringify({ version: 1, values: { hideFullscreenQuickActions: true } }) });
+  const legacy = documentFor(f);
+  delete legacy.settings.hideFullscreenQuickActions;
+  const preview = f.backup.preview(JSON.stringify(legacy));
+  assert.equal(preview.ok, true, preview.error);
+  assert.deepEqual(preview.summary.settingChanges, [{ name: 'hideFullscreenQuickActions', before: true, after: false }]);
+  assert.equal(f.backup.restore(preview.preview).ok, true);
+  assert.equal(f.settings.read().hideFullscreenQuickActions, false);
+  for (const value of ['true', 'false', 0, 1, null, [], {}]) {
+    assert.equal(f.backup.preview(JSON.stringify(documentFor(f, { hideFullscreenQuickActions: value }))).ok, false);
+  }
+  delete legacy.settings.hideChat;
+  assert.equal(f.backup.preview(JSON.stringify(legacy)).ok, false, 'All pre-existing settings remain required');
 });
 
 test("preview summarises setting differences and filter additions, changes and removals without writing", () => {

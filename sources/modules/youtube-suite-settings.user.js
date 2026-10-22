@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         YouTube Suite Settings
 // @namespace    Citizen.youtube.suite-settings
-// @version      1.30
+// @version      1.31
 // @description  Master-only native-style settings panel accessible from the header and watch player.
 // @author       Citizen
 // @license      GNU GPLv3
@@ -59,6 +59,7 @@
       ],
       player: [
         ['yellowCaptions', 'Readable yellow captions'], ['mirrorButton', 'Show mirror button'],
+        ['hideFullscreenQuickActions', 'Hide fullscreen action strip'],
         ['theatreMode', 'Automatic theatre mode'], ['wheelVolume', 'Right-button wheel volume'],
         ['wheelStep', 'Volume step', ['1', '2', '5', '10'], value => `${value}%`],
         ['preferredVideoQuality', 'Preferred video quality', ['off', 'highest', 'tiny', 'small', 'medium', 'large', 'hd720', 'hd1080', 'hd1440', 'hd2160'],
@@ -98,6 +99,7 @@
       watchedThreshold: 'Choose how much watched progress is required before a video card is hidden.',
       yellowCaptions: 'Use readable yellow subtitles with a black shadow in the player and inline previews.',
       mirrorButton: 'Show the horizontal flip control. Only the video image is mirrored, not captions or controls.',
+      hideFullscreenQuickActions: 'Hide the fullscreen Likes, Dislikes, Comments, Share and More action strip. The main playback controls are unchanged. Off by default; applies after reload.',
       theatreMode: 'Start watch videos in YouTube’s theatre view.',
       wheelVolume: 'Hold the right mouse button and scroll over the player to adjust volume.',
       wheelStep: 'Choose the volume change for each wheel step during the right-button gesture.',
