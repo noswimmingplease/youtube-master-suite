@@ -30,6 +30,11 @@ and a more useful queue.
 Eight isolated feature modules share common browser infrastructure. The Suite
 uses YouTube's native playback and queue rather than maintaining replacements.
 
+Optional settings include **Feed → Keep hover previews with miniplayer** and
+**Player → Playback time display** (elapsed or remaining). Both preserve YouTube's
+behaviour by default. Hover previews are experimental and honour YouTube's own
+Inline playback preference; unsupported layouts remain unchanged.
+
 ## Installation
 
 1. Install [Tampermonkey](https://www.tampermonkey.net/) and follow its

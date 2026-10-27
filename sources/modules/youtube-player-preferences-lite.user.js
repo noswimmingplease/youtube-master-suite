@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         YouTube Player Preferences Lite
 // @namespace    Citizen.youtube.player-preferences-lite
-// @version      1.91
+// @version      1.92
 // @description  Applies small YouTube player preferences without touching Enhancer-style miniplayer, queue, autoplay, or background playback controls.
 // @author       Citizen
 // @homepageURL  https://github.com/noswimmingplease/youtube-player-preferences-lite
@@ -51,6 +51,8 @@
     enableTheaterMode: true,
     preferredVideoQuality: "off",
     timelinePreviewSize: "auto",
+    keepHoverPreviews: false,
+    timeDisplayMode: "native",
     enablePlayerWheelVolume: true,
     enableVideoMirrorButton: true,
     enableLiveChatButton: true,
@@ -5012,6 +5014,9 @@
   }
 
   installTimelinePreviewSizing();
+  if (typeof suite !== 'undefined') suite.installPlayerPresentation?.({
+    document, window, keepHoverPreviews: CONFIG.keepHoverPreviews, timeDisplayMode: CONFIG.timeDisplayMode,
+  });
   applyRoutePreferences();
 
   const observer = new MutationObserver((mutations) => {

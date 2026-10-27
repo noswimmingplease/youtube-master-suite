@@ -10,6 +10,7 @@ export function createSuiteSettings(getStorage, isDarkTheme) {
     hideMixes: true, hidePodcasts: true, hideMembersOnly: true,
     watchedThreshold: "90", yellowCaptions: true, mirrorButton: true, liveChatButton: true, theatreMode: true,
     preferredVideoQuality: "off", timelinePreviewSize: "auto", hideFullscreenQuickActions: false,
+    keepHoverPreviews: false, timeDisplayMode: "native",
     wheelVolume: true, wheelStep: "5", hideRelated: true, hideChat: true, hideInfoCards: true,
     hideEndScreens: true, fullscreenComments: true, disableTitleHashtagLinks: false, miniplayerEnabled: true,
     corner: "top-right", queueInfo: true,
@@ -28,6 +29,7 @@ export function createSuiteSettings(getStorage, isDarkTheme) {
     watchedThreshold: ["80", "90", "95", "100"], wheelStep: ["1", "2", "5", "10"],
     preferredVideoQuality: ["off", "highest", "tiny", "small", "medium", "large", "hd720", "hd1080", "hd1440", "hd2160"],
     timelinePreviewSize: ["auto", "small", "medium", "large", "native"],
+    timeDisplayMode: ["native", "elapsed", "remaining"],
     corner: ["top-right", "bottom-right", "bottom-left", "top-left"],
     headerSettingsIcon: ["off", "colour", "monochrome"], playerSettingsIcon: ["off", "colour", "monochrome"],
   });
@@ -146,6 +148,7 @@ export function createSuiteSettings(getStorage, isDarkTheme) {
       enableTheaterMode: values.theatreMode, enablePlayerWheelVolume: values.wheelVolume,
       preferredVideoQuality: values.preferredVideoQuality, hideFullscreenQuickActions: values.hideFullscreenQuickActions,
       timelinePreviewSize: values.timelinePreviewSize,
+      keepHoverPreviews: values.keepHoverPreviews, timeDisplayMode: values.timeDisplayMode,
       wheelVolumeStep: Number(values.wheelStep), hideRelatedVideos: values.hideRelated,
       hideChat: values.hideChat, hideInfoCards: values.hideInfoCards,
       hideEndScreenRecommendationGrid: values.hideEndScreens, enableFullscreenComments: values.fullscreenComments,

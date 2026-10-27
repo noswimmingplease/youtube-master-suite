@@ -12,6 +12,19 @@ function fixture(seed = {}) {
   return { storage, data, settings: createSuiteSettings(() => storage, () => true) };
 }
 
+test('presentation preferences preserve defaults, validate choices and map to the player', () => {
+  const { settings, storage } = fixture();
+  assert.equal(settings.initial.keepHoverPreviews, false);
+  assert.equal(settings.initial.timeDisplayMode, 'native');
+  for (const mode of ['native', 'elapsed', 'remaining']) {
+    assert.equal(settings.save({ ...settings.defaults, timeDisplayMode: mode, keepHoverPreviews: true }).ok, true);
+    const next = createSuiteSettings(() => storage, () => true).overrides('playerPreferencesLite', { feedFilterProfiles: {} });
+    assert.equal(next.timeDisplayMode, mode); assert.equal(next.keepHoverPreviews, true);
+  }
+  for (const mode of ['other', null, {}, 1]) assert.equal(settings.validate({ timeDisplayMode: mode }).timeDisplayMode, 'native');
+  assert.equal(settings.validate({ keepHoverPreviews: 'true' }).keepHoverPreviews, false);
+});
+
 test('timeline preview defaults to automatic and validates, saves and maps bounded choices', () => {
   const { settings, storage } = fixture();
   assert.equal(settings.initial.timelinePreviewSize, 'auto');

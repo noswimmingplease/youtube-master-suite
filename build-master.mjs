@@ -11,8 +11,9 @@ import { createSuiteSupport } from "./sources/suite-support.mjs";
 import { createSettingsSupportPanel } from "./sources/settings-support-panel.mjs";
 import { installVideoMenu } from "./sources/video-menu.mjs";
 import { rejectYouTubeOptionalCookies } from "./sources/youtube-cookie-consent.mjs";
+import { installPlayerPresentation } from "./sources/player-presentation.mjs";
 
-const MASTER_VERSION = "1.2.42";
+const MASTER_VERSION = "1.2.44";
 const suiteDirectory = dirname(fileURLToPath(import.meta.url));
 const outputPath = join(suiteDirectory, "youtube-master-suite.user.js");
 const releaseManifestPath = join(suiteDirectory, "release-manifest.json");
@@ -2308,6 +2309,7 @@ ${runtimeMutationCoverageHelpers}
     channelAge: createChannelAgeService(() => window.localStorage),
     createChannelAgeDialog: ${createChannelAgeDialog.toString()},
     installVideoMenu: ${installVideoMenu.toString()},
+    installPlayerPresentation: ${installPlayerPresentation.toString()},
     settingsAssets: ${JSON.stringify(settingsAssets)},
     createSettingsDialog: ${createSettingsDialog.toString()},
     createSettingsSupportPanel: ${createSettingsSupportPanel.toString()},

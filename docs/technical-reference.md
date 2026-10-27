@@ -54,6 +54,26 @@ and resize handling are active only during timeline hover, with no polling.
 Unknown or already-transformed preview layouts fall back to YouTube's sizing.
 Size preference changes use the existing Save and Reload workflow.
 
+### Home hover previews and playback time
+
+`sources/player-presentation.mjs` supplies opt-in native presentation hooks.
+On Home only, persistent hover previews change the miniplayer-related input to
+recognised `computeIsInlinePreviewEnabled` methods on the app and rich grid.
+The actual miniplayer state and YouTube's explicit Inline playback opt-out are
+not changed. Owned methods are restored on navigation, suspension and disposal;
+later replacements from other extensions are not overwritten. Unknown contracts
+fail open. This uses undocumented native hooks and remains experimental.
+Read-only computed accessors use the generated setter when available, or the
+verified native property-effects path. Direct assignment alone may be ignored
+and would leave the preview listeners disabled despite the installed hook.
+
+Playback time can retain YouTube's default or select elapsed/remaining display.
+For recognised countdown-capable timers it requests the native wrapper toggle
+once per mismatched state; it does not rebuild the label or set the media clock.
+Live, advertising and unsupported timers are left unchanged. Neither feature
+uses polling or adds a document-wide mutation observer. Media updates do not
+rescan preview eligibility. Preference changes apply after Save and reload.
+
 ## Build and verify
 
 Run all commands below **from the repository root**. A normal build needs Node.js

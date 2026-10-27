@@ -54,6 +54,57 @@ async function healthy(page, errors = []) {
 async function openPanel(page) { await page.locator("#ytms-settings-button").click(); }
 async function colour(page, selector) { return page.locator(selector).evaluate(el => getComputedStyle(el).color); }
 
+test('hover-preview and timer preferences are exposed, saved and restored in their own sections', async t => {
+  const page = await openFixture(t, { theatreMode: false });
+  await openPanel(page); await page.locator('#ytms-tab-feed').click();
+  assert.equal(await page.locator('#ytms-keepHoverPreviews').isChecked(), false);
+  await page.locator('#ytms-keepHoverPreviews').check();
+  await page.locator('#ytms-tab-player').click();
+  const timer=page.locator('#ytms-timeDisplayMode');
+  assert.equal(await timer.inputValue(), 'native');
+  await timer.selectOption('elapsed'); await page.locator('#ytms-save-preview').click();
+  const saved=await page.evaluate(key=>JSON.parse(localStorage.getItem(key)).values,KEY);
+  assert.equal(saved.keepHoverPreviews,true); assert.equal(saved.timeDisplayMode,'elapsed');
+  await page.locator('#ytms-restore-section-defaults').click();
+  assert.equal(await timer.inputValue(),'native');
+  await page.locator('#ytms-tab-feed').click();
+  assert.equal(await page.locator('#ytms-keepHoverPreviews').isChecked(),true);
+});
+
+test('saved elapsed mode reaches the embedded native-timer hook after late control creation', async t => {
+  const page = await openFixture(t, { theatreMode: false, timeDisplayMode: 'elapsed' });
+  await page.evaluate(() => {
+    const timer=document.createElement('div'); timer.className='ytp-time-display';
+    const wrapper=document.createElement('div'); wrapper.className='ytp-time-wrapper ytp-time-wrapper-delhi';
+    const contents=document.createElement('div'); contents.className='ytp-time-contents'; contents.setAttribute('role','button'); contents.tabIndex=0;
+    const current=document.createElement('span'); current.className='ytp-time-current'; current.textContent='-15:04';
+    const duration=document.createElement('span'); duration.className='ytp-time-duration'; duration.textContent='15:13';
+    contents.append(current,document.createTextNode(' / '),duration); wrapper.append(contents); timer.append(wrapper);
+    document.querySelector('#movie_player').append(timer);
+    wrapper.addEventListener('click',()=>{current.textContent='0:09'});
+    document.querySelector('#movie_player video').dispatchEvent(new Event('timeupdate'));
+  });
+  await page.waitForFunction(()=>document.querySelector('.ytp-time-current')?.textContent==='0:09');
+  assert.equal(await page.locator('.ytp-time-duration').textContent(),'15:13');
+});
+
+test('saved hover persistence reaches native Home computations through the embedded suite', async t => {
+  const page=await openFixture(t,{theatreMode:false,miniplayerEnabled:false,keepHoverPreviews:true});
+  await page.evaluate(()=>{
+    const app=document.querySelector('ytd-app');
+    app.polymerController={miniplayerIsActive:true,miniplayerPlaybackState:1,isInlinePreviewDisabled:false,isInlinePreviewEnabled:false,
+      computeIsInlinePreviewEnabled(active,state,disabled){return !disabled&&(!active||[5,2,0].includes(state));}};
+    const browse=document.createElement('ytd-browse'),grid=document.createElement('ytd-rich-grid-renderer');
+    browse.style.display='block'; grid.style.cssText='display:block;height:100px'; browse.append(grid); app.append(browse);
+    grid.polymerController={miniplayerIsActive:true,miniplayerPlaybackState:1,isInlinePreviewEnabled:false,
+      computeIsInlinePreviewEnabled(active,state){return !active||[5,2,0].includes(state);}};
+    window.dispatchEvent(new Event('yt-navigate-start')); history.pushState({},'','/'); window.dispatchEvent(new Event('yt-navigate-finish'));
+  });
+  await page.waitForFunction(()=>document.querySelector('ytd-app').polymerController.isInlinePreviewEnabled===true);
+  assert.equal(await page.evaluate(()=>document.querySelector('ytd-rich-grid-renderer').polymerController.isInlinePreviewEnabled),true);
+  assert.equal(await page.evaluate(()=>document.querySelector('ytd-app').polymerController.miniplayerIsActive),true);
+});
+
 test("integrated logo is embedded, correctly sized and adjacent to the profile; panel is lazy", async t => {
   const page = await openFixture(t);
   assert.equal(await page.locator("#ytms-settings-dialog").count(), 0);
@@ -802,7 +853,7 @@ test("panel dimensions stay fixed across every tab, colour picker, field errors 
   await page.locator('#ytms-save-preview').click();
   assert.equal(await page.locator('#ytms-settings-status').isVisible(), true);
   assert.deepEqual(await dialog.boundingBox(), bounds);
-  assert.equal(await page.locator('#ytms-section-player .row .description').count(), 9);
+  assert.equal(await page.locator('#ytms-section-player .row .description').count(), 10);
   assert.equal(await page.locator('#ytms-liveChatButton').isChecked(), true);
   assert.equal(await page.locator('#ytms-section-interface .row .description').count(), 11);
 });

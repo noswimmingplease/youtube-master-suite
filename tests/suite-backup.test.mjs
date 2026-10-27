@@ -261,13 +261,15 @@ test('pre-timeline backups restore the automatic preview default while preservin
   const f = fixture({ [SETTINGS]: JSON.stringify({ version: 1, values: { timelinePreviewSize: 'large', hideChat: false } }),
     [FILTERS]: rawRules([rule()]) });
   const legacy = documentFor(f, { hideChat: false }, [rule()]);
-  for (const name of ['timelinePreviewSize', 'liveChatButton', 'hideLiveVideos', 'hideUpcomingStreams']) delete legacy.settings[name];
+  for (const name of ['timelinePreviewSize', 'liveChatButton', 'hideLiveVideos', 'hideUpcomingStreams', 'timeDisplayMode', 'keepHoverPreviews']) delete legacy.settings[name];
   const preview = f.backup.preview(JSON.stringify(legacy));
   assert.equal(preview.ok, true, preview.error);
   assert.deepEqual(preview.summary.settingChanges, [{ name: 'timelinePreviewSize', before: 'large', after: 'auto' }]);
   assert.deepEqual(f.writes, [], 'Preview must remain read-only');
   assert.equal(f.backup.restore(preview.preview).ok, true);
   assert.equal(f.settings.read().timelinePreviewSize, 'auto');
+  assert.equal(f.settings.read().timeDisplayMode, 'native');
+  assert.equal(f.settings.read().keepHoverPreviews, false);
   assert.equal(f.settings.read().hideChat, false);
   assert.deepEqual(f.channelAge.getRules(), [rule()]);
   for (const value of ['huge', '480', 480, null, false, [], {}]) {

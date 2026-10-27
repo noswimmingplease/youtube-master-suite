@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         YouTube Suite Settings
 // @namespace    Citizen.youtube.suite-settings
-// @version      1.41
+// @version      1.42
 // @description  Master-only native-style settings panel accessible from the header and watch player.
 // @author       Citizen
 // @license      GNU GPLv3
@@ -57,11 +57,14 @@
         ['hideLiveVideos', 'Hide live videos'], ['hideUpcomingStreams', 'Hide upcoming streams and premieres'],
         ['hideMixes', 'Hide mixes'], ['hidePodcasts', 'Hide podcasts'], ['hideMembersOnly', 'Hide members-only videos'],
         ['watchedThreshold', 'Watched threshold', ['80', '90', '95', '100'], value => `${value}%`],
+        ['keepHoverPreviews', 'Keep hover previews with miniplayer'],
       ],
       player: [
         ['yellowCaptions', 'Readable yellow captions'], ['mirrorButton', 'Show mirror button'],
         ['liveChatButton', 'Show live chat button'],
         ['hideFullscreenQuickActions', 'Hide fullscreen action strip'],
+        ['timeDisplayMode', 'Playback time display', ['native', 'elapsed', 'remaining'],
+          value => ({ native: 'YouTube default', elapsed: 'Elapsed / total', remaining: 'Remaining / total' })[value]],
         ['timelinePreviewSize', 'Timeline preview size', ['auto', 'small', 'medium', 'large', 'native'],
           value => ({ auto: 'Automatic (fit player)', small: 'Small', medium: 'Medium', large: 'Large', native: 'YouTube default' })[value]],
         ['theatreMode', 'Automatic theatre mode'], ['wheelVolume', 'Right-button wheel volume'],
@@ -103,10 +106,12 @@
       hidePodcasts: 'Remove podcast cards and shelves from supported feeds.',
       hideMembersOnly: 'Remove cards for videos restricted to channel members.',
       watchedThreshold: 'Choose how much watched progress is required before a video card is hidden.',
+      keepHoverPreviews: 'Allow native hover previews on Home while the miniplayer is open. Honours YouTube’s Inline playback preference. Experimental: unsupported layouts retain YouTube’s behaviour. Off by default; applies after reload.',
       yellowCaptions: 'Use readable yellow subtitles with a black shadow in the player and inline previews.',
       mirrorButton: 'Show the horizontal flip control. Only the video image is mirrored, not captions or controls.',
       liveChatButton: 'Show a playback-bar button for native live chat when available, including supported fullscreen views. Chat visibility is temporary for the current video. This button preference applies after reload.',
       hideFullscreenQuickActions: 'Hide the fullscreen Likes, Dislikes, Comments, Share and More action strip. The main playback controls are unchanged. Off by default; applies after reload.',
+      timeDisplayMode: 'Choose elapsed or remaining time beside the total duration using YouTube’s native timer toggle. Live streams, adverts and unsupported timers are unchanged. Applies after reload.',
       timelinePreviewSize: 'Size of the thumbnail shown when hovering over the timeline. Automatic adapts to the visible player, including fullscreen and browser zoom. Larger sizes enlarge YouTube’s existing image, not its detail. Applies after reload.',
       theatreMode: 'Start watch videos in YouTube’s theatre view.',
       wheelVolume: 'Hold the right mouse button and scroll over the player to adjust volume.',

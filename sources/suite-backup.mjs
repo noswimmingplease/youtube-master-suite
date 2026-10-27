@@ -10,7 +10,8 @@ export function createSuiteBackup(getStorage, settings, channelAge) {
   // Keep every pre-existing field required and validate optional fields if present.
   const requiredSettingNames = settingNames.filter(name =>
     name !== "hideFullscreenQuickActions" && name !== "liveChatButton" &&
-    name !== "hideLiveVideos" && name !== "hideUpcomingStreams" && name !== "timelinePreviewSize");
+    name !== "hideLiveVideos" && name !== "hideUpcomingStreams" && name !== "timelinePreviewSize" &&
+    name !== "keepHoverPreviews" && name !== "timeDisplayMode");
   const ruleNames = ["channelId", "name", "maxAge", "unit", "enabled", "blocked"];
   const previews = new WeakMap();
   const channelPreviews = new WeakMap();
