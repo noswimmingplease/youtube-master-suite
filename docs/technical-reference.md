@@ -32,6 +32,28 @@ is the version inventory; former standalone repositories are superseded.
 `youtube-master-suite.txt` is an ignored local manual-install copy. The published
 artefact is the `.user.js` file.
 
+### Timeline hover preview
+
+Player settings provide Automatic, Small, Medium, Large and YouTube default
+preview sizes. Automatic targets 20% of the rendered player width, bounded to
+192–480 CSS pixels before fitting the available space above the timeline.
+Manual sizes target 240, 320 and 480 CSS pixels, also constrained to that space.
+Sizing follows the visible player and viewport, including scaled scroll players,
+browser zoom and fullscreen, rather than physical monitor resolution.
+
+In the Suite's scroll miniplayer, Automatic and Small target 20% of the visible
+player width, Medium approximately 27%, and Large 40%. The complete preview is
+also capped at 45% of the floating player's height, preserving room for the
+picture and playback controls. Returning to the main player or fullscreen
+restores the normal targets; this does not change the saved size preference.
+
+The native preview is scaled as one unit; storyboard sprites, timestamps and
+chapter labels are not rebuilt. Enlarging a low-resolution thumbnail cannot add
+detail. No additional media requests or playback/seek calls are made. Observation
+and resize handling are active only during timeline hover, with no polling.
+Unknown or already-transformed preview layouts fall back to YouTube's sizing.
+Size preference changes use the existing Save and Reload workflow.
+
 ## Build and verify
 
 Run all commands below **from the repository root**. A normal build needs Node.js
@@ -146,7 +168,46 @@ animates inner row contents only. It preserves native drop targets, row geometry
 and ordering, respects reduced motion and releases temporary resources when the
 gesture ends or its context is lost.
 
+Queue step controls retain the native drag handle and commit each adjacent move
+through the same native `handleDrop` path. They require one verified temporary
+queue, stable player identity and complete unique row bindings. Boundaries, busy
+queues and active drags disable the controls; unsupported panels are left alone.
+Triangles have 14×14 px bounds and 24×24 px click targets. Their centres stay
+18 px above and below the native grip, independent of title length or row height.
+The arrow styling does not set row or grip dimensions. Hover or visible keyboard
+focus reveals the arrows. CSS handles positioning without geometry reads, resize observation,
+pointer-move listeners or polling.
+Scoped integrity checks recover missing buttons, lost markers and damaged arrow
+glyphs after native handle restamping, without replacing the native grip. Hover
+and keyboard focus check only the relevant row. Unrelated native SVG animations
+do not trigger repair, and click-time validation rejects damaged controls before
+dispatching a move.
+Confirmation is bounded to three seconds. Failed moves roll back only when the
+original player/queue binding, model and Suite-owned DOM ordering are still provable; third-party
+changes are not overwritten. The controls do not call playback or network APIs.
+
+Temporary-queue titles are limited to two lines without replacing native title
+nodes or altering their accessible names. The actual line clamp takes priority
+over native multi-line rules; no separate height cap clips the ellipsis.
+A truncated title can show its full
+text in a floating, viewport-clamped tooltip after a short hover delay or on
+visible keyboard focus. The tooltip does not change row geometry or receive
+pointer input. Native title attributes are restored only while still owned by
+the Suite; title replacement, scrolling and page lifecycle changes dismiss it.
+Its opaque dark background and white text remain readable in both light and
+dark themes; titles and queue controls retain native theme colours.
+Native browser tooltips are suppressed during queue-title hover or keyboard
+focus, including fully visible titles. Only truncated titles show the styled
+tooltip; cancelling it does not reactivate the native tooltip under the pointer.
+
 ### Channel filters
+
+Feed settings independently hide currently live cards (off by default) and upcoming
+streams/premieres (on by default, preserving the previous filter). Detection uses
+native badges, schedule metadata and bounded renderer data, not video-title
+keywords. Completed recordings remain ordinary videos. Both filters support the
+temporary Filtered → Show control and leave History, playlists, queues and directly
+opened playback unchanged. Preference changes apply after saving and reloading.
 
 Rules use canonical channel identity and publication metadata already present
 on supported cards. Conflicting IDs and uncertain dates fail open for age-only
@@ -157,6 +218,23 @@ Rules apply only to supported feed/search/channel surfaces. History, queues,
 saved playlists and directly opened playback remain untouched. Profile-local
 changes synchronise between open windows; concurrent saves do not overwrite an
 edited draft silently. YouTube recommendation feedback remains separate.
+
+The Channels tab owns the shared table and inline editor; context-menu entry opens
+that same tab. Search and sort use the current in-memory draft and never persist
+view order or fetch channel metadata. Age sorting uses the filter's calendar-aware
+cutoffs. Channel Save/Cancel controls use the fixed footer and remain separate from
+main preferences. Successful context-menu saves close settings; settings-tab saves
+return to the table. If unrelated main preferences are dirty, the window stays open
+with a notice rather than discarding them. Validation/storage failures retain both
+the editor and draft. Parent close/navigation clears temporary editing state.
+
+Saving a changed rule from a supported feed card shows a session-only confirmation
+on that card, including its timeframe or whole-channel block. Native renderer nodes
+remain attached. Undo restores only that channel's previous rule, refuses concurrent
+target-rule changes and preserves other saved filters. Card recycling, navigation
+and external rule changes remove stale confirmations; no video identity is persisted.
+The default Channel tools order is Back, Filter channel uploads, Don't recommend
+channel, Report. The former default migrates automatically; customised orders stay.
 
 ### Playback, layout and extension boundaries
 
@@ -170,6 +248,26 @@ edited draft silently. YouTube recommendation feedback remains separate.
 - Fullscreen-comment scrolling applies to document-root fullscreen, not browser
   F11 or isolated player-only fullscreen. Floating-player restoration waits
   while its player or video owns fullscreen.
+- The live chat button presents the existing native frame as a manual popover,
+  without moving its iframe or changing its source. Its height follows the video
+  player, with viewport clamping and clearance for overlapping playback controls.
+  Resize/scroll tracking is active only while the panel is open. Selective ancestor reveal
+  keeps unrelated panels hidden. Visibility overrides reset on navigation and
+  do not change saved settings. Document-root fullscreen is supported;
+  player-only fullscreen and browsers without Popover API leave the button
+  unavailable. Hiding preserves drafts rather than unloading chat, so native
+  chat may continue processing messages while hidden.
+- An owned, open chat popover and its dedicated chat wrapper do not count as
+  in-flow sidebar content. Native chat, queues, SponsorBlock and other expanded
+  panels still reserve their rail. Cross-module markers use idempotent writes
+  so empty-rail reconciliation and floating-chat presentation can settle.
+- Managed chat keeps the native video reservation at the watch root, while an
+  otherwise-empty `#columns` subtree receives its own zero sidebar width. Legacy
+  player wrappers reserve space separately from the full-width content below.
+  Closing chat releases its video reservation without removing a genuine lower
+  queue or SponsorBlock rail. Narrow windows retain the responsive overlay.
+  Viewport/fullscreen transitions reassess only Suite-owned ancestor masks;
+  same-size synthetic resize hints do not repeatedly reset those masks.
 - Fullscreen-strip hiding is off by default and targets its dedicated wrapper,
   not the main playback bar. Native quick-action artwork is excluded from the
   Suite's dislike-icon fallback.
@@ -225,7 +323,7 @@ do not treat it as a permanent source change or verified release artefact.
 
 ## Backup validation
 
-Backups contain saved preferences and the complete channel-filter list, including
+Full backups contain saved preferences and the complete channel-filter list, including
 channel names/IDs, but not unsaved drafts or browsing history. They stay local
 unless the user chooses to share the file.
 
@@ -235,6 +333,16 @@ Older supported backups receive defaults for newer optional preferences.
 Concurrent changes invalidate the preview. Partial writes attempt rollback and
 report incomplete recovery. Filters apply immediately; other preferences need
 reload. Restore does not reload automatically.
+
+Channels also provides a separate local JSON export containing only saved channel
+rules, with IDs, names, age limits, units, enabled flags and whole-channel blocks.
+Its independent versioned `en-GB` format uses the same strict rule validation and
+128 KiB limit. Imports default to merging by channel ID; replacement requires an
+explicit mode and acknowledgement. A preview reports additions, updates, removals
+and the resulting count. Applying writes only the channel storage key, refuses
+concurrent channel changes, verifies readback and attempts ownership-safe rollback
+on failure. Pending channel drafts must be saved or discarded first. Search/sort
+choices and other preferences are never imported from a channel-only file.
 
 ## Connected-editor workflow
 

@@ -11,7 +11,7 @@ export function createSettingsSupportPanel(document, suite, hooks) {
   });
   const root = node('div', '', { class: 'support-tools' });
   const backup = node('section', '', { 'aria-labelledby': 'ytms-backup-heading' });
-  const heading = node('h3', 'Backup and restore', { id: 'ytms-backup-heading' });
+  const heading = node('h3', 'Full backup and restore', { id: 'ytms-backup-heading' });
   const description = node('p', 'Download saved settings and channel upload filters for this browser profile. Unsaved edits are not included. The file includes channel names and IDs, so keep it private.', { class: 'section-note' });
   const exportButton = button('export-backup', 'Download backup');
   const fileLabel = node('label', 'Choose a backup to preview', { for: 'ytms-import-backup' });

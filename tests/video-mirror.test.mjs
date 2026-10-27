@@ -269,6 +269,8 @@ function createHarness({ enabled = true } = {}) {
     videoMirrorControls: null, videoMirrorPageSuspended: false,
     videoMirrorTooltipObserver: null,
     applyFrame: 0, playerLayoutRefreshFrame: 0, pendingApplyRoots: new Set(),
+    liveChatSyncFrame: 0, liveChatNavigationPending: false,
+    mutationAffectsLiveChat: () => false,
     requestAnimationFrame(callback) {
       const id = nextFrame++;
       frames.set(id, callback);
@@ -301,6 +303,7 @@ function createHarness({ enabled = true } = {}) {
     "handleTheaterModeToggle", "handleDescriptionClick", "handleWheelVolume",
     "handleFullscreenCommentsWheel", "handleMouseDown", "handleMouseUp", "handleContextMenu", "handleWindowBlur",
     "handleCleanVideoUrlSelection", "handleCleanVideoUrlCopy", "clearCleanVideoUrlCopy",
+    "scheduleLiveChatSync", "resetLiveChat",
   ]) context[name] = () => {};
   const names = [
     "isWatchPath", "isRenderedWatchFlexy", "getWatchFlexy", "buildVideoMirrorCss",

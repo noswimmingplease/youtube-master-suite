@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         YouTube Suite Settings
 // @namespace    Citizen.youtube.suite-settings
-// @version      1.31
+// @version      1.41
 // @description  Master-only native-style settings panel accessible from the header and watch player.
 // @author       Citizen
 // @license      GNU GPLv3
@@ -31,14 +31,13 @@
   let playerTooltip = null;
   let playerTarget = null;
   let watchedPlayerBranch = [];
-  let channelAgeDialog = null;
 
-  suite.openChannelAgeSettings = channel => {
+  suite.openChannelAgeSettings = (channel, context) => {
     if (suspended) return;
     hidePlayerTooltip();
     try {
-      channelAgeDialog ||= suite.createChannelAgeDialog(document, suite.channelAge);
-      channelAgeDialog.open(channel);
+      openSettings();
+      panel?.openChannels(channel, context);
     } catch (error) {
       suite.reportModuleError('suiteSettings', 'open channel upload filters', error);
     }
@@ -48,18 +47,23 @@
   function createPanel() {
     const dialog = suite.createSettingsDialog(document);
     document.body.append(dialog);
+    const panelFooter = dialog.querySelector('footer');
 
     const $ = id => dialog.querySelector(`[id="ytms-${id}"]`);
     const DEFAULTS = settings.defaults;
     const GROUPS = {
       feed: [
         ['hideShorts', 'Hide Shorts'], ['hideWatchedVideos', 'Hide watched videos'],
+        ['hideLiveVideos', 'Hide live videos'], ['hideUpcomingStreams', 'Hide upcoming streams and premieres'],
         ['hideMixes', 'Hide mixes'], ['hidePodcasts', 'Hide podcasts'], ['hideMembersOnly', 'Hide members-only videos'],
         ['watchedThreshold', 'Watched threshold', ['80', '90', '95', '100'], value => `${value}%`],
       ],
       player: [
         ['yellowCaptions', 'Readable yellow captions'], ['mirrorButton', 'Show mirror button'],
+        ['liveChatButton', 'Show live chat button'],
         ['hideFullscreenQuickActions', 'Hide fullscreen action strip'],
+        ['timelinePreviewSize', 'Timeline preview size', ['auto', 'small', 'medium', 'large', 'native'],
+          value => ({ auto: 'Automatic (fit player)', small: 'Small', medium: 'Medium', large: 'Large', native: 'YouTube default' })[value]],
         ['theatreMode', 'Automatic theatre mode'], ['wheelVolume', 'Right-button wheel volume'],
         ['wheelStep', 'Volume step', ['1', '2', '5', '10'], value => `${value}%`],
         ['preferredVideoQuality', 'Preferred video quality', ['off', 'highest', 'tiny', 'small', 'medium', 'large', 'hd720', 'hd1080', 'hd1440', 'hd2160'],
@@ -67,7 +71,7 @@
             hd720: '720p', hd1080: '1080p', hd1440: '1440p', hd2160: '2160p (4K)' })[value]],
       ],
       layout: [
-        ['hideRelated', 'Hide related videos'], ['hideChat', 'Hide live chat'], ['hideInfoCards', 'Hide info cards'],
+        ['hideRelated', 'Hide related videos'], ['hideChat', 'Hide live chat by default'], ['hideInfoCards', 'Hide info cards'],
         ['hideEndScreens', 'Hide end-screen recommendations'], ['fullscreenComments', 'Scrollable fullscreen comments'],
         ['disableTitleHashtagLinks', 'Disable hashtag links in titles'],
       ],
@@ -93,19 +97,23 @@
     const DESCRIPTIONS = {
       hideShorts: 'Remove Shorts shelves and cards from feeds and search results.',
       hideWatchedVideos: 'Hide videos already watched past your threshold. Watch History is left unchanged.',
+      hideLiveVideos: 'Hide cards for videos broadcasting live now in supported feeds and search. Off by default. Applies after reload.',
+      hideUpcomingStreams: 'Hide cards advertising scheduled streams or premieres, including Upcoming and Notify me cards. On by default, preserving the existing filter. This does not stop playback. Applies after reload.',
       hideMixes: 'Remove automatically generated mix cards from supported feeds.',
       hidePodcasts: 'Remove podcast cards and shelves from supported feeds.',
       hideMembersOnly: 'Remove cards for videos restricted to channel members.',
       watchedThreshold: 'Choose how much watched progress is required before a video card is hidden.',
       yellowCaptions: 'Use readable yellow subtitles with a black shadow in the player and inline previews.',
       mirrorButton: 'Show the horizontal flip control. Only the video image is mirrored, not captions or controls.',
+      liveChatButton: 'Show a playback-bar button for native live chat when available, including supported fullscreen views. Chat visibility is temporary for the current video. This button preference applies after reload.',
       hideFullscreenQuickActions: 'Hide the fullscreen Likes, Dislikes, Comments, Share and More action strip. The main playback controls are unchanged. Off by default; applies after reload.',
+      timelinePreviewSize: 'Size of the thumbnail shown when hovering over the timeline. Automatic adapts to the visible player, including fullscreen and browser zoom. Larger sizes enlarge YouTube’s existing image, not its detail. Applies after reload.',
       theatreMode: 'Start watch videos in YouTube’s theatre view.',
       wheelVolume: 'Hold the right mouse button and scroll over the player to adjust volume.',
       wheelStep: 'Choose the volume change for each wheel step during the right-button gesture.',
       preferredVideoQuality: 'Request this quality on each new video, or the nearest lower available resolution. Opening native player settings stops pending attempts. Higher quality uses more bandwidth. Applies after reload.',
       hideRelated: 'Hide suggested videos beside the watch page without hiding the active queue.',
-      hideChat: 'Hide live-chat panels without removing other engagement panels.',
+      hideChat: 'Start each video with live chat hidden, without removing other engagement panels. The player’s live chat button can show it temporarily without changing this saved default.',
       hideInfoCards: 'Hide in-video information cards and their buttons.',
       hideEndScreens: 'Hide end-screen recommendation tiles without taking over native autoplay.',
       fullscreenComments: 'Scroll to existing comments while page fullscreen remains active. Player-only fullscreen is unchanged.',
@@ -119,8 +127,8 @@
       showDeArrowTitleButton: 'Show DeArrow’s title-button controls beside the watch-page title. Hidden by default; title and thumbnail replacements remain active. Applies after reload.',
       showDeArrowQueueButton: 'Show DeArrow’s original/custom toggle logo in queue titles. Hiding it does not disable DeArrow title or thumbnail replacements.',
       menuShowDownload: 'Show YouTube’s Download action when available. Hidden by default; this does not enable downloads or change your account permissions.',
-      menuGroupChannelTools: 'On: place Don’t recommend channel, Report and Filter channel uploads in a Channel tools submenu. Off: keep enabled actions separate in the main menu. Not interested always stays in the main menu. Save and reload to apply.',
-      menuShowAgeLimit: 'Add Filter channel uploads to set how old a selected channel’s uploads can be. It appears at the bottom by default.',
+      menuGroupChannelTools: 'On: place Filter channel uploads, Don’t recommend channel and Report in a Channel tools submenu. Off: keep enabled actions separate in the main menu. Not interested always stays in the main menu. Save and reload to apply.',
+      menuShowAgeLimit: 'Add Filter channel uploads to set how old a selected channel’s uploads can be. It appears first in Channel tools by default.',
       menuShowNotInterested: 'Keep YouTube’s Not interested action visible when the video menu provides it.',
       menuShowDontRecommend: 'Keep YouTube’s Don’t recommend channel action available, separately or inside Channel tools.',
       menuShowReport: 'Keep YouTube’s Report action available, separately or inside Channel tools. A report is never submitted automatically.',
@@ -131,6 +139,9 @@
     let pickerTarget = null;
     let pickerTrigger = null;
     let currentTab = 'comments';
+    let channelEntry = 'settings';
+    let channelManager = null;
+    let channelFooterHost = null;
 
     let supportPanel = null;
     const tabIds = ['comments', 'feed', 'channels', 'player', 'layout', 'miniplayer', 'interface', 'extensions', 'support', 'credits'];
@@ -145,6 +156,8 @@
         if (button.getAttribute('aria-selected') !== String(selected)) button.setAttribute('aria-selected', String(selected));
         if (button.tabIndex !== (selected ? 0 : -1)) button.tabIndex = selected ? 0 : -1;
       }
+      panelFooter.classList.toggle('ytms-channels-active', id === 'channels');
+      if (channelFooterHost) channelFooterHost.hidden = id !== 'channels';
       dialog.querySelector('.content').scrollTop = 0;
       if (id === 'channels') renderChannelRules();
       if (id === 'support') supportPanel?.refresh();
@@ -189,47 +202,51 @@
     ageLabel.textContent = 'Channel upload filters';
     const ageDescription = document.createElement('span'); ageDescription.className = 'description';
     ageDescription.id = 'ytms-channel-age-description';
-    ageDescription.textContent = 'Choose how old each channel’s uploads can be: days, weeks, months or years. Watched-video filtering remains independent. Manage and save these filters separately; the settings reset buttons leave them unchanged.';
+    ageDescription.textContent = 'Search and sort saved channels, or edit their upload-age limits. Channel filters are saved separately from other settings.';
     ageLabel.append(ageDescription);
-    const ageButton = document.createElement('button'); ageButton.id = 'ytms-manage-channel-age';
-    ageButton.type = 'button'; ageButton.className = 'text-button outlined-button'; ageButton.textContent = 'Manage filters';
-    ageButton.setAttribute('aria-label', 'Manage channel upload filters');
-    ageButton.setAttribute('aria-describedby', ageDescription.id); ageButton.setAttribute('aria-haspopup', 'dialog');
-    ageButton.addEventListener('click', () => suite.openChannelAgeSettings());
     const channelNote = document.createElement('p'); channelNote.className = 'section-note';
-    channelNote.textContent = 'This list contains filters saved by YouTube Master Suite in this browser profile. YouTube’s own Don’t recommend channel choices are separate and are not included here. Edit or remove a filter in the manager, then choose Save filters to apply it.';
+    channelNote.textContent = 'These are this browser profile’s Suite filters. YouTube’s own Don’t recommend channel choices are separate. Edits and removals apply only after Save filters.';
     const channelHelp = document.createElement('a'); channelHelp.className = 'channel-filter-help';
     channelHelp.textContent = 'Manage YouTube’s own recommendation controls';
     channelHelp.href = 'https://support.google.com/youtube/answer/6342839?hl=en&co=GENIE.Platform%3DDesktop';
     channelHelp.target = '_blank'; channelHelp.rel = 'noopener noreferrer';
     channelHelp.setAttribute('aria-label', 'Manage YouTube’s own recommendation controls (opens in a new tab)');
-    const channelList = document.createElement('div'); channelList.id = 'ytms-channel-filter-list';
-    channelList.setAttribute('role', 'list'); channelList.setAttribute('aria-label', 'Saved channel upload filters');
-    ageRow.append(ageLabel, ageButton); $('section-channels').append(ageRow, channelNote, channelHelp, channelList);
+    const channelNotice = document.createElement('p'); channelNotice.className = 'section-note';
+    channelNotice.id = 'ytms-channel-entry-notice'; channelNotice.setAttribute('role', 'status'); channelNotice.hidden = true;
+    ageRow.append(ageLabel); $('section-channels').append(ageRow, channelNote, channelHelp, channelNotice);
+    channelFooterHost = document.createElement('div'); channelFooterHost.id = 'ytms-channel-footer'; channelFooterHost.hidden = true;
+    panelFooter.append(channelFooterHost);
+    function finishChannelEdit(wasSaved, previous = {}) {
+      const fromContext = channelEntry === 'context';
+      channelEntry = 'settings';
+      if ((!wasSaved && !previous.hadEditor && !previous.hadDraft) ||
+          (fromContext && !primaryActionState().dirty && !externalConflict)) {
+        dialog.close();
+        return;
+      }
+      selectTab('channels');
+      if (fromContext) {
+        channelNotice.textContent = wasSaved ? 'Channel filters saved. Other settings still have unsaved changes.' :
+          'Channel edits cancelled. Other settings still have unsaved changes.';
+        channelNotice.hidden = false;
+      }
+      channelManager.element.querySelector('#ytms-channel-search')?.focus({ preventScroll: true });
+    }
+    channelManager = suite.createChannelAgeDialog(document, suite.channelAge,
+      change => suite.showChannelFilterConfirmation?.(change), {
+        host: $('section-channels'), footerHost: channelFooterHost,
+        channelBackup: suite.backup, openFullBackup: () => selectTab('support', true),
+        onImported: () => { channelEntry = 'settings'; channelNotice.hidden = true; channelManager.refresh(); },
+        onComplete: () => finishChannelEdit(true), onCancel: previous => finishChannelEdit(false, previous),
+      });
     function renderChannelRules() {
-      channelList.replaceChildren();
-      const rules = suite.channelAge.read();
-      if (!rules.length) {
-        const empty = document.createElement('p'); empty.className = 'section-note'; empty.textContent = 'No channel upload filters saved.';
-        channelList.append(empty);
-      }
-      for (const rule of rules) {
-        const card = document.createElement('article'); card.className = 'channel-filter-card'; card.setAttribute('role', 'listitem');
-        const title = document.createElement('h3'); title.textContent = rule.name || rule.channelId;
-        const id = document.createElement('p'); id.className = 'channel-filter-id'; id.textContent = rule.channelId;
-        const age = document.createElement('p'); age.textContent = `Maximum upload age: ${rule.maxAge} ${rule.maxAge === 1 ? rule.unit.slice(0, -1) : rule.unit}`;
-        const status = document.createElement('p'); status.className = 'channel-filter-status';
-        status.textContent = `Status: ${!rule.enabled ? 'Disabled' : rule.blocked ? 'All uploads hidden' : 'Enabled'}`;
-        const actions = document.createElement('div'); actions.className = 'channel-filter-actions';
-        for (const [label, remove] of [['Edit', false], ['Remove', true]]) {
-          const action = document.createElement('button'); action.type = 'button';
-          action.className = `text-button ${remove ? 'danger-button' : 'outlined-button'}`;
-          action.textContent = `${label} filter`; action.setAttribute('aria-label', `${label} filter for ${rule.name || rule.channelId}`);
-          action.addEventListener('click', () => suite.openChannelAgeSettings({ channelId: rule.channelId, name: rule.name, ...(remove ? { remove: true } : {}) }));
-          actions.append(action);
-        }
-        card.append(title, id, age, status, actions); channelList.append(card);
-      }
+      if (dialog.open && currentTab === 'channels') channelManager?.refresh();
+    }
+    function openChannels(channel, context) {
+      channelEntry = context?.card && context?.videoId ? 'context' : 'settings';
+      channelNotice.hidden = true;
+      selectTab('channels');
+      channelManager.open(channel, context);
     }
 
     const menuOrder = document.createElement('section'); menuOrder.className = 'menu-order';
@@ -449,10 +466,12 @@
       $(key).addEventListener('change', event => { draft[key] = event.target.checked; updateColours(); });
     }
     function openPanel() {
+      if (dialog.open) return;
       saved = settings.read(); draft = { ...saved };
       externalConflict = false;
       supportPanel?.reset();
       menuDetails.open = false;
+      channelEntry = 'settings'; channelNotice.hidden = true; channelManager.reset({ defer: true });
       $('settings-status').hidden = true;
       closePicker(false); populate(); selectTab('comments');
       if (primaryActionState().pendingReload) {
@@ -463,7 +482,9 @@
     }
 
     for (const id of ['close-panel', 'cancel-panel']) $(id).addEventListener('click', () => dialog.close());
-    dialog.addEventListener('close', () => closePicker(false));
+    dialog.addEventListener('close', () => {
+      closePicker(false); channelEntry = 'settings'; channelManager.reset({ defer: true });
+    });
     dialog.addEventListener('keydown', event => {
       event.stopPropagation();
       if (event.key === 'Escape' && pickerTarget) { event.preventDefault(); closePicker(); }
@@ -506,7 +527,10 @@
       const state = updatePrimaryAction();
       if ($('save-preview').disabled) return;
       if (!state.dirty) {
-        if (state.pendingReload && window.confirm('Reload YouTube now? This will restart the current page and video.')) location.reload();
+        const message = channelManager.hasDraft()
+          ? 'Reload YouTube now? This will restart the current page and video. Unsaved channel-filter edits will be lost.'
+          : 'Reload YouTube now? This will restart the current page and video.';
+        if (state.pendingReload && window.confirm(message)) location.reload();
         return;
       }
       const result = settings.save(draft);
@@ -518,7 +542,7 @@
         : 'Saved. No reload needed.';
     });
     supportPanel = suite.createSettingsSupportPanel(document, suite, {
-      hasDraft: () => externalConflict || primaryActionState().dirty,
+      hasDraft: () => externalConflict || primaryActionState().dirty || channelManager.hasDraft(),
       onRestored: result => {
         saved = result.values; draft = { ...saved }; externalConflict = false;
         closePicker(false); populate(); renderChannelRules();
@@ -531,7 +555,8 @@
     $('section-support').append(supportPanel.element);
     dialog.addEventListener('close', () => supportPanel.close());
     populate(); selectTab('comments');
-    return { dialog, open: openPanel, updateTheme: updateColours, updateChannels: renderChannelRules, reconcileSaved: reconcileStoredPreferences };
+    return { dialog, open: openPanel, openChannels, resetChannels: () => channelManager.reset({ defer: true }),
+      updateTheme: updateColours, updateChannels: renderChannelRules, reconcileSaved: reconcileStoredPreferences };
 
   }
 
@@ -780,11 +805,11 @@
     discoveryActive = false;
     hidePlayerTooltip();
     document.getElementById(DIALOG_ID)?.close();
-    channelAgeDialog?.close();
+    panel?.resetChannels();
   }
   window.addEventListener("pagehide", stop);
   window.addEventListener("pageshow", start);
-  window.addEventListener("yt-navigate-start", () => { hidePlayerTooltip(); document.getElementById(DIALOG_ID)?.close(); channelAgeDialog?.close(); });
+  window.addEventListener("yt-navigate-start", () => { hidePlayerTooltip(); document.getElementById(DIALOG_ID)?.close(); panel?.resetChannels(); });
   window.addEventListener("yt-navigate-finish", scheduleInstall);
   window.addEventListener("yt-page-data-updated", scheduleInstall);
   window.addEventListener('yt-master-channel-age-changed', () => panel?.updateChannels());

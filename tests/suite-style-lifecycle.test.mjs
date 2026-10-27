@@ -251,6 +251,30 @@ test("root fallback and reconnection retain exactly one connected stylesheet wit
   assert.equal(harness.createdStyles.filter(style => style.isConnected).length, 1);
 });
 
+test("queue drag and step styles render in the shared sheet and dispose independently", () => {
+  const harness = createHarness({ root: true, head: true });
+  const { context } = harness;
+  context.beginBatch();
+  context.setStyle("watchLayoutCleanerQueueSteps", ".step { color: grey; }");
+  context.setStyle("watchLayoutCleanerDrag", ".drag { cursor: grab; }");
+  context.setStyle("watchLayoutCleaner", ".watch { display: block; }");
+  context.endBatch();
+  assert.equal(harness.createdStyles.length, 1);
+  assert.equal(harness.stats.textWrites, 1);
+  assert.equal(context.styleElement.textContent,
+    "/* watchLayoutCleaner */\n.watch { display: block; }\n\n" +
+    "/* watchLayoutCleanerDrag */\n.drag { cursor: grab; }\n\n" +
+    "/* watchLayoutCleanerQueueSteps */\n.step { color: grey; }");
+  context.removeStyle("watchLayoutCleanerDrag");
+  assert.doesNotMatch(context.styleElement.textContent, /cursor: grab/);
+  assert.match(context.styleElement.textContent, /color: grey/);
+  context.removeStyle("watchLayoutCleanerQueueSteps");
+  assert.equal(context.styleElement.textContent, "/* watchLayoutCleaner */\n.watch { display: block; }");
+  assert.equal(harness.createdStyles.length, 1);
+  context.removeStyle("watchLayoutCleaner");
+  assert.equal(context.styleElement, null);
+});
+
 test("style recovery adds no polling or listeners and preserves the already-ready startup microtask", () => {
   assert.doesNotMatch(STYLE_SOURCE, /\b(?:setTimeout|setInterval|requestAnimationFrame|MutationObserver|addEventListener|queueMicrotask)\b/);
   assert.doesNotMatch(BATCH_SOURCE + STARTUP_SOURCE, /\b(?:setTimeout|setInterval|requestAnimationFrame|MutationObserver)\b/);

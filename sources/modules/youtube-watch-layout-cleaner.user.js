@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         YouTube Watch Layout Cleaner
 // @namespace    Citizen.youtube.watch-layout-cleaner
-// @version      1.46
+// @version      1.61
 // @description  Expands YouTube watch pages, keeps the right rail fixed at SponsorBlock-friendly width, preserves its visible popup, and widens metadata/comments.
 // @author       Citizen
 // @homepageURL  https://github.com/noswimmingplease/youtube-watch-layout-cleaner
@@ -51,6 +51,7 @@
       `${panelSelector} [${QUEUE_THUMBNAIL_FALLBACK_ATTRIBUTE}="1"]`,
   ).join(",\n");
   const EMPTY_SECONDARY_RAIL_ATTRIBUTE = "data-ywlc-empty-secondary-rail";
+  const MANAGED_LIVE_CHAT_ATTRIBUTE = "data-ywlc-managed-chat";
   const AUXILIARY_RAIL_SURFACE_SELECTOR = [
     "#sponsorBlockPopupContainer",
     "#sponsorBlockPopupContainer iframe",
@@ -90,6 +91,7 @@
     "selected",
     "style",
     "visibility",
+    "data-ytppl-live-chat-panel",
   ];
   const DISCOVERY_MUTATION_ATTRIBUTES = [
     ...new Set([
@@ -117,7 +119,7 @@
   const EMPTY_SECONDARY_RAIL_SELECTOR =
     TWO_COLUMN_WATCH_FLEXY_SELECTORS.map(
       (watchSelector) =>
-        `${watchSelector}[${EMPTY_SECONDARY_RAIL_ATTRIBUTE}="1"]`,
+        `${watchSelector}[${EMPTY_SECONDARY_RAIL_ATTRIBUTE}="1"]:not([${MANAGED_LIVE_CHAT_ATTRIBUTE}="open"])`,
     ).join(",\n");
   let queueThumbnailFallbackTimers = [];
   let queueThumbnailFallbackObserver = null;
@@ -189,9 +191,42 @@ ${WATCH_FLEXY_SELECTOR}{
   }
 }
 
-/* Collapse only a rail confirmed empty by the live DOM-state reconciliation. */
+/* Preserve the native video/chat reservation while managed chat is open. */
 @media (min-width: ${px(CONFIG.queueLayoutBreakpointPx + 1)}) {
   ${EMPTY_SECONDARY_RAIL_SELECTOR}{
+    --ytd-watch-flexy-sidebar-width: 0px !important;
+  }
+}
+
+/* YouTube shares its sidebar variable between the video and lower content.
+   Capture the native reserve before zeroing only the otherwise-empty columns. */
+ytd-watch-flexy[${MANAGED_LIVE_CHAT_ATTRIBUTE}="open"] {
+  --ywlc-live-chat-reserve: var(--ytd-watch-flexy-sidebar-width, ${px(CONFIG.sidebarWidthPx)}) !important;
+}
+
+ytd-watch-flexy[${MANAGED_LIVE_CHAT_ATTRIBUTE}][${EMPTY_SECONDARY_RAIL_ATTRIBUTE}="1"] #columns.ytd-watch-flexy {
+  --ytd-watch-flexy-sidebar-width: 0px !important;
+}
+
+/* Explicitly hiding chat must release video space even when a real queue or
+   SponsorBlock widget still needs its separate, below-video rail. */
+ytd-watch-flexy[${MANAGED_LIVE_CHAT_ATTRIBUTE}="hidden"] #full-bleed-container,
+ytd-watch-flexy[${MANAGED_LIVE_CHAT_ATTRIBUTE}="hidden"] #columns #primary #player.ytd-watch-flexy,
+ytd-watch-flexy[${MANAGED_LIVE_CHAT_ATTRIBUTE}="open"] #columns #primary #player.ytd-watch-flexy {
+  --ytd-watch-flexy-sidebar-width: 0px !important;
+}
+
+/* Legacy/default view nests the video inside the full-width primary column.
+   Reserve once on its wrapper, never on the player or video element itself. */
+@media (min-width: 768px) {
+  :root:not(:fullscreen) ytd-watch-flexy[${MANAGED_LIVE_CHAT_ATTRIBUTE}="open"][${EMPTY_SECONDARY_RAIL_ATTRIBUTE}="1"] #columns #primary #player.ytd-watch-flexy {
+    width: calc(100% - var(--ywlc-live-chat-reserve, ${px(CONFIG.sidebarWidthPx)})) !important;
+  }
+}
+
+/* Retain the existing responsive overlay when both panes cannot fit. */
+@media (max-width: 767px) {
+  ytd-watch-flexy[${MANAGED_LIVE_CHAT_ATTRIBUTE}="open"] {
     --ytd-watch-flexy-sidebar-width: 0px !important;
   }
 }
@@ -449,11 +484,33 @@ ${buildQueueCompatibilityCss()}
     return true;
   }
 
+  function isFloatingChatSurface(surface) {
+    const selector = 'ytd-live-chat-frame#chat[data-ytppl-live-chat-panel="1"]';
+    try {
+      const frame = surface.matches?.(selector) ? surface :
+        surface.matches?.(CHAT_SURFACE_SELECTOR) ? surface.querySelector?.(selector) : null;
+      // The marker alone is insufficient during native presentation changes.
+      // Only our actually open, out-of-flow chat releases its former column.
+      return Boolean(frame?.matches?.(":popover-open"));
+    } catch {
+      return false; // Unsupported selectors retain the native rail safely.
+    }
+  }
+
   function isActiveChatSurface(surface) {
     return (
+      !isFloatingChatSurface(surface) &&
       !surface.hasAttribute("collapsed") &&
       !isElementOrAncestorHidden(surface, surface.closest("ytd-watch-flexy"))
     );
+  }
+
+  function getManagedLiveChatState(chatSurfaces) {
+    if (chatSurfaces.some(isFloatingChatSurface)) return "open";
+    return chatSurfaces.some(surface =>
+      surface.tagName?.toLowerCase() === "ytd-live-chat-frame" && surface.id === "chat" &&
+      surface.classList?.contains("ytppl-live-chat-hidden"),
+    ) ? "hidden" : "";
   }
 
   function isActiveQueuePanel(panel) {
@@ -466,6 +523,7 @@ ${buildQueueCompatibilityCss()}
   function isActiveEngagementPanel(panel) {
     const visibility = panel.getAttribute("visibility");
     return (
+      !isFloatingChatSurface(panel) &&
       (!visibility || visibility === "ENGAGEMENT_PANEL_VISIBILITY_EXPANDED") &&
       !panel.hasAttribute("collapsed") &&
       !isElementOrAncestorHidden(panel, panel.closest("ytd-watch-flexy"))
@@ -485,18 +543,28 @@ ${buildQueueCompatibilityCss()}
 
   function reconcileSecondaryRailState() {
     railStateReconciliationFrame = 0;
+    const watchRoute = isWatchPath();
+    let layoutChanged = false;
     document.querySelectorAll("ytd-watch-flexy").forEach((watchFlexy) => {
+      const chatSurfaces = Array.from(watchFlexy.querySelectorAll(CHAT_SURFACE_SELECTOR));
+      const managedChatState = watchRoute ? getManagedLiveChatState(chatSurfaces) : "";
+      if (managedChatState) {
+        if (watchFlexy.getAttribute(MANAGED_LIVE_CHAT_ATTRIBUTE) !== managedChatState) {
+          watchFlexy.setAttribute(MANAGED_LIVE_CHAT_ATTRIBUTE, managedChatState);
+          layoutChanged = true;
+        }
+      } else if (watchFlexy.hasAttribute(MANAGED_LIVE_CHAT_ATTRIBUTE)) {
+        watchFlexy.removeAttribute(MANAGED_LIVE_CHAT_ATTRIBUTE);
+        layoutChanged = true;
+      }
       const eligible =
-        isWatchPath() && watchFlexy.matches(TWO_COLUMN_WATCH_FLEXY_SELECTOR);
+        watchRoute && (watchFlexy.matches(TWO_COLUMN_WATCH_FLEXY_SELECTOR) || Boolean(managedChatState));
       const related = eligible ? watchFlexy.querySelector("#related") : null;
       const relatedHidden =
         eligible &&
         (!related || isElementOrAncestorHidden(related, watchFlexy));
       const chatVisible =
-        eligible &&
-        Array.from(watchFlexy.querySelectorAll(CHAT_SURFACE_SELECTOR)).some(
-          isActiveChatSurface,
-        );
+        eligible && chatSurfaces.some(isActiveChatSurface);
       const queueVisible =
         eligible &&
         Array.from(
@@ -521,11 +589,18 @@ ${buildQueueCompatibilityCss()}
         !engagementPanelVisible;
 
       if (railIsEmpty) {
-        watchFlexy.setAttribute(EMPTY_SECONDARY_RAIL_ATTRIBUTE, "1");
-      } else {
+        if (watchFlexy.getAttribute(EMPTY_SECONDARY_RAIL_ATTRIBUTE) !== "1") {
+          watchFlexy.setAttribute(EMPTY_SECONDARY_RAIL_ATTRIBUTE, "1");
+          layoutChanged = true;
+        }
+      } else if (watchFlexy.hasAttribute(EMPTY_SECONDARY_RAIL_ATTRIBUTE)) {
         watchFlexy.removeAttribute(EMPTY_SECONDARY_RAIL_ATTRIBUTE);
+        layoutChanged = true;
       }
     });
+    // Native inline player dimensions must follow the scoped CSS variables.
+    // Notify once per actual state transition; stable reconciliation is silent.
+    if (watchRoute && layoutChanged) window.dispatchEvent(new Event("resize"));
   }
 
   function scheduleSecondaryRailStateReconciliation() {
@@ -1321,6 +1396,600 @@ ${buildQueueCompatibilityCss()}
     return reset;
   }
 
+  function installQueueStepControls() {
+    const panelSelector = "ytd-playlist-panel-renderer, yt-playlist-panel-renderer";
+    const rowSelector = "ytd-playlist-panel-video-renderer, yt-playlist-panel-video-renderer";
+    const controlSelector = 'button[data-ywlc-queue-step]';
+    const arrowPaths = { up: 'M0 16 8 0l8 16z', down: 'M0 0l8 16 8-16z' };
+    const records = new Map();
+    const listeners = [];
+    const controller = node => node?.polymerController || node?.getPolymerController?.() || node;
+    const validId = value => typeof value === "string" && /^[\w-]{11}$/.test(value);
+    const same = (left, right) => left.length === right.length && left.every((value, index) => value === right[index]);
+    let frame = 0, pending = null, focusRequest = null, navigating = false, disposed = false;
+    let toast = null, toastTimer = 0;
+    const sharedStyle = typeof suite !== 'undefined' && typeof suite.setStyle === 'function' && typeof suite.removeStyle === 'function';
+    const stepCss = `
+      [data-ywlc-queue-step-controls] { position: relative !important; overflow: visible !important; }
+      [data-ywlc-queue-step-controls] > button[data-ywlc-queue-step] {
+        position: absolute; left: 50%; transform: translate(-50%, -50%); display: flex;
+        align-items: center; justify-content: center; width: 24px; height: 24px;
+        min-width: 0; padding: 0; margin: 0; border: 0; border-radius: 3px;
+        background: transparent; color: var(--yt-spec-icon-inactive, var(--yt-spec-text-secondary, #aaa)); cursor: pointer; line-height: 0;
+        opacity: 0; pointer-events: none;
+      }
+      [data-ywlc-queue-step="up"] { top: calc(50% - 18px); }
+      [data-ywlc-queue-step="down"] { top: calc(50% + 18px); }
+      :is(ytd-playlist-panel-video-renderer, yt-playlist-panel-video-renderer):hover [data-ywlc-queue-step-controls] > button[data-ywlc-queue-step],
+      [data-ywlc-queue-step-controls]:has(> button[data-ywlc-queue-step]:focus-visible) > button[data-ywlc-queue-step] {
+        opacity: 1; pointer-events: auto;
+      }
+      [data-ywlc-queue-step-controls] > button[data-ywlc-queue-step]:hover:not(:disabled) {
+        background: var(--yt-spec-10-percent-layer, #ffffff1a);
+      }
+      [data-ywlc-queue-step-controls] > button[data-ywlc-queue-step]:disabled { color: color-mix(in srgb, var(--yt-spec-icon-inactive, var(--yt-spec-text-secondary, #aaa)) 25%, transparent); cursor: default; }
+      [data-ywlc-queue-step-controls] > button[data-ywlc-queue-step]:focus-visible { opacity: 1; pointer-events: auto; outline: 2px solid currentColor; outline-offset: 1px; }
+      [data-ywlc-queue-step-controls] > button[data-ywlc-queue-step] svg { width: 14px; height: 14px; fill: currentColor; pointer-events: none; }
+      .dragging [data-ywlc-queue-step-controls] > button[data-ywlc-queue-step] { visibility: hidden; }
+      [data-ywlc-queue-presentation="1"] > #container,
+      [data-ywlc-queue-presentation="1"] > a > #container { align-items: center !important; }
+      [data-ywlc-queue-presentation="1"] :is(.playlist-drag-handle, a#thumbnail, ytd-thumbnail, yt-thumbnail-view-model, .ytThumbnailViewModelHost) {
+        align-self: center !important;
+      }
+      [data-ywlc-queue-presentation="1"] #meta { min-width: 0; }
+      #video-title[data-ywlc-queue-title="1"]:not([hidden]):not([aria-hidden="true"]) {
+        display: -webkit-box;
+        -webkit-box-orient: vertical !important; -webkit-line-clamp: 2 !important; line-clamp: 2 !important;
+        overflow: hidden !important;
+        text-overflow: ellipsis; white-space: normal; overflow-wrap: anywhere;
+      }
+      [data-ywlc-queue-title-tooltip] {
+        position: fixed; z-index: 2203; box-sizing: border-box; width: max-content;
+        max-width: min(320px, calc(100vw - 16px)); max-height: calc(100vh - 16px);
+        padding: 8px; border-radius: 4px; background: #212121; color: #fff;
+        box-shadow: 0 2px 8px rgba(0, 0, 0, .24);
+        font: 400 13px/1.4 Roboto, Arial, sans-serif; text-shadow: none;
+        white-space: normal; overflow-wrap: anywhere; overflow: hidden; pointer-events: none;
+      }
+    `;
+    let style = null;
+    if (sharedStyle) suite.setStyle('watchLayoutCleanerQueueSteps', stepCss);
+    else {
+      style = document.createElement('style'); style.id = 'ywlc-queue-step-style'; style.textContent = stepCss;
+      (document.head || document.documentElement).append(style);
+    }
+    const titlePresentation = installTitlePresentation();
+
+    function installTitlePresentation() {
+      const titleAttribute = 'data-ywlc-queue-title', rowAttribute = 'data-ywlc-queue-presentation';
+      const tooltipId = 'ywlc-queue-title-tooltip';
+      let active = null;
+      const setAttribute = (node, name, value) => value === null ? node.removeAttribute(name) : node.setAttribute(name, value);
+      function hideTooltip(current) {
+        current.tooltip?.remove();
+        current.tooltip = null;
+        if (current.description) {
+          const { node, before, owned } = current.description, value = node.getAttribute('aria-describedby');
+          if (value === owned) setAttribute(node, 'aria-describedby', before);
+          else if (value?.split(/\s+/).includes(tooltipId)) {
+            const remaining = value.split(/\s+/).filter(id => id && id !== tooltipId).join(' ');
+            setAttribute(node, 'aria-describedby', remaining || null);
+          }
+          current.description = null;
+        }
+      }
+      function dismiss() {
+        const current = active; active = null; if (!current) return;
+        clearTimeout(current.timer); current.observer?.disconnect();
+        for (const [node, type, callback] of current.listeners) node.removeEventListener(type, callback, true);
+        hideTooltip(current);
+        for (const { node, value } of current.nativeTitles) if (node.getAttribute('title') === '') setAttribute(node, 'title', value);
+      }
+      function cancel(target = null) {
+        const current = active; if (!current) return;
+        if (target && !current.title.contains(target)) { dismiss(); return; }
+        clearTimeout(current.timer); current.timer = 0; current.silenced = true;
+        // Closing our tooltip must not re-enable the browser's tooltip while
+        // the same title remains hovered or keyboard-focused.
+        hideTooltip(current);
+      }
+      function ownTitle(target) {
+        const title = target?.closest?.(`[${titleAttribute}="1"]`), row = title?.closest(rowSelector);
+        const panel = row?.closest(panelSelector), record = records.get(panel);
+        if (!record?.titles?.has(title) || record.titles.get(title).row !== row) return null;
+        return { title, row, panel, record, listId: record.owner.data?.playlistId,
+          key: controller(row)?.data?.playlistSetVideoId };
+      }
+      function rendered(current) {
+        if (disposed || navigating || document.hidden || pending || !current.title.isConnected ||
+            current.title.getAttribute(titleAttribute) !== '1' || current.row.getAttribute(rowAttribute) !== '1' ||
+            records.get(current.panel) !== current.record || controller(current.panel) !== current.record.owner ||
+            typeof current.listId !== 'string' || !current.listId.startsWith('TLPQ') ||
+            current.record.owner.data?.playlistId !== current.listId ||
+            controller(current.row)?.data?.playlistSetVideoId !== current.key || dragging(current.record.owner) ||
+            current.row.parentElement !== current.record.items || !current.record.titles.has(current.title)) return false;
+        for (let node = current.title; node; node = node.parentElement) {
+          if (node.hidden || node.getAttribute('aria-hidden') === 'true') return false;
+          const css = getComputedStyle(node);
+          if (css.display === 'none' || css.visibility === 'hidden' || css.visibility === 'collapse' || css.opacity === '0') return false;
+        }
+        const box = current.title.getBoundingClientRect();
+        return box.width > 0 && box.height > 0 && box.bottom > 0 && box.right > 0 && box.top < innerHeight && box.left < innerWidth;
+      }
+      function truncated(title) {
+        return title.scrollHeight > title.clientHeight + 1 || title.scrollWidth > title.clientWidth + 1;
+      }
+      function text(title) { return (title.innerText || title.textContent || '').replace(/\s+/g, ' ').trim(); }
+      function pointerInside(current) {
+        const box = current.title.getBoundingClientRect(), point = current.pointer;
+        return point && point.x >= box.left && point.x < box.right && point.y >= box.top && point.y < box.bottom;
+      }
+      function position(current) {
+        const anchor = current.title.getBoundingClientRect(), box = current.tooltip.getBoundingClientRect();
+        const left = Math.max(8, Math.min(anchor.left, innerWidth - box.width - 8));
+        const below = anchor.bottom + 8;
+        const top = below + box.height <= innerHeight - 8 ? below : Math.max(8, anchor.top - box.height - 8);
+        const nextLeft = `${Math.round(left)}px`, nextTop = `${Math.round(top)}px`;
+        if (current.tooltip.style.left !== nextLeft) current.tooltip.style.left = nextLeft;
+        if (current.tooltip.style.top !== nextTop) current.tooltip.style.top = nextTop;
+      }
+      function refresh() {
+        const current = active; if (!current) return;
+        if (!rendered(current) || (current.tooltip && current.tooltip.parentElement !== document.body) ||
+            current.nativeTitles.some(({ node }) => node.getAttribute('title') !== '') ||
+            [...current.title.querySelectorAll('[title]')].some(node => !current.nativeTitles.some(entry => entry.node === node)) ||
+            (!current.focus && (!current.title.matches(':hover') || !pointerInside(current))) ||
+            (current.focus && (document.activeElement !== current.focus || !current.focus.matches(':focus-visible')))) { dismiss(); return; }
+        if (!current.ready || current.silenced || !truncated(current.title)) { hideTooltip(current); return; }
+        const label = text(current.title); if (!label) { dismiss(); return; }
+        if (!current.tooltip) {
+          if (!document.body || document.getElementById(tooltipId)) { dismiss(); return; }
+          const tooltip = document.createElement('div'); tooltip.id = tooltipId;
+          tooltip.setAttribute('data-ywlc-queue-title-tooltip', ''); tooltip.setAttribute('role', 'tooltip');
+          tooltip.textContent = label; current.tooltip = tooltip; document.body.append(tooltip);
+          const node = current.focus || current.title, before = node.getAttribute('aria-describedby');
+          const owned = [before, tooltipId].filter(Boolean).join(' ');
+          current.description = { node, before, owned }; node.setAttribute('aria-describedby', owned);
+        }
+        if (current.tooltip.textContent !== label) current.tooltip.textContent = label;
+        position(current);
+      }
+      function show(current) {
+        if (active !== current) return;
+        current.timer = 0; current.ready = true; refresh();
+      }
+      function start(found, focus = null, pointer = null) {
+        if (active?.title === found.title && active.focus === focus) return;
+        dismiss();
+        const current = { ...found, focus, pointer, viewportWidth: innerWidth, viewportHeight: innerHeight,
+          timer: 0, ready: false, silenced: false, tooltip: null, observer: null, listeners: [], nativeTitles: [], description: null };
+        if (!rendered(current) || !text(current.title)) return;
+        active = current;
+        const nativeNodes = new Set([current.title, ...current.title.querySelectorAll('[title]')]);
+        if (focus) nativeNodes.add(focus);
+        for (let node = current.title.parentElement; node; node = node.parentElement) {
+          if (node.hasAttribute('title')) nativeNodes.add(node); if (node === current.row) break;
+        }
+        // Empty title blocks inherited browser tooltips too. Preserve absence,
+        // empty values and third-party updates rather than deleting attributes.
+        for (const node of nativeNodes) {
+          current.nativeTitles.push({ node, value: node.getAttribute('title') }); node.setAttribute('title', '');
+        }
+        const on = (node, type, callback) => { node.addEventListener(type, callback, true); current.listeners.push([node, type, callback]); };
+        const exit = event => {
+          if (current.focus) return;
+          if (!current.title.contains(event.target)) { dismiss(); return; }
+          const box = current.title.getBoundingClientRect();
+          if (event.clientX < box.left || event.clientX >= box.right || event.clientY < box.top || event.clientY >= box.bottom) dismiss();
+          else if (event.isTrusted) current.pointer = { x: event.clientX, y: event.clientY };
+        };
+        on(document, 'pointermove', exit);
+        on(current.title, 'pointerleave', () => { if (!current.focus) dismiss(); });
+        on(document, 'mouseleave', event => { if (event.target === document || event.target === document.documentElement) dismiss(); });
+        on(document, 'focusout', event => { if (event.target === current.focus) dismiss(); });
+        on(document, 'scroll', dismiss); on(document, 'pointercancel', dismiss);
+        on(document, 'visibilitychange', () => { if (document.hidden) dismiss(); });
+        on(window, 'blur', dismiss);
+        on(window, 'resize', event => {
+          if (event.isTrusted || innerWidth !== current.viewportWidth || innerHeight !== current.viewportHeight) dismiss();
+          else refresh(); // Native Suite layout hints are not viewport changes.
+        });
+        current.observer = new MutationObserver(refresh);
+        current.observer.observe(current.title, { childList: true, subtree: true, characterData: true, attributes: true,
+          attributeFilter: ['title', 'class', 'style', 'hidden', 'aria-hidden'] });
+        for (let node = current.title.parentElement; node; node = node.parentElement) current.observer.observe(node, {
+          attributes: true, attributeFilter: ['title', 'class', 'style', 'hidden', 'aria-hidden'] });
+        if (focus) show(current); else current.timer = setTimeout(() => show(current), 500);
+      }
+      function clear(record) {
+        if (active?.record === record) dismiss();
+        for (const [title, entry] of record.titles || []) if (title.getAttribute(titleAttribute) === '1') setAttribute(title, titleAttribute, entry.before);
+        for (const [row, before] of record.titleRows || []) if (row.getAttribute(rowAttribute) === '1') setAttribute(row, rowAttribute, before);
+        record.titles?.clear(); record.titleRows?.clear();
+      }
+      function removeClonedDescription(node) {
+        if (active?.description?.node === node) return;
+        const value = node.getAttribute('aria-describedby');
+        if (!value?.split(/\s+/).includes(tooltipId)) return;
+        const remaining = value.split(/\s+/).filter(id => id && id !== tooltipId).join(' ');
+        setAttribute(node, 'aria-describedby', remaining || null);
+      }
+      function cleanClonedPresentation(row, record) {
+        const current = active;
+        if (current?.record === record && current.row !== row && !current.row.isConnected &&
+            controller(row)?.data?.playlistSetVideoId === current.key) {
+          const counterpart = original => {
+            const path = []; let node = original;
+            while (node && node !== current.row) {
+              const parent = node.parentNode; if (!parent) return null;
+              path.push([...parent.childNodes].indexOf(node)); node = parent;
+            }
+            if (node !== current.row) return null;
+            let candidate = row;
+            for (const index of path.reverse()) candidate = candidate?.childNodes[index];
+            return candidate?.isEqualNode(original) ? candidate : null;
+          };
+          // Read all counterparts before restoring any attributes. Recover a
+          // suppressed value only from a proven clone of the same native row.
+          const titles = current.nativeTitles.map(entry => ({ ...entry, clone: counterpart(entry.node) }));
+          const description = current.description && { ...current.description, clone: counterpart(current.description.node) };
+          for (const { clone, value } of titles) if (clone?.getAttribute('title') === '') setAttribute(clone, 'title', value);
+          if (description?.clone?.getAttribute('aria-describedby') === description.owned) {
+            setAttribute(description.clone, 'aria-describedby', description.before);
+          }
+        }
+        // Unknown restamps still must not reference a tooltip owned by an old
+        // element. Leave their other attributes untouched rather than guessing.
+        for (const node of [row, ...row.querySelectorAll('[aria-describedby]')]) removeClonedDescription(node);
+      }
+      function sync(state, record) {
+        record.titles ||= new Map(); record.titleRows ||= new Map();
+        const rows = new Set(state.rows), titles = new Set();
+        for (const row of state.rows) {
+          if (!record.titleRows.has(row)) {
+            cleanClonedPresentation(row, record);
+            const before = row.getAttribute(rowAttribute);
+            record.titleRows.set(row, before === '1' ? null : before); row.setAttribute(rowAttribute, '1');
+          }
+          for (const title of row.querySelectorAll('#video-title')) {
+            if (title.closest(rowSelector) !== row) continue;
+            titles.add(title);
+            if (!record.titles.has(title)) {
+              if (active?.record === record && active.row === row && !active.title.isConnected && title.isEqualNode(active.title)) {
+                const original = active.nativeTitles.find(entry => entry.node === active.title);
+                if (original && title.getAttribute('title') === '') setAttribute(title, 'title', original.value);
+              }
+              for (const node of title.querySelectorAll('[aria-describedby]')) removeClonedDescription(node);
+              for (let node = title; node; node = node.parentElement) { removeClonedDescription(node); if (node === row) break; }
+              const before = title.getAttribute(titleAttribute);
+              record.titles.set(title, { row, before: before === '1' ? null : before }); title.setAttribute(titleAttribute, '1');
+            }
+          }
+        }
+        for (const [title, entry] of record.titles) if (!titles.has(title)) {
+          if (title.getAttribute(titleAttribute) === '1') setAttribute(title, titleAttribute, entry.before); record.titles.delete(title);
+        }
+        for (const [row, before] of record.titleRows) if (!rows.has(row)) {
+          if (row.getAttribute(rowAttribute) === '1') setAttribute(row, rowAttribute, before); record.titleRows.delete(row);
+        }
+        refresh();
+      }
+      return { sync, clear, dismiss, cancel,
+        hover(event) {
+          if (!event.isTrusted) return;
+          const found = ownTitle(event.target); if (found) start(found, null, { x: event.clientX, y: event.clientY });
+        },
+        focus(event) {
+          if (!event.target?.matches?.(':focus-visible') || event.target.closest('button, .playlist-drag-handle')) return;
+          const found = ownTitle(event.target) || [...(records.get(event.target.closest(panelSelector))?.titles?.keys() || [])]
+            .filter(title => event.target.contains(title)).map(ownTitle).find(item => item && rendered(item));
+          if (found) start(found, event.target);
+        },
+      };
+    }
+
+    function listen(target, type, callback) {
+      target.addEventListener(type, callback, true); listeners.push([target, type, callback]);
+    }
+    function visible(node) {
+      return Boolean(node?.isConnected && !node.closest('[hidden], [aria-hidden="true"]') && node.getClientRects().length);
+    }
+    function activePlayer() {
+      const players = [...document.querySelectorAll('#movie_player')].filter(visible);
+      if (players.length !== 1 || players[0].classList.contains('ad-showing') || players[0].classList.contains('ad-interrupting')) return null;
+      return players[0];
+    }
+    function dragging(owner) {
+      const reorder = owner?.ytReorderableController;
+      return Boolean(reorder && Object.getOwnPropertyNames(reorder).some(name =>
+        name.endsWith('dragListGroup') && reorder[name]?.isDragging?.()));
+    }
+    function nativeGroups(owner) {
+      const reorder = owner?.ytReorderableController;
+      return (reorder ? Object.getOwnPropertyNames(reorder) : []).filter(name => name.endsWith('dragListGroup'))
+        .map(name => reorder[name]).filter(group => group?.addEventListener && group?.removeEventListener);
+    }
+    function snapshot(panel) {
+      try {
+        if (!visible(panel)) return null;
+        const owner = controller(panel), data = owner?.data, player = activePlayer();
+        if (!player || typeof data?.playlistId !== 'string' || !data.playlistId.startsWith('TLPQ') ||
+            typeof owner.handleDrop !== 'function' || owner.canReorder === false ||
+            !(owner.canReorder === true || panel.hasAttribute('can-reorder')) || dragging(owner) ||
+            !Array.isArray(data.contents) || !data.contents.length || data.contents.length > 1000 ||
+            (Number.isInteger(data.totalVideos) && data.totalVideos !== data.contents.length)) return null;
+        const videos = data.contents.map(item => item.playlistPanelVideoRenderer);
+        if (videos.some(video => !validId(video?.videoId) || typeof video.playlistSetVideoId !== 'string' || !video.playlistSetVideoId) ||
+            new Set(videos.map(video => video.playlistSetVideoId)).size !== videos.length) return null;
+        const anchor = player.getVideoData?.()?.video_id, listId = player.getPlaylistId?.();
+        if (!validId(anchor) || videos.filter(video => video.videoId === anchor).length !== 1) return null;
+        const ids = videos.map(video => video.videoId), playlist = player.getPlaylist?.();
+        if (playlist != null && !Array.isArray(playlist)) return null;
+        const mini = player.closest('ytd-miniplayer');
+        if (listId !== data.playlistId && !((listId == null || listId === '') && mini && panel.closest('ytd-miniplayer') === mini &&
+            Array.isArray(playlist) && same(playlist, ids))) return null;
+        if (Array.isArray(playlist) && !same(playlist, ids)) return null;
+        let currentIndex = data.currentIndex;
+        if (!('currentIndex' in data)) {
+          const selected = videos.filter(video => video.selected === true);
+          if (selected.length !== 1 || selected[0].videoId !== anchor) return null;
+          currentIndex = videos.indexOf(selected[0]);
+        }
+        if (!Number.isInteger(currentIndex) || videos[currentIndex]?.videoId !== anchor) return null;
+        const items = panel.querySelector('#items'), rows = items ? [...items.children] : [];
+        if (rows.length !== videos.length || rows.some((row, index) => !row.matches(rowSelector) ||
+            items.childNodes[index] !== row || controller(row)?.data?.videoId !== videos[index].videoId ||
+            controller(row)?.data?.playlistSetVideoId !== videos[index].playlistSetVideoId)) return null;
+        return { panel, owner, player, anchor, listId: data.playlistId, videos, items, rows,
+          playerListId: listId, playerPlaylist: Array.isArray(playlist) ? [...playlist] : playlist,
+          keys: videos.map(video => video.playlistSetVideoId) };
+      } catch { return null; }
+    }
+    function notify(message) {
+      clearTimeout(toastTimer); toast?.remove();
+      toast = document.createElement('div'); toast.setAttribute('role', 'status');
+      toast.setAttribute('data-ywlc-queue-step-status', ''); toast.textContent = message;
+      Object.assign(toast.style, { position: 'fixed', bottom: '24px', left: '24px', zIndex: '2202',
+        padding: '12px 16px', borderRadius: '8px', background: 'var(--yt-spec-raised-background, #212121)',
+        color: 'var(--yt-spec-text-primary, #fff)', font: '14px Roboto, Arial, sans-serif',
+        maxWidth: 'calc(100vw - 48px)', pointerEvents: 'none' });
+      document.body?.append(toast);
+      toastTimer = setTimeout(() => { toast?.remove(); toast = null; toastTimer = 0; }, 3000);
+    }
+    function disableAll() {
+      for (const record of records.values()) for (const entry of record.controls.values()) {
+        if (!entry.up.disabled) entry.up.disabled = true;
+        if (!entry.down.disabled) entry.down.disabled = true;
+      }
+    }
+    function currentControls(row, entry) {
+      if (!entry || row.querySelector('.playlist-drag-handle') !== entry.handle ||
+          !entry.handle.hasAttribute('data-ywlc-queue-step-controls') ||
+          entry.handle.querySelectorAll(controlSelector).length !== 2) return false;
+      return [['up', entry.up], ['down', entry.down]].every(([direction, button]) =>
+        button.parentElement === entry.handle && button.getAttribute('data-ywlc-queue-step') === direction &&
+        button.querySelector('svg path')?.getAttribute('d') === arrowPaths[direction]);
+    }
+    function removeControls(entry) {
+      entry.up.remove(); entry.down.remove(); entry.handle.removeAttribute('data-ywlc-queue-step-controls');
+    }
+    function clearRecord(panel) {
+      const record = records.get(panel); if (!record) return;
+      record.observer.disconnect();
+      titlePresentation.clear(record);
+      for (const [group, type, callback] of record.groups) { try { group.removeEventListener(type, callback); } catch { /* Native disposal may already have run. */ } }
+      for (const entry of record.controls.values()) removeControls(entry);
+      records.delete(panel);
+    }
+    function finish(message) {
+      if (pending) clearTimeout(pending.timer);
+      pending = null;
+      if (message) notify(message);
+      schedule();
+    }
+    function rollbackOwned(operation) {
+      try {
+        const { panel, owner, player, anchor, listId, playerListId, playerPlaylist, items, rows, row, expected, keys, from } = operation;
+        if (!panel.isConnected || controller(panel) !== owner || activePlayer() !== player ||
+            player.getVideoData?.()?.video_id !== anchor || owner.data?.playlistId !== listId || dragging(owner) ||
+            panel.querySelector('#items') !== items || !same(owner.data.contents.map(item => item.playlistPanelVideoRenderer?.playlistSetVideoId), keys)) return false;
+        // Native dispatch can change the player before its renderer catches up.
+        // Restore only while both original player bindings remain provable.
+        const playlist = player.getPlaylist?.();
+        if (player.getPlaylistId?.() !== playerListId || (Array.isArray(playerPlaylist)
+          ? !Array.isArray(playlist) || !same(playlist, playerPlaylist)
+          : playerPlaylist != null || playlist !== playerPlaylist)) return false;
+        const current = [...items.children];
+        if (current.length !== rows.length || !same(current.map(item => controller(item)?.data?.playlistSetVideoId), expected) ||
+            current.some(item => !rows.includes(item))) return false;
+        items.insertBefore(row, rows[from + 1] || null);
+        return true;
+      } catch { return false; }
+    }
+    function confirmPending() {
+      if (!pending) return;
+      const operation = pending;
+      try {
+        const player = activePlayer();
+        if (!operation.panel.isConnected || player !== operation.player || player.getVideoData?.()?.video_id !== operation.anchor) {
+          finish('Playback or queue changed; no further queue move was made.'); return;
+        }
+        const current = snapshot(operation.panel);
+        if (current && current.owner === operation.owner && current.listId === operation.listId && same(current.keys, operation.expected)) {
+          if (document.activeElement === document.body || operation.panel.contains(document.activeElement)) {
+            focusRequest = { panel: current.panel, key: operation.keys[operation.from], direction: operation.direction };
+          }
+          finish();
+        }
+      } catch { /* Wait only until the bounded timeout for native confirmation. */ }
+    }
+    function ensureRecord(state) {
+      let record = records.get(state.panel);
+      const groups = nativeGroups(state.owner);
+      if (record && (record.items !== state.items || record.owner !== state.owner || !same(record.groupRefs, groups))) {
+        clearRecord(state.panel); record = null;
+      }
+      if (record) return record;
+      record = { items: state.items, owner: state.owner, controls: new Map(), groups: [], groupRefs: groups, nativeDragging: false, observer: null };
+      record.observer = new MutationObserver(mutations => {
+        // Native Like/Dislike SVG animations are unrelated to our two glyphs.
+        if (!record.nativeDragging && mutations.some(mutation => mutation.attributeName !== 'd' ||
+            mutation.target.closest?.(controlSelector))) schedule();
+      });
+      record.observer.observe(state.panel, { childList: true, subtree: true, attributes: true,
+        attributeFilter: ['selected', 'can-reorder', 'hidden', 'aria-hidden',
+          'data-ywlc-queue-step-controls', 'data-ywlc-queue-step', 'd'] });
+      if (state.panel.parentElement) record.observer.observe(state.panel.parentElement, { childList: true });
+      for (const group of groups) {
+        const start = () => { titlePresentation.dismiss(); record.nativeDragging = true; disableAll(); };
+        const end = () => { record.nativeDragging = false; schedule(); };
+        for (const [type, callback] of [['dragstart', start], ['dragend', end], ['e', end]]) {
+          group.addEventListener(type, callback); record.groups.push([group, type, callback]);
+        }
+      }
+      records.set(state.panel, record); return record;
+    }
+    function createButton(direction) {
+      const button = document.createElement('button'); button.type = 'button';
+      button.setAttribute('data-ywlc-queue-step', direction);
+      button.setAttribute('aria-label', direction === 'up' ? 'Move up in queue' : 'Move down in queue');
+      button.title = direction === 'up' ? 'Move up in queue' : 'Move down in queue';
+      const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+      svg.setAttribute('viewBox', '0 0 16 16'); svg.setAttribute('aria-hidden', 'true'); svg.setAttribute('focusable', 'false');
+      const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+      path.setAttribute('d', arrowPaths[direction]);
+      svg.append(path); button.append(svg); return button;
+    }
+    function reconcile() {
+      frame = 0; if (disposed || navigating) return;
+      confirmPending();
+      if (pending) { disableAll(); return; }
+      // Keep the native handle and listeners stable throughout native dragging.
+      if ([...records.keys()].some(panel => {
+        try { return panel.isConnected && dragging(controller(panel)); } catch { return false; }
+      })) { disableAll(); return; }
+      const states = [...document.querySelectorAll(panelSelector)].map(snapshot).filter(Boolean);
+      // Two native panels for the active queue are ambiguous during transitions.
+      const state = states.length === 1 ? states[0] : null;
+      for (const panel of records.keys()) if (!state || panel !== state.panel) clearRecord(panel);
+      if (!state) return;
+      const record = ensureRecord(state);
+      titlePresentation.sync(state, record);
+      const rowSet = new Set(state.rows);
+      for (const [row, entry] of record.controls) if (!rowSet.has(row) || !currentControls(row, entry)) {
+        removeControls(entry); record.controls.delete(row);
+      }
+      state.rows.forEach((row, index) => {
+        let entry = record.controls.get(row);
+        if (!entry) {
+          const handle = row.querySelector('.playlist-drag-handle');
+          if (!handle || handle.closest('button')) return;
+          // Native restamping may clone our previous light-DOM controls. They
+          // carry no live ownership; replace only those marked copies.
+          for (const child of handle.querySelectorAll(controlSelector)) child.remove();
+          handle.removeAttribute('data-ywlc-queue-step-controls');
+          entry = { handle, up: createButton('up'), down: createButton('down') };
+          handle.setAttribute('data-ywlc-queue-step-controls', ''); handle.prepend(entry.up); handle.append(entry.down);
+          record.controls.set(row, entry);
+        }
+        const atStart = index === 0, atEnd = index === state.rows.length - 1;
+        if (entry.up.disabled !== atStart) entry.up.disabled = atStart;
+        if (entry.down.disabled !== atEnd) entry.down.disabled = atEnd;
+      });
+      if (focusRequest?.panel === state.panel) {
+        const request = focusRequest; focusRequest = null;
+        const entry = record.controls.get(state.rows[state.keys.indexOf(request.key)]);
+        const preferred = request.direction === 'up' ? entry?.up : entry?.down;
+        const fallback = request.direction === 'up' ? entry?.down : entry?.up;
+        const target = preferred && !preferred.disabled ? preferred : fallback;
+        if (target && !target.disabled) queueMicrotask(() => {
+          if (target.isConnected && !target.disabled && (document.activeElement === document.body || state.panel.contains(document.activeElement))) target.focus({ preventScroll: true });
+        });
+      }
+    }
+    function schedule() {
+      if (!disposed && !navigating && !frame) frame = requestAnimationFrame(reconcile);
+    }
+    function activate(event) {
+      const button = event.target?.closest?.(controlSelector); if (!button) return;
+      event.preventDefault(); event.stopImmediatePropagation();
+      if (!event.isTrusted || button.disabled || pending || navigating || disposed) return;
+      const panel = button.closest(panelSelector), row = button.closest(rowSelector);
+      const entry = records.get(panel)?.controls.get(row), state = panel && snapshot(panel);
+      if (!entry || !state || !currentControls(row, entry) || (button !== entry.up && button !== entry.down)) { schedule(); return; }
+      const from = state.rows.indexOf(row), direction = button === entry.up ? 'up' : 'down';
+      const to = from + (direction === 'up' ? -1 : 1);
+      if (from < 0 || to < 0 || to >= state.rows.length) { schedule(); return; }
+      const expected = [...state.keys]; expected.splice(to, 0, expected.splice(from, 1)[0]);
+      const operation = pending = { ...state, row, from, direction, expected, timer: 0 };
+      disableAll();
+      operation.timer = setTimeout(() => {
+        if (pending !== operation) return;
+        confirmPending();
+        if (pending === operation) {
+          const restored = rollbackOwned(operation);
+          finish(restored ? 'The queue did not confirm the move. Please try again.' : 'The queue changed. Check its order before trying again.');
+        }
+      }, 3000);
+      try {
+        state.items.insertBefore(row, direction === 'up' ? state.rows[to] : state.rows[to].nextSibling);
+        state.owner.handleDrop({ currDragItem: row }); confirmPending();
+      }
+      catch {
+        const restored = rollbackOwned(operation);
+        finish(restored ? 'Could not move this queue item. Please try again.' : 'The queue changed. Check its order before trying again.');
+      }
+      schedule();
+    }
+    function guardPointer(event) {
+      titlePresentation.cancel(event.target);
+      const button = event.target?.closest?.(controlSelector);
+      if (button) { event.stopImmediatePropagation(); return; }
+      if (pending && event.target?.closest?.('.playlist-drag-handle')?.closest(panelSelector) === pending.panel) {
+        event.preventDefault(); event.stopImmediatePropagation();
+      }
+    }
+    function suspend() {
+      navigating = true;
+      titlePresentation.dismiss();
+      if (frame) cancelAnimationFrame(frame); frame = 0;
+      if (pending) { rollbackOwned(pending); clearTimeout(pending.timer); }
+      pending = null;
+      focusRequest = null;
+      for (const panel of records.keys()) clearRecord(panel);
+      clearTimeout(toastTimer); toast?.remove(); toast = null; toastTimer = 0;
+    }
+    listen(document, 'pointerdown', guardPointer); listen(document, 'mousedown', guardPointer);
+    listen(document, 'click', activate);
+    listen(document, 'keydown', event => {
+      if (event.key === 'Escape') titlePresentation.cancel();
+      if (event.target?.closest?.(controlSelector) && (event.key === 'Enter' || event.key === ' ')) event.stopImmediatePropagation();
+    });
+    for (const type of ['pointerover', 'focusin']) listen(document, type, event => {
+      const panel = event.target?.closest?.(panelSelector);
+      // Most tracked panels reconcile through scoped mutations. Also repair
+      // only the hovered/focused row if native stamping invalidated its owned
+      // controls without an observed event; ordinary hover does no queue scan.
+      const record = panel && records.get(panel), row = event.target?.closest?.(rowSelector);
+      if (panel && (!record || (row && !currentControls(row, record.controls.get(row))))) schedule();
+      if (panel && records.has(panel)) {
+        if (event.type === 'pointerover') titlePresentation.hover(event);
+        else titlePresentation.focus(event);
+      }
+    });
+    for (const type of ['yt-playlist-data-updated', 'yt-page-data-updated']) listen(window, type, schedule);
+    listen(window, 'yt-rendererstamper-finished', event => { if (event.target?.closest?.(panelSelector)) schedule(); });
+    listen(window, 'yt-navigate-start', suspend); listen(window, 'pagehide', suspend);
+    for (const type of ['yt-navigate-finish', 'pageshow']) listen(window, type, () => { navigating = false; schedule(); });
+    schedule();
+    return () => {
+      suspend(); disposed = true;
+      for (const [target, type, callback] of listeners) target.removeEventListener(type, callback, true);
+      if (sharedStyle) suite.removeStyle('watchLayoutCleanerQueueSteps');
+      else style?.remove();
+    };
+  }
+
   function installQueueDragAssistance() {
     const panelSelector =
       "ytd-playlist-panel-renderer, yt-playlist-panel-renderer";
@@ -1819,6 +2488,7 @@ ${buildQueueCompatibilityCss()}
 
   const scheduleQueuePlayingMarkerReconciliation = installQueuePlayingMarkerReconciliation();
   installQueuePlayNext();
+  installQueueStepControls();
   installQueueDragAssistance();
   ensureStyle();
   scheduleQueueThumbnailFallbacks();

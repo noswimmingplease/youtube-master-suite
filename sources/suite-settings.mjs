@@ -6,9 +6,10 @@ export function createSuiteSettings(getStorage, isDarkTheme) {
   const defaults = Object.freeze({
     colourMode: "default", palette: "teal-coral", viewerColour: "#82A3E6", ownerColour: "#FF9F1C",
     compactComments: true, hideCommentControls: true,
-    hideShorts: true, hideWatchedVideos: true, hideMixes: true, hidePodcasts: true, hideMembersOnly: true,
-    watchedThreshold: "90", yellowCaptions: true, mirrorButton: true, theatreMode: true,
-    preferredVideoQuality: "off", hideFullscreenQuickActions: false,
+    hideShorts: true, hideWatchedVideos: true, hideLiveVideos: false, hideUpcomingStreams: true,
+    hideMixes: true, hidePodcasts: true, hideMembersOnly: true,
+    watchedThreshold: "90", yellowCaptions: true, mirrorButton: true, liveChatButton: true, theatreMode: true,
+    preferredVideoQuality: "off", timelinePreviewSize: "auto", hideFullscreenQuickActions: false,
     wheelVolume: true, wheelStep: "5", hideRelated: true, hideChat: true, hideInfoCards: true,
     hideEndScreens: true, fullscreenComments: true, disableTitleHashtagLinks: false, miniplayerEnabled: true,
     corner: "top-right", queueInfo: true,
@@ -19,13 +20,14 @@ export function createSuiteSettings(getStorage, isDarkTheme) {
     menuShowDownload: false, menuGroupChannelTools: true, menuShowAgeLimit: true,
     menuShowNotInterested: true, menuShowDontRecommend: true, menuShowReport: true,
     menuItemOrder: Object.freeze(["playNext", "addToQueue", "watchLater", "savePlaylist", "download", "share",
-      "notInterested", "dontRecommend", "report", "channelAge", "channelTools"]),
+      "notInterested", "channelAge", "dontRecommend", "report", "channelTools"]),
   });
   const choices = Object.freeze({
     colourMode: ["default", "preset", "custom", "off"],
     palette: ["teal-coral", "lavender-gold", "cyan-rose"],
     watchedThreshold: ["80", "90", "95", "100"], wheelStep: ["1", "2", "5", "10"],
     preferredVideoQuality: ["off", "highest", "tiny", "small", "medium", "large", "hd720", "hd1080", "hd1440", "hd2160"],
+    timelinePreviewSize: ["auto", "small", "medium", "large", "native"],
     corner: ["top-right", "bottom-right", "bottom-left", "top-left"],
     headerSettingsIcon: ["off", "colour", "monochrome"], playerSettingsIcon: ["off", "colour", "monochrome"],
   });
@@ -37,6 +39,12 @@ export function createSuiteSettings(getStorage, isDarkTheme) {
       "teal-coral": ["#00695C", "#A83222"], "lavender-gold": ["#65409B", "#806000"], "cyan-rose": ["#006A8E", "#A82659"],
     },
   });
+  const previousDefaultMenuOrder = ["playNext", "addToQueue", "watchLater", "savePlaylist", "download", "share",
+    "notInterested", "dontRecommend", "report", "channelAge", "channelTools"];
+  function isPreviousDefaultMenuOrder(value) {
+    return Array.isArray(value) && value.length === previousDefaultMenuOrder.length &&
+      value.every((item, index) => item === previousDefaultMenuOrder[index]);
+  }
   function normaliseHex(value) {
     return typeof value === "string" && /^#?[0-9a-f]{6}$/i.test(value.trim())
       ? "#" + value.trim().replace(/^#/, "").toUpperCase() : null;
@@ -51,6 +59,8 @@ export function createSuiteSettings(getStorage, isDarkTheme) {
         if (typeof value === "boolean") result[name] = value;
       } else if (name === "menuItemOrder") {
         if (Array.isArray(value) && value.length <= defaults.menuItemOrder.length) {
+          // Adopt the revised default without overwriting explicitly rearranged menus.
+          if (isPreviousDefaultMenuOrder(value)) continue;
           const order = [...new Set(value.filter(item => typeof item === "string" && defaults.menuItemOrder.includes(item)))];
           result[name] = [...order, ...defaults.menuItemOrder.filter(item => !order.includes(item))];
         }
@@ -85,17 +95,21 @@ export function createSuiteSettings(getStorage, isDarkTheme) {
       return { ok: false, error: "Keep at least one settings button enabled." };
     }
     const values = validate(input);
+    const desired = JSON.stringify({ version: 1, values });
     let storage, previous;
     try {
       storage = getStorage(); previous = storage.getItem(key);
-      storage.setItem(key, JSON.stringify({ version: 1, values }));
+      storage.setItem(key, desired);
       if (storage.getItem(cornerKey) !== values.corner) storage.setItem(cornerKey, values.corner);
       return { ok: true, values };
     } catch {
-      // Do not leave half-saved panel preferences if writing the legacy corner fails.
+      // Roll back only our own partial write. A newer save or clear from another
+      // window must survive a failure while synchronising the legacy corner.
       try {
-        if (previous === null) storage?.removeItem(key);
-        else if (previous !== undefined) storage?.setItem(key, previous);
+        if (previous !== undefined && storage?.getItem(key) === desired) {
+          if (previous === null) storage.removeItem(key);
+          else storage.setItem(key, previous);
+        }
       } catch { /* Storage may remain unavailable; report the failure below. */ }
       return { ok: false, error: "Settings could not be saved. Browser storage is unavailable or full." };
     }
@@ -125,10 +139,13 @@ export function createSuiteSettings(getStorage, isDarkTheme) {
     };
     if (id === "playerPreferencesLite") return {
       hideShorts: values.hideShorts, hideWatchedVideos: values.hideWatchedVideos,
+      hideLiveVideos: values.hideLiveVideos, hideUpcomingStreams: values.hideUpcomingStreams,
       watchedVideoThresholdPercent: Number(values.watchedThreshold),
       useReadableYellowCaptions: values.yellowCaptions, enableVideoMirrorButton: values.mirrorButton,
+      enableLiveChatButton: values.liveChatButton,
       enableTheaterMode: values.theatreMode, enablePlayerWheelVolume: values.wheelVolume,
       preferredVideoQuality: values.preferredVideoQuality, hideFullscreenQuickActions: values.hideFullscreenQuickActions,
+      timelinePreviewSize: values.timelinePreviewSize,
       wheelVolumeStep: Number(values.wheelStep), hideRelatedVideos: values.hideRelated,
       hideChat: values.hideChat, hideInfoCards: values.hideInfoCards,
       hideEndScreenRecommendationGrid: values.hideEndScreens, enableFullscreenComments: values.fullscreenComments,
@@ -146,5 +163,5 @@ export function createSuiteSettings(getStorage, isDarkTheme) {
     };
     return {};
   }
-  return Object.freeze({ key, cornerKey, defaults, initial, read, save, validate, colours, normaliseHex, overrides });
+  return Object.freeze({ key, cornerKey, defaults, initial, read, save, validate, colours, normaliseHex, overrides, isPreviousDefaultMenuOrder });
 }

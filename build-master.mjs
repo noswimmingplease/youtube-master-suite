@@ -12,7 +12,7 @@ import { createSettingsSupportPanel } from "./sources/settings-support-panel.mjs
 import { installVideoMenu } from "./sources/video-menu.mjs";
 import { rejectYouTubeOptionalCookies } from "./sources/youtube-cookie-consent.mjs";
 
-const MASTER_VERSION = "1.2.19";
+const MASTER_VERSION = "1.2.42";
 const suiteDirectory = dirname(fileURLToPath(import.meta.url));
 const outputPath = join(suiteDirectory, "youtube-master-suite.user.js");
 const releaseManifestPath = join(suiteDirectory, "release-manifest.json");
@@ -653,6 +653,13 @@ const queueDragMarkerStyles = `    function setMarkerStyle(css) {
       style?.remove();
     }`;
 
+const queueStepStandaloneStyles = `    let style = null;
+    if (sharedStyle) suite.setStyle('watchLayoutCleanerQueueSteps', stepCss);
+    else {
+      style = document.createElement('style'); style.id = 'ywlc-queue-step-style'; style.textContent = stepCss;
+      (document.head || document.documentElement).append(style);
+    }`;
+
 const watchLayoutSidebarCss = [
   '@media (min-width: ${px(CONFIG.queueLayoutBreakpointPx + 1)}) {',
   '  ${TWO_COLUMN_WATCH_FLEXY_SELECTOR}{',
@@ -769,6 +776,24 @@ function transformModuleBody(moduleDefinition, body) {
       if (style) suite.removeStyle("watchLayoutCleanerDrag");
     }`,
       "Queue drag marker shared stylesheet",
+    );
+    transformed = replaceExactly(
+      transformed,
+      queueStepStandaloneStyles,
+      `    suite.setStyle('watchLayoutCleanerQueueSteps', stepCss);`,
+      "Queue step controls shared stylesheet",
+    );
+    transformed = replaceExactly(
+      transformed,
+      `    const sharedStyle = typeof suite !== 'undefined' && typeof suite.setStyle === 'function' && typeof suite.removeStyle === 'function';\n`,
+      "",
+      "Queue step controls shared stylesheet capability",
+    );
+    transformed = replaceExactly(
+      transformed,
+      `      if (sharedStyle) suite.removeStyle('watchLayoutCleanerQueueSteps');\n      else style?.remove();`,
+      `      suite.removeStyle('watchLayoutCleanerQueueSteps');`,
+      "Queue step controls shared stylesheet disposal",
     );
     transformed = replaceExactly(
       transformed,
@@ -1609,7 +1634,7 @@ ${moduleSwitches}
     "yt-page-data-updated",
   ]);
   const STYLE_ORDER = [
-${sourceModules.map(({ id }) => `    ${JSON.stringify(id)},`).join("\n")}
+${sourceModules.flatMap(({ id }) => id === "watchLayoutCleaner" ? [id, "watchLayoutCleanerDrag", "watchLayoutCleanerQueueSteps"] : [id]).map(id => `    ${JSON.stringify(id)},`).join("\n")}
   ];
   const sharedWindowListeners = new Map();
   const sharedMutationObservers = new Set();

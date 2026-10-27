@@ -138,6 +138,22 @@ test("a failed storage write leaves the active snapshot and previous stored reco
   assert.equal(unavailable.save([rule()]).ok, false);
 });
 
+test('failed channel writes preserve concurrent rule saves and clears', () => {
+  for (const existing of [null, JSON.stringify({version:1,rules:[rule()]})]) {
+    for (const concurrent of [null, JSON.stringify({version:1,rules:[rule({maxAge:3})]})]) {
+      const {service,storage,data}=fixture(existing);
+      const active=service.getRules();
+      storage.setItem=()=>{
+        if(concurrent===null)data.delete(KEY);else data.set(KEY,concurrent);
+        throw Error('quota');
+      };
+      assert.equal(service.save([rule({maxAge:2})]).ok,false);
+      assert.equal(data.get(KEY)??null,concurrent,'Failed save must not overwrite a newer save or clear');
+      assert.deepEqual(service.getRules(),active,'A failed save does not apply its draft');
+    }
+  }
+});
+
 test("channel identity comes from stable byline IDs, not display names, title text or handles", () => {
   const { service } = fixture();
   assert.deepEqual(service.channelFromCard(card()), { channelId: ID, name: "News" });
@@ -277,6 +293,25 @@ test("daily and weekly limits hide only videos definitely older than the configu
   assert.equal(weekly.isCardTooOld(card({ date: "8 days ago" })), true);
 });
 
+test('compact upload ages are recognised without guessing ambiguous single-letter units', () => {
+  const weekly = ageService();
+  for (const date of ['2 yr ago', '2 yrs ago', '2 yr. ago', '2 yrs. ago', '2 mo ago', '2 mos ago',
+    '2 wk ago', '2 wks ago', 'Streamed 2 yr ago', 'Premiered 2 yr ago']) {
+    assert.equal(weekly.isCardTooOld(card({ date })), true, date);
+    assert.equal(weekly.isCardTooOld(componentCard(ID, date)), true, `Modern metadata: ${date}`);
+  }
+  for (const date of ['1 wk ago', '7 days ago', '1 hr ago', '2 hrs ago', '30 min ago', '30 mins ago',
+    '40 sec ago', '40 secs ago', '2 m ago', '2 y ago', '2 w ago', '2 yr', '2 yr ago tomorrow']) {
+    assert.equal(weekly.isCardTooOld(card({ date })), false, date);
+  }
+  assert.equal(weekly.isCardTooOld(card({ channel:OTHER_ID, date:'2 yr ago' })), false, 'Unmatched channels stay visible');
+  assert.equal(weekly.isCardTooOld(componentCard(OTHER_ID, '2 yr ago')), false, 'Modern unmatched channels stay visible');
+  const ambiguous = componentCard(ID, '2 yr ago');
+  ambiguous.querySelectorAll = selector => selector.includes('#channel-name') ?
+    [{ getAttribute:()=>`/channel/${OTHER_ID}`, textContent:'Another channel' }] : [];
+  assert.equal(weekly.isCardTooOld(ambiguous), false, 'Conflicting channel IDs stay visible');
+});
+
 test("calendar months and years handle short months and leap years conservatively", () => {
   const monthly = ageService({ unit: "months" }, Date.UTC(2026, 2, 31, 12));
   assert.equal(monthly.isCardTooOld(card({ date: "2026-02-28" })), false);
@@ -375,4 +410,20 @@ test("invalid block flags reject explicit saves without storage or cache mutatio
   assert.equal(service.validateRules([rule({ blocked: undefined })])[0].blocked, false);
   assert.equal(service.save([rule({ blocked: true, maxAge: 0 })]).ok, false);
   assert.equal(service.save([rule({ blocked: true, unit: "off" })]).ok, false);
+});
+
+test('age-limit sorting uses the same calendar cutoffs as filtering and never mutates saved rules', () => {
+  const { service, writes } = fixture();
+  const daily = rule({ maxAge: 1, unit: 'days' });
+  const weekly = rule({ maxAge: 1, unit: 'weeks' });
+  const monthly = rule({ maxAge: 1, unit: 'months' });
+  const thirtyDays = rule({ maxAge: 30, unit: 'days' });
+  const blocked = rule({ blocked: true });
+  assert.ok(service.compareAgeLimits(daily, weekly) < 0);
+  assert.ok(service.compareAgeLimits(blocked, daily) < 0);
+  assert.equal(service.compareAgeLimits(blocked, { ...blocked, unit: 'years' }), 0);
+  assert.ok(service.compareAgeLimits(monthly, thirtyDays, Date.UTC(2026, 2, 1)) < 0, 'February is shorter than thirty days');
+  assert.ok(service.compareAgeLimits(monthly, thirtyDays, Date.UTC(2026, 3, 1)) > 0, 'March is longer than thirty days');
+  assert.equal(writes(), 0);
+  assert.deepEqual(service.getRules(), []);
 });

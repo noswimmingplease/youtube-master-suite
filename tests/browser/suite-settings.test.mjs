@@ -519,9 +519,9 @@ test('wider settings fit all tabs and place save status between Cancel and the p
     for (const showDefaults of [false, true]) {
       if (showDefaults) await page.locator('#ytms-restore-defaults').click();
       const bounds = await dialog.boundingBox();
-      const footer = dialog.locator('footer');
+      const footer = dialog.locator('.panel > footer');
       assert.equal(await footer.evaluate(node => node.scrollWidth <= node.clientWidth), true);
-      for (const control of ['#ytms-settings-status', 'footer button']) {
+      for (const control of ['#ytms-settings-status', 'footer button:visible']) {
         for (const node of await dialog.locator(control).all()) {
           const box = await node.boundingBox();
           assert.ok(box.x >= bounds.x && box.y >= bounds.y &&
@@ -730,11 +730,13 @@ test('separately saved channel upload filters do not create unsaved main prefere
   const page = await openFixture(t);
   await openPanel(page);
   await page.getByRole('tab', { name: 'Channels', exact: true }).click();
-  await page.getByRole('button', { name: 'Manage channel upload filters', exact: true }).click();
   await page.locator('#ytms-age-add').click();
   await page.getByLabel('Channel ID or channel URL', { exact: true }).fill(`UC${'a'.repeat(22)}`);
   await page.locator('#ytms-age-save').click();
-  assert.equal(await page.locator('#ytms-age-dialog').isVisible(), false);
+  assert.equal(await page.locator('#ytms-age-dialog').isVisible(), true);
+  assert.equal(await page.locator('#ytms-settings-dialog').isVisible(), true);
+  assert.equal(await page.locator('dialog[open]').count(), 1);
+  assert.equal(await page.locator('.ytms-age-fields:visible').count(), 0);
   assert.equal(await page.locator('#ytms-save-preview').textContent(), 'Save');
   assert.equal(await page.locator('#ytms-save-preview').isDisabled(), true);
   assert.equal(await page.evaluate(key => localStorage.getItem(key), KEY), null);
@@ -800,7 +802,8 @@ test("panel dimensions stay fixed across every tab, colour picker, field errors 
   await page.locator('#ytms-save-preview').click();
   assert.equal(await page.locator('#ytms-settings-status').isVisible(), true);
   assert.deepEqual(await dialog.boundingBox(), bounds);
-  assert.equal(await page.locator('#ytms-section-player .row .description').count(), 7);
+  assert.equal(await page.locator('#ytms-section-player .row .description').count(), 9);
+  assert.equal(await page.locator('#ytms-liveChatButton').isChecked(), true);
   assert.equal(await page.locator('#ytms-section-interface .row .description').count(), 11);
 });
 
@@ -877,7 +880,7 @@ test("Extensions remains theme-adaptive, keyboard-accessible and contained in a 
   }
   assert.equal(await content.evaluate(element => element.scrollHeight > element.clientHeight), true);
   await content.evaluate(element => element.scrollTop = element.scrollHeight);
-  const footer = await dialog.locator('footer').boundingBox();
+  const footer = await dialog.locator('.panel > footer').boundingBox();
   assert.ok(footer.y >= bounds.y && footer.y + footer.height <= bounds.y + bounds.height);
   await page.keyboard.press('ArrowRight');
   assert.equal(await page.evaluate(() => document.activeElement.id), 'ytms-tab-support');
@@ -963,8 +966,86 @@ test("Cancel and Restore defaults are draft-only, and invalid storage does not p
   assert.equal(await page.evaluate(key => localStorage.getItem(key), KEY), "{");
 });
 
+test('live and upcoming card controls are independent, cancellable and only persisted on Save', async t => {
+  const page = await openFixture(t, { hideChat: false });
+  const original = await page.evaluate(key => {
+    window.liveSettingVideo = document.querySelector('#movie_player video');
+    return localStorage.getItem(key);
+  }, KEY);
+  await openPanel(page);
+  await page.getByRole('tab', { name: 'Feed', exact: true }).click();
+  assert.equal(await page.locator('#ytms-hideLiveVideos').isChecked(), false);
+  assert.equal(await page.locator('#ytms-hideUpcomingStreams').isChecked(), true);
+  assert.match(await page.locator('[for="ytms-hideLiveVideos"]').textContent(), /^Hide live videos/);
+  assert.doesNotMatch(await page.locator('[for="ytms-hideLiveVideos"]').textContent(), /Directly opened videos, queues and playback are unchanged\./);
+  assert.match(await page.locator('[for="ytms-hideUpcomingStreams"]').textContent(), /^Hide upcoming streams and premieres/);
+  assert.equal(await page.locator('#ytms-save-preview').isDisabled(), true);
+  await page.locator('#ytms-hideLiveVideos').check();
+  await page.locator('#ytms-hideUpcomingStreams').uncheck();
+  assert.equal(await page.locator('#ytms-save-preview').isEnabled(), true);
+  await page.locator('#ytms-hideLiveVideos').uncheck();
+  await page.locator('#ytms-hideUpcomingStreams').check();
+  assert.equal(await page.locator('#ytms-save-preview').isDisabled(), true, 'Reverting both controls creates no unsaved change');
+  await page.locator('#ytms-hideLiveVideos').check();
+  await page.locator('#ytms-hideUpcomingStreams').uncheck();
+  await page.locator('#ytms-cancel-panel').click();
+  assert.equal(await page.evaluate(key => localStorage.getItem(key), KEY), original);
+  await openPanel(page);
+  await page.getByRole('tab', { name: 'Feed', exact: true }).click();
+  assert.equal(await page.locator('#ytms-hideLiveVideos').isChecked(), false);
+  assert.equal(await page.locator('#ytms-hideUpcomingStreams').isChecked(), true);
+  await page.locator('#ytms-hideLiveVideos').check();
+  await page.locator('#ytms-hideUpcomingStreams').uncheck();
+  await page.locator('#ytms-save-preview').click();
+  const saved = await page.evaluate(key => JSON.parse(localStorage.getItem(key)).values, KEY);
+  assert.equal(saved.hideLiveVideos, true);
+  assert.equal(saved.hideUpcomingStreams, false);
+  assert.equal(saved.hideChat, false);
+  assert.equal(await page.locator('#ytms-save-preview').textContent(), 'Reload now');
+  assert.equal(await page.evaluate(() => liveSettingVideo === document.querySelector('#movie_player video')), true);
+  await page.reload();
+  await healthy(page);
+  await openPanel(page);
+  await page.getByRole('tab', { name: 'Feed', exact: true }).click();
+  assert.equal(await page.locator('#ytms-hideLiveVideos').isChecked(), true);
+  assert.equal(await page.locator('#ytms-hideUpcomingStreams').isChecked(), false);
+  assert.equal(await page.locator('#ytms-save-preview').isDisabled(), true);
+  await page.locator('#ytms-cancel-panel').click();
+  await page.evaluate(() => {
+    window.liveSettingVideoAfterReload = document.querySelector('#movie_player video');
+    document.dispatchEvent(new CustomEvent('yt-navigate-start', { bubbles: true }));
+    history.pushState({}, '', '/');
+    const browse = document.createElement('ytd-browse');
+    const grid = document.createElement('ytd-rich-grid-renderer');
+    const contents = document.createElement('div'); contents.id = 'contents'; contents.className = 'ytd-rich-grid-renderer';
+    browse.style.display = grid.style.display = 'block';
+    for (const [id, state] of [['live-setting-live-card', 'LIVE'], ['live-setting-upcoming-card', 'UPCOMING']]) {
+      const card = document.createElement('ytd-rich-item-renderer'); card.id = id; card.style.display = 'block';
+      const media = document.createElement('ytd-rich-grid-media'); media.style.display = 'block';
+      const anchor = document.createElement('a'); anchor.href = '/watch?v=bbbbbbbbbbb'; anchor.textContent = 'Native stream card';
+      const metadata = document.createElement('div'); metadata.id = 'metadata-line';
+      const age = document.createElement('span'); age.textContent = '2 hours ago'; metadata.append(age);
+      const badge = document.createElement('ytd-thumbnail-overlay-time-status-renderer');
+      badge.setAttribute('overlay-style', state); badge.textContent = state;
+      media.append(anchor, metadata, badge); card.append(media); contents.append(card);
+    }
+    grid.append(contents); browse.append(grid); document.body.append(browse);
+    document.dispatchEvent(new CustomEvent('yt-navigate-finish', { bubbles: true }));
+  });
+  await page.waitForFunction(() => document.getElementById('live-setting-live-card').getAttribute('data-ytppl-live-hidden') === '1');
+  assert.equal(await page.locator('#live-setting-live-card').isVisible(), false);
+  assert.equal(await page.locator('#live-setting-upcoming-card').getAttribute('data-ytppl-upcoming-hidden'), null);
+  assert.equal(await page.locator('#live-setting-upcoming-card').isVisible(), true);
+  await page.waitForFunction(() => document.getElementById('yt-master-filter-toggle')?.title === 'Live: 1');
+  assert.equal(await page.locator('#yt-master-filter-toggle').textContent(), 'Filtered: 1 · Show');
+  await page.locator('#yt-master-filter-toggle').click();
+  assert.equal(await page.locator('#live-setting-live-card').isVisible(), true);
+  assert.equal(await page.locator('#live-setting-upcoming-card').isVisible(), true);
+  assert.equal(await page.evaluate(() => liveSettingVideoAfterReload === document.querySelector('#movie_player video')), true);
+});
+
 test('Restore this section resets Feed only, preserves other drafts, and remains cancellable until Save', async t => {
-  const page = await openFixture(t, { hideShorts: false, hideWatchedVideos: false, watchedThreshold: '80', mirrorButton: false, menuShowDownload: true });
+  const page = await openFixture(t, { hideShorts: false, hideWatchedVideos: false, hideLiveVideos: true, hideUpcomingStreams: false, watchedThreshold: '80', mirrorButton: false, menuShowDownload: true });
   const originalStorage = await page.evaluate(key => localStorage.getItem(key), KEY);
   await openPanel(page);
   await page.getByRole('tab', { name: 'Player', exact: true }).click();
@@ -977,6 +1058,8 @@ test('Restore this section resets Feed only, preserves other drafts, and remains
   await page.getByRole('button', { name: 'Restore this section', exact: true }).click();
   assert.equal(await page.locator('#ytms-hideShorts').isChecked(), true);
   assert.equal(await page.locator('#ytms-hideWatchedVideos').isChecked(), true);
+  assert.equal(await page.locator('#ytms-hideLiveVideos').isChecked(), false);
+  assert.equal(await page.locator('#ytms-hideUpcomingStreams').isChecked(), true);
   assert.equal(await page.locator('#ytms-watchedThreshold').inputValue(), '90');
   assert.match(await page.locator('#ytms-settings-status').textContent(), /Feed defaults restored in this draft/);
   assert.equal(await page.locator('#ytms-save-preview').textContent(), 'Save');
@@ -992,10 +1075,13 @@ test('Restore this section resets Feed only, preserves other drafts, and remains
   assert.equal(await page.locator('#ytms-mirrorButton').isChecked(), false);
   await page.getByRole('tab', { name: 'Feed', exact: true }).click();
   assert.equal(await page.locator('#ytms-hideShorts').isChecked(), false);
+  assert.equal(await page.locator('#ytms-hideLiveVideos').isChecked(), true);
+  assert.equal(await page.locator('#ytms-hideUpcomingStreams').isChecked(), false);
   await page.locator('#ytms-restore-section-defaults').click();
   await page.locator('#ytms-save-preview').click();
   const saved = await page.evaluate(key => JSON.parse(localStorage.getItem(key)).values, KEY);
   assert.equal(saved.hideShorts, true); assert.equal(saved.hideWatchedVideos, true); assert.equal(saved.watchedThreshold, '90');
+  assert.equal(saved.hideLiveVideos, false); assert.equal(saved.hideUpcomingStreams, true);
   assert.equal(saved.mirrorButton, false); assert.equal(saved.menuShowDownload, true);
 });
 
@@ -1124,7 +1210,7 @@ test('Interface section reset restores cloned menu order and all Interface contr
   const page = await openFixture(t, { colourMode: 'off', menuItemOrder: ['share', 'download'], menuShowDownload: true, menuGroupChannelTools: false, menuShowAgeLimit: false });
   await openPanel(page);
   await page.getByRole('tab', { name: 'Interface', exact: true }).click();
-  const defaultOrder = ['playNext', 'addToQueue', 'watchLater', 'savePlaylist', 'download', 'share', 'notInterested', 'dontRecommend', 'report', 'channelAge', 'channelTools'];
+  const defaultOrder = ['playNext', 'addToQueue', 'watchLater', 'savePlaylist', 'download', 'share', 'notInterested', 'channelAge', 'dontRecommend', 'report', 'channelTools'];
   assert.equal(await page.locator('#ytms-video-menu-settings').evaluate(node => node.open), false);
   await page.locator('#ytms-restore-section-defaults').click();
   assert.equal(await page.locator('#ytms-video-menu-settings').evaluate(node => node.open), false);
@@ -1173,7 +1259,8 @@ test('Restore all settings is draft-only, leaves saved channel filters untouched
   for (const tab of ['Channels', 'Extensions', 'Credits']) {
     await page.getByRole('tab', { name: tab, exact: true }).click();
     assert.equal(await page.locator('#ytms-restore-section-defaults').isDisabled(), true);
-    assert.equal(await page.getByRole('button', { name: 'Restore all settings', exact: true }).isEnabled(), true);
+    if (tab === 'Channels') assert.equal(await page.locator('#ytms-restore-defaults').isVisible(), false);
+    else assert.equal(await page.getByRole('button', { name: 'Restore all settings', exact: true }).isEnabled(), true);
   }
   await page.locator('#ytms-restore-defaults').click();
   assert.match(await page.locator('#ytms-settings-status').textContent(), /Saved channel filters are unchanged/);

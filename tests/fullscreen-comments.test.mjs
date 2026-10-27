@@ -102,6 +102,7 @@ function createHarness() {
     "handleDescriptionClick", "handleWheelVolume", "handleMouseDown",
     "handleMouseUp", "handleContextMenu", "handleWindowBlur", "scheduleApply",
     "scheduleVideoMirrorSync", "resetVideoMirror", "handleVideoMirrorMetadata",
+    "scheduleLiveChatSync", "resetLiveChat",
     "hideVideoMirrorTooltip", "refreshVideoMirrorTooltip", "handleVideoMirrorKeyDown",
     "handleCleanVideoUrlSelection", "handleCleanVideoUrlCopy", "clearCleanVideoUrlCopy",
   ];

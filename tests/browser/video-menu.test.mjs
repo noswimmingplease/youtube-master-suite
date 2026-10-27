@@ -54,7 +54,7 @@ async function open(t, options = {}) {
     const popup = document.createElement(sheet ? 'yt-sheet-view-model' : 'ytd-menu-popup-renderer');
     dropdown.append(popup);
     popup.setAttribute('role', 'menu');
-    const fixture = window.menuFixture = { nativeCalls: [], refits: 0, openedSettings: [], popup, dropdown, originals: [] };
+    const fixture = window.menuFixture = { nativeCalls: [], refits: 0, openedSettings: [], openedContexts: [], popup, dropdown, originals: [] };
     dropdown.refit = () => {
       fixture.refits++;
       if (fixture.nativeLayoutPending) {
@@ -163,7 +163,10 @@ async function open(t, options = {}) {
     });
     window.suite = { settings: { initial: settings || {} },
       channelAge: { channelFromCard: () => missingChannel ? null : ({ channelId: 'UCabcdefghijklmnopqrstuv', name: 'News channel' }) },
-      openChannelAgeSettings: channel => fixture.openedSettings.push(channel),
+      openChannelAgeSettings: (channel, context) => {
+        fixture.openedSettings.push(channel);
+        fixture.openedContexts.push({ cardId: context?.card?.id, videoId: context?.videoId, connected: context?.card?.isConnected });
+      },
     };
   }, { sheet: Boolean(options.sheet), settings: options.settings, missingChannel: Boolean(options.missingChannel),
     wrongVideo: Boolean(options.wrongVideo), unknown: Boolean(options.unknown), unsupported: Boolean(options.unsupported), ambiguous: Boolean(options.ambiguous), delayed: Boolean(options.delayed), eventless: Boolean(options.eventless), delayMs: options.delayMs || 180, nativeContract: Boolean(options.nativeContract), unknownWrapper: Boolean(options.unknownWrapper),
@@ -292,8 +295,10 @@ for (const [surface, cardTag, containerTag, route] of [
     await show(page);
     assert.equal(await page.getByRole('menuitem', { name: 'Download', exact: true }).isVisible(), false);
     await page.getByRole('menuitem', { name: 'Channel tools', exact: true }).click();
-    await page.getByRole('menuitem', { name: 'Filter channel uploads…', exact: true }).click();
+    await page.getByRole('menuitem', { name: 'Filter channel uploads', exact: true }).click();
     assert.equal(await page.evaluate(() => menuFixture.openedSettings[0].channelId), 'UCabcdefghijklmnopqrstuv');
+    assert.deepEqual(await page.evaluate(() => menuFixture.openedContexts[0]),
+      { cardId: 'card', videoId: 'bbbbbbbbbbb', connected: true });
     assert.deepEqual(await page.evaluate(() => menuFixture.nativeCalls), []);
   });
 }
@@ -316,7 +321,7 @@ for (const sheet of [false, true]) {
     await show(page);
     assert.equal(await page.getByRole('menuitem', { name: 'Remove native item', exact: true }).isVisible(), true);
     await page.getByRole('menuitem', { name: 'Channel tools', exact: true }).click();
-    await page.getByRole('menuitem', { name: 'Filter channel uploads…', exact: true }).click();
+    await page.getByRole('menuitem', { name: 'Filter channel uploads', exact: true }).click();
     assert.deepEqual(await page.evaluate(() => menuFixture.nativeCalls), []);
   });
 }
@@ -412,7 +417,7 @@ test('current sheet custom labels share the native 52px text column and 40px row
   });
   assert.deepEqual(geometry, { left: 52, height: 40, lineHeight: '20px' });
   await group.click();
-  for (const name of ['Back', 'Filter channel uploads…']) {
+  for (const name of ['Back', 'Filter channel uploads']) {
     const offset = await page.getByRole('menuitem', { name, exact: true }).evaluate(button =>
       button.querySelector('span').getBoundingClientRect().left - button.getBoundingClientRect().left);
     assert.equal(offset, 52, name);
@@ -469,7 +474,7 @@ for (const sheet of [false, true]) {
       assert.equal(await page.locator('html').getAttribute('data-ytms-video-menu-status'), 'ready');
       assert.deepEqual(await visibleIds(page), ['playNext', 'addToQueue', 'watchLater', 'savePlaylist', 'share', 'notInterested', 'channelTools']);
       await page.getByRole('menuitem', { name: 'Channel tools', exact: true }).click();
-      await page.getByRole('menuitem', { name: 'Filter channel uploads…', exact: true }).click();
+      await page.getByRole('menuitem', { name: 'Filter channel uploads', exact: true }).click();
       assert.equal(await page.evaluate(() => menuFixture.openedSettings.length), 1);
       assert.deepEqual(await page.evaluate(() => menuFixture.nativeCalls), []);
     });
@@ -494,7 +499,7 @@ for (const sheet of [false, true]) {
     assert.deepEqual(await visibleIds(page), ['playNext', 'addToQueue', 'watchLater', 'savePlaylist', 'share', 'notInterested', 'channelTools']);
     assert.equal(await page.evaluate(() => menuFixture.nativeCalls.length), 0);
     await page.getByRole('menuitem', { name: 'Channel tools', exact: true }).click();
-    assert.deepEqual(await visibleIds(page), ['back', 'dontRecommend', 'report', 'channelAge']);
+    assert.deepEqual(await visibleIds(page), ['back', 'channelAge', 'dontRecommend', 'report']);
     assert.equal(await page.evaluate(() => menuFixture.originals.every(row => row.isConnected)), true);
     await page.getByRole('menuitem', { name: 'Report', exact: true }).click();
     assert.deepEqual(await page.evaluate(() => menuFixture.nativeCalls), ['report']);
@@ -508,8 +513,19 @@ for (const sheet of [false, true]) {
     } });
     await show(page);
     assert.deepEqual(await visibleIds(page), ['share', 'playNext', 'addToQueue', 'unrecognised', 'watchLater', 'savePlaylist', 'download', 'dontRecommend', 'channelAge']);
-    await page.getByRole('menuitem', { name: 'Filter channel uploads…', exact: true }).click();
+    await page.getByRole('menuitem', { name: 'Filter channel uploads', exact: true }).click();
     assert.deepEqual(await page.evaluate(() => menuFixture.openedSettings), [{ channelId: 'UCabcdefghijklmnopqrstuv', name: 'News channel' }]);
+    assert.deepEqual(await page.evaluate(() => menuFixture.nativeCalls), []);
+  });
+
+  test(`${design}: explicitly rearranged channel actions retain their saved submenu order`, async t => {
+    const page = await open(t, { sheet, settings: { menuItemOrder: ['report', 'dontRecommend', 'channelAge'] } });
+    await show(page);
+    await page.getByRole('menuitem', { name: 'Channel tools', exact: true }).click();
+    assert.deepEqual(await visibleIds(page), ['back', 'report', 'dontRecommend', 'channelAge']);
+    await page.keyboard.press('Home');
+    await page.keyboard.press('ArrowDown');
+    assert.equal(await page.evaluate(() => document.activeElement.closest('[data-native-id]').dataset.nativeId), 'report');
     assert.deepEqual(await page.evaluate(() => menuFixture.nativeCalls), []);
   });
 }
@@ -524,9 +540,11 @@ test('submenu supports Right/Left, Escape, arrow focus, Home and End without act
   await group.press('ArrowRight');
   assert.equal(await page.evaluate(() => document.activeElement.dataset.ytmsMenuAction), 'back');
   await page.keyboard.press('ArrowDown');
+  assert.equal(await page.evaluate(() => document.activeElement.dataset.ytmsMenuAction), 'channelAge');
+  await page.keyboard.press('ArrowDown');
   assert.equal(await page.evaluate(() => document.activeElement.closest('[data-native-id]').dataset.nativeId), 'dontRecommend');
   await page.keyboard.press('End');
-  assert.equal(await page.evaluate(() => document.activeElement.dataset.ytmsMenuAction), 'channelAge');
+  assert.equal(await page.evaluate(() => document.activeElement.closest('[data-native-id]').dataset.nativeId), 'report');
   await page.keyboard.press('Home');
   assert.equal(await page.evaluate(() => document.activeElement.dataset.ytmsMenuAction), 'back');
   await page.keyboard.press('ArrowLeft');
@@ -804,6 +822,8 @@ test('aria-disabled explanatory channel actions remain keyboard discoverable but
   const page = await open(t, { sheet: true, missingChannel: true, settings: { menuGroupChannelTools: false } });
   await show(page);
   await page.keyboard.press('End');
+  await page.keyboard.press('ArrowUp');
+  await page.keyboard.press('ArrowUp');
   assert.equal(await page.evaluate(() => document.activeElement.dataset.ytmsMenuAction), 'channelAge');
   assert.match(await page.evaluate(() => document.activeElement.textContent), /Channel ID unavailable/);
   await page.keyboard.press('Enter');

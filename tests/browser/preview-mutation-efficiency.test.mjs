@@ -45,7 +45,7 @@ async function open(t, { knownHost = true, nativePlayer = true } = {}) {
   });
   await page.goto(url);
   await page.evaluate(({ id, knownHost, nativePlayer }) => {
-    window.previewAudit = { feedCleanups: 0, toggleScans: 0, dynamic: 0, upcoming: 0, pay: 0, watched: 0 };
+    window.previewAudit = { feedCleanups: 0, toggleScans: 0, dynamic: 0, live: 0, upcoming: 0, pay: 0, watched: 0 };
     localStorage.setItem("yt-master-suite.channel-age.v1", JSON.stringify({ version: 1,
       rules: [{ channelId: id, name: "Fixture channel", maxAge: 1, unit: "weeks", enabled: true }] }));
     const card = document.createElement("ytd-rich-item-renderer");
@@ -64,7 +64,7 @@ async function open(t, { knownHost = true, nativePlayer = true } = {}) {
   let feed = instrument(FEED, "cleanUp", "feedCleanups");
   feed = instrument(feed, "getFilteredContainers", "toggleScans", "");
   let player = instrument(PLAYER, "applyDynamicPreferences", "dynamic");
-  for (const [name, counter] of [["hideUpcomingStreams", "upcoming"], ["hidePayToWatchCards", "pay"], ["hideWatchedVideos", "watched"]]) {
+  for (const [name, counter] of [["hideLiveVideos", "live"], ["hideUpcomingStreams", "upcoming"], ["hidePayToWatchCards", "pay"], ["hideWatchedVideos", "watched"]]) {
     player = instrument(player, name, counter);
   }
   await page.addScriptTag({ content: `
@@ -90,7 +90,7 @@ test("30 native preview playback updates do no feed filtering or whole-feed togg
     }
   });
   assert.deepEqual(await page.evaluate(() => window.previewAudit),
-    { feedCleanups: 0, toggleScans: 0, dynamic: 0, upcoming: 0, pay: 0, watched: 0 });
+    { feedCleanups: 0, toggleScans: 0, dynamic: 0, live: 0, upcoming: 0, pay: 0, watched: 0 });
   assert.equal(await page.locator("#fixture-card").isVisible(), true);
   assert.equal(await page.locator(".ytp-caption-segment").evaluate(node => getComputedStyle(node).color), "rgb(255, 227, 110)");
 });

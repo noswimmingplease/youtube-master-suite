@@ -6,7 +6,7 @@ export function installVideoMenu(suite) {
   const cardSelector = 'ytd-video-renderer, ytd-grid-video-renderer, ytd-rich-item-renderer, ytd-compact-video-renderer, yt-lockup-view-model, ytd-playlist-video-renderer, ytd-playlist-panel-video-renderer, yt-playlist-panel-video-renderer';
   const popupSelector = 'ytd-menu-popup-renderer, yt-sheet-view-model';
   const rowSelector = 'ytd-menu-service-item-renderer, ytd-menu-navigation-item-renderer, ytd-menu-service-item-download-renderer, yt-list-item-view-model, yt-download-list-item-view-model';
-  const defaultOrder = ['playNext', 'addToQueue', 'watchLater', 'savePlaylist', 'download', 'share', 'notInterested', 'dontRecommend', 'report', 'channelAge', 'channelTools'];
+  const defaultOrder = ['playNext', 'addToQueue', 'watchLater', 'savePlaylist', 'download', 'share', 'notInterested', 'channelAge', 'dontRecommend', 'report', 'channelTools'];
   const order = [...new Set([...(Array.isArray(preferences.menuItemOrder) ? preferences.menuItemOrder.filter(id => defaultOrder.includes(id)) : []), ...defaultOrder])];
   const controller = element => element?.polymerController || element?.getPolymerController?.() || element;
   let trigger = null;
@@ -358,7 +358,7 @@ export function installVideoMenu(suite) {
       display: { value: row.style.getPropertyValue('display'), priority: row.style.getPropertyPriority('display') } }));
     let age = null;
     if (preferences.menuShowAgeLimit !== false) {
-      age = customAction('channelAge', 'Filter channel uploads…', 'M7 2v2H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V6a2 2 0 0 0-2-2h-2V2h-2v2H9V2H7zm12 8v10H5V10h14zM5 6h14v2H5V6zm6 6v5h5v-2h-3v-3h-2z');
+      age = customAction('channelAge', 'Filter channel uploads', 'M7 2v2H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V6a2 2 0 0 0-2-2h-2V2h-2v2H9V2H7zm12 8v10H5V10h14zM5 6h14v2H5V6zm6 6v5h5v-2h-3v-3h-2z');
       if (!channel?.channelId) {
         age.setAttribute('aria-disabled', 'true');
         const note = document.createElement('small');
@@ -498,7 +498,7 @@ export function installVideoMenu(suite) {
       if (!current.card.isConnected || videoIdFromCard(current.card) !== current.videoId || channel?.channelId !== current.channel.channelId) return;
       try { current.popup.closest('tp-yt-iron-dropdown')?.close?.(); } catch { /* Settings can still open if the native dropdown has already closed. */ }
       reset(); trigger = null; triggerReason = 'missing-trigger';
-      suite.openChannelAgeSettings?.(channel);
+      suite.openChannelAgeSettings?.(channel, { card: current.card, videoId: current.videoId });
     }
   }
 

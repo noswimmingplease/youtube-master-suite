@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         YouTube Player Preferences Lite
 // @namespace    Citizen.youtube.player-preferences-lite
-// @version      1.76
+// @version      1.91
 // @description  Applies small YouTube player preferences without touching Enhancer-style miniplayer, queue, autoplay, or background playback controls.
 // @author       Citizen
 // @homepageURL  https://github.com/noswimmingplease/youtube-player-preferences-lite
@@ -22,6 +22,7 @@
     hideShorts: true,
     useStandardMastheadLogo: true,
     hideUpcomingStreams: true,
+    hideLiveVideos: false,
     hidePayToWatchCards: true,
     hideWatchedVideos: true,
     watchedVideoThresholdPercent: 90,
@@ -49,8 +50,10 @@
     useReadableYellowCaptions: true,
     enableTheaterMode: true,
     preferredVideoQuality: "off",
+    timelinePreviewSize: "auto",
     enablePlayerWheelVolume: true,
     enableVideoMirrorButton: true,
+    enableLiveChatButton: true,
     enableFullscreenComments: true,
     hideFullscreenQuickActions: false,
     enableCleanVideoUrlCopy: true,
@@ -98,6 +101,12 @@
     VIDEO_MIRROR_ANCHOR_SELECTOR,
   ].join(",");
   const FULLSCREEN_COMMENTS_ATTRIBUTE = "data-ytppl-fullscreen-comments";
+  const LIVE_CHAT_BUTTON_ID = "ytppl-live-chat-button";
+  const LIVE_CHAT_CLOSE_ID = "ytppl-live-chat-close";
+  const LIVE_CHAT_VISIBILITY_ATTRIBUTE = "data-ytppl-live-chat-visibility";
+  const LIVE_CHAT_PANEL_ATTRIBUTE = "data-ytppl-live-chat-panel";
+  const LIVE_CHAT_ANCESTOR_ATTRIBUTE = "data-ytppl-live-chat-ancestor";
+  const LIVE_CHAT_SIBLING_ATTRIBUTE = "data-ytppl-live-chat-sibling-hidden";
   const FULLSCREEN_WHEEL_EXCLUDED_SELECTOR = [
     ".ytp-settings-menu",
     ".ytp-popup",
@@ -139,11 +148,18 @@
   ].join(",");
   const UPCOMING_STREAM_BADGE_SELECTOR = [
     ".yt-badge-shape__text",
+    ".ytBadgeShapeBadgeText",
     "badge-shape",
     "yt-badge-shape",
     "ytd-thumbnail-overlay-time-status-renderer",
     "yt-thumbnail-overlay-badge-view-model",
     "yt-thumbnail-bottom-overlay-view-model",
+    "ytd-badge-supported-renderer",
+    "[overlay-style]",
+  ].join(",");
+  const STREAM_METADATA_SELECTOR = [
+    "#metadata-line > span", "#metadata-line > yt-formatted-string", "#metadata > span", ".yt-content-metadata-view-model__metadata-text",
+    ".ytContentMetadataViewModelMetadataText",
   ].join(",");
   const PAY_TO_WATCH_SCAN_SELECTOR = [
     UPCOMING_STREAM_SCAN_SELECTOR,
@@ -205,6 +221,7 @@
   ].join(",");
   const CARD_HIDE_ATTRIBUTES = Object.freeze({
     ytpplUpcomingHidden: "data-ytppl-upcoming-hidden",
+    ytpplLiveHidden: "data-ytppl-live-hidden",
     ytpplPayToWatchHidden: "data-ytppl-pay-to-watch-hidden",
     ytpplWatchedHidden: "data-ytppl-watched-hidden",
   });
@@ -274,6 +291,7 @@
       "class",
       "hidden",
       "href",
+      "overlay-style",
       "show-yoodle",
       "style",
       "title",
@@ -460,6 +478,31 @@
   let videoMirrorPlayer = null;
   let videoMirrorControls = null;
   let videoMirrorPageSuspended = false;
+  let liveChatSyncFrame = 0;
+  let liveChatVideoId = "";
+  let liveChatOverride = null;
+  let liveChatFrame = null;
+  let liveChatValid = false;
+  let liveChatOwner = null;
+  let liveChatPlayer = null;
+  let liveChatControls = null;
+  let liveChatButton = null;
+  let liveChatHeader = null;
+  let liveChatOpenTimer = 0;
+  let liveChatOpeningFrame = null;
+  let liveChatNeedsExpand = false;
+  let liveChatOpenFailed = false;
+  let liveChatNavigationPending = false;
+  let liveChatStateObserver = null;
+  let liveChatObservedBranch = [];
+  let liveChatObservedIframe = null;
+  let liveChatGeometryFrame = 0;
+  let liveChatGeometryObserver = null;
+  let liveChatGeometryPlayer = null;
+  let liveChatGeometryListening = false;
+  let liveChatGeometryViewport = null;
+  const liveChatRevealedAncestors = new Map();
+  const liveChatHiddenSiblings = new Set();
 
   function isWatchPath() {
     return (
@@ -701,27 +744,101 @@
     location.assign(watchUrl);
   }
 
-  function hasUpcomingStreamBadge(card) {
-    return Array.from(
-      card.querySelectorAll(UPCOMING_STREAM_BADGE_SELECTOR),
-    ).some((el) => {
-      const text = getElementText(el);
-      const label = el.getAttribute("aria-label") || "";
-      return /^Upcoming$/i.test(text) || /^Upcoming$/i.test(label);
-    });
+  function isStreamFilterRoute() {
+    return location.pathname === "/" || location.pathname === "/feed/recommended" ||
+      location.pathname === "/feed/subscriptions" || location.pathname === "/feed/explore" ||
+      location.pathname === "/feed/trending" || location.pathname === "/results" ||
+      /^\/(?:channel\/UC[A-Za-z0-9_-]{22}|@[^/]+|c\/[^/]+|user\/[^/]+)(?:\/(?:videos|streams|featured))?\/?$/.test(location.pathname);
+  }
+
+  function getStreamCardState(card) {
+    if (!card || !isStreamFilterRoute() || isExcludedSurface(card) ||
+        card.closest("ytd-popup-container, tp-yt-iron-dropdown, ytd-menu-popup-renderer, yt-sheet-view-model, ytd-playlist-video-list-renderer")) return "";
+    const badgeState = value => {
+      const text = String(value || "").replace(/\s+/g, " ").trim();
+      if (/^(?:LIVE|LIVE NOW|BADGE_STYLE_TYPE_LIVE_NOW|THUMBNAIL_BADGE_STYLE_LIVE)$/i.test(text)) return "live";
+      if (/^(?:UPCOMING|PREMIERE|BADGE_STYLE_TYPE_UPCOMING|THUMBNAIL_BADGE_STYLE_UPCOMING)$/i.test(text)) return "upcoming";
+      return "";
+    };
+    const domStates = new Set();
+    for (const badge of Array.from(card.querySelectorAll(UPCOMING_STREAM_BADGE_SELECTOR)).slice(0, 24)) {
+      for (const value of [badge.getAttribute("overlay-style"), getElementText(badge), badge.getAttribute("aria-label")]) {
+        const state = badgeState(value);
+        if (state) domStates.add(state);
+      }
+    }
+    const metadata = Array.from(card.querySelectorAll(STREAM_METADATA_SELECTOR)).slice(0, 16).map(getElementText);
+    const archived = text => /^(?:Streamed|Premiered)\s+(?:\d|yesterday\b|on\b)/i.test(text);
+    // Explicit completed-stream metadata keeps recycled stale LIVE badges open.
+    if (metadata.some(archived)) return "";
+    // Fresh native badges take precedence over a recycled renderer's old model.
+    if (domStates.size) return domStates.size === 1 ? [...domStates][0] : "";
+    const scheduled = text => /^Scheduled for\b/i.test(text) || /^Premieres?\s+(?:in\b|on\b|[A-Z][a-z]{2,8}\b|\d)/i.test(text) ||
+      (/\bNotify me\b/i.test(text) && /\b(?:waiting|scheduled)\b/i.test(text));
+    if (metadata.some(scheduled)) return "upcoming";
+    if (metadata.some(text => /^\d[\d.,]*\s*[KM]?\s+waiting$/i.test(text)) &&
+        Array.from(card.querySelectorAll('button, [role="button"]')).slice(0, 12).some(button =>
+          /^Notify me$/i.test(getElementText(button)) || /^Notify me$/i.test(button.getAttribute('aria-label') || ''))) return "upcoming";
+    const textOf = value => typeof value === "string" ? value : value?.simpleText || value?.content ||
+      (Array.isArray(value?.runs) ? value.runs.slice(0, 8).map(run => run?.text || "").join("") : "");
+    const models = new Set();
+    const nodes = [card, ...Array.from(card.querySelectorAll("ytd-rich-grid-media, yt-lockup-view-model, yt-lockup-view-model-wiz")).slice(0, 4)];
+    for (const node of nodes) {
+      try {
+        const controller = node.polymerController || node.getPolymerController?.();
+        const component = typeof node.componentProps?.data === "function" ? node.componentProps.data() : null;
+        for (const model of [node.data, node.__data?.data, controller?.data, controller?.__data?.data, component]) {
+          if (!model || typeof model !== "object") continue;
+          models.add(model);
+          for (const nested of [model.videoRenderer, model.compactVideoRenderer, model.gridVideoRenderer, model.lockupViewModel,
+            model.content?.videoRenderer, model.content?.richItemRenderer?.content?.videoRenderer]) {
+            if (nested && typeof nested === "object") models.add(nested);
+          }
+        }
+      } catch { /* Missing/private renderer state must leave native DOM detection available. */ }
+    }
+    const modelStates = new Set();
+    let archivedModel = false;
+    for (const model of [...models].slice(0, 30)) {
+      archivedModel ||= archived(textOf(model.publishedTimeText));
+      if (model.isLiveNow === true) modelStates.add("live");
+      if (model.upcomingEventData && typeof model.upcomingEventData === "object") modelStates.add("upcoming");
+      if (scheduled(textOf(model.publishedTimeText))) modelStates.add("upcoming");
+      const rows = model.metadata?.lockupMetadataViewModel?.metadata?.contentMetadataViewModel?.metadataRows ||
+        model.metadata?.contentMetadataViewModel?.metadataRows;
+      for (const row of Array.isArray(rows) ? rows.slice(0, 4) : []) {
+        for (const part of Array.isArray(row?.metadataParts) ? row.metadataParts.slice(0, 5) : []) {
+          archivedModel ||= archived(textOf(part?.text));
+          if (scheduled(textOf(part?.text))) modelStates.add("upcoming");
+        }
+      }
+      for (const badge of Array.isArray(model.badges) ? model.badges.slice(0, 8) : []) {
+        const state = badgeState(badge?.metadataBadgeRenderer?.style);
+        if (state) modelStates.add(state);
+      }
+      const overlays = model.thumbnailOverlays || model.contentImage?.thumbnailViewModel?.overlays;
+      for (const overlay of Array.isArray(overlays) ? overlays.slice(0, 8) : []) {
+        const state = badgeState(overlay?.thumbnailOverlayTimeStatusRenderer?.style);
+        if (state) modelStates.add(state);
+        const badges = overlay?.thumbnailOverlayBadgeViewModel?.thumbnailBadges;
+        for (const badge of Array.isArray(badges) ? badges.slice(0, 8) : []) {
+          const value = badge?.thumbnailBadgeViewModel;
+          for (const candidate of [value?.badgeStyle, textOf(value?.text)]) {
+            const current = badgeState(candidate);
+            if (current) modelStates.add(current);
+          }
+        }
+      }
+    }
+    return !archivedModel && modelStates.size === 1 ? [...modelStates][0] : "";
   }
 
   function isUpcomingStreamCard(card) {
-    if (!card || isExcludedSurface(card)) {
-      return false;
-    }
+    return getStreamCardState(card) === "upcoming";
+  }
 
-    const text = getElementText(card);
-    return (
-      hasUpcomingStreamBadge(card) ||
-      /\bScheduled for\b/i.test(text) ||
-      (/\bNotify me\b/i.test(text) && /\b(waiting|Scheduled)\b/i.test(text))
-    );
+  function isLiveStreamCard(card) {
+    return getStreamCardState(card) === "live";
   }
 
   function setCardHidden(card, datasetKey, hidden) {
@@ -775,6 +892,12 @@
       "ytpplUpcomingHidden",
       isUpcomingStreamCard,
     );
+  }
+
+  function hideLiveVideos(root = document) {
+    const enabled = CONFIG.hideLiveVideos && isFeedFilterEnabled("liveVideos");
+    hideMatchingCards(root, enabled, enabled ? UPCOMING_STREAM_SCAN_SELECTOR : '[data-ytppl-live-hidden="1"]',
+      "ytpplLiveHidden", isLiveStreamCard);
   }
 
   function hasPayToWatchText(card) {
@@ -2394,27 +2517,115 @@
   }
 
   function buildWatchLayoutCss() {
-    if (!CONFIG.hideChat) {
+    if (!CONFIG.hideChat && !CONFIG.enableLiveChatButton) {
       return "";
     }
 
+    const hidden = CONFIG.hideChat
+      ? `:root:not([${LIVE_CHAT_VISIBILITY_ATTRIBUTE}="shown"])`
+      : `:root[${LIVE_CHAT_VISIBILITY_ATTRIBUTE}="hidden"]`;
+    const surfaces = [
+      'ytd-watch-flexy ytd-engagement-panel-section-list-renderer[target-id="engagement-panel-live-chat"]',
+      "ytd-watch-flexy ytd-engagement-panel-section-list-renderer:has(ytd-live-chat-frame)",
+      "ytd-watch-flexy ytd-engagement-panel-section-list-renderer:has(yt-live-chat-app)",
+      "ytd-watch-flexy ytd-engagement-panel-section-list-renderer:has(ytd-watch-live-chat-renderer)",
+      "ytd-watch-flexy ytd-engagement-panel-section-list-renderer:has(ytd-watch-live-chat-replay-renderer)",
+      "ytd-watch-flexy #chat-container", "ytd-watch-flexy #chat", "ytd-watch-flexy ytd-live-chat-frame",
+      "ytd-watch-live-chat-renderer", "ytd-watch-live-chat-replay-renderer",
+      "ytd-live-chat-viewer-engagement-message-renderer",
+      'ytd-watch-flexy yt-carousel-item-view-model[aria-label="Live chat replay"]',
+      'ytd-watch-flexy yt-carousel-item-view-model[aria-label*="Live chat" i]',
+    ];
     return `
-        ytd-watch-flexy ytd-engagement-panel-section-list-renderer[target-id="engagement-panel-live-chat"],
-        ytd-watch-flexy ytd-engagement-panel-section-list-renderer:has(ytd-live-chat-frame),
-        ytd-watch-flexy ytd-engagement-panel-section-list-renderer:has(yt-live-chat-app),
-        ytd-watch-flexy ytd-engagement-panel-section-list-renderer:has(ytd-watch-live-chat-renderer),
-        ytd-watch-flexy ytd-engagement-panel-section-list-renderer:has(ytd-watch-live-chat-replay-renderer),
-        ytd-watch-flexy #chat-container,
-        ytd-watch-flexy #chat,
-        ytd-watch-flexy ytd-live-chat-frame,
-        ytd-watch-live-chat-renderer,
-        ytd-watch-live-chat-replay-renderer,
-        ytd-live-chat-viewer-engagement-message-renderer,
-        ytd-watch-flexy yt-carousel-item-view-model[aria-label="Live chat replay"],
-        ytd-watch-flexy yt-carousel-item-view-model[aria-label*="Live chat" i] {
+        ${surfaces.map(selector => `${hidden} ${selector}`).join(",\n        ")} {
           display: none !important;
         }
       `;
+  }
+
+  function buildLiveChatCss() {
+    if (!CONFIG.enableLiveChatButton) return "";
+    return `
+      #${LIVE_CHAT_BUTTON_ID}.ytp-button {
+        display: inline-flex !important;
+        align-items: center !important;
+        justify-content: center !important;
+        padding: 0 !important;
+        line-height: 0 !important;
+      }
+      #${LIVE_CHAT_BUTTON_ID} svg {
+        width: 36px !important;
+        height: 36px !important;
+        min-width: 36px !important;
+        min-height: 36px !important;
+        max-width: 36px !important;
+        max-height: 36px !important;
+        flex: 0 0 36px !important;
+        display: block !important;
+        pointer-events: none !important;
+      }
+      #${LIVE_CHAT_BUTTON_ID}[aria-pressed="true"] .ytp-svg-fill { fill: #ff0033 !important; }
+      #${LIVE_CHAT_BUTTON_ID}:disabled { opacity: .45 !important; }
+      [${LIVE_CHAT_ANCESTOR_ATTRIBUTE}="1"] {
+        display: contents !important;
+        visibility: visible !important;
+        content-visibility: visible !important;
+      }
+      [${LIVE_CHAT_SIBLING_ATTRIBUTE}="1"] { display: none !important; }
+      ytd-live-chat-frame[${LIVE_CHAT_PANEL_ATTRIBUTE}="1"]:popover-open {
+        position: fixed !important;
+        inset: var(--ytppl-live-chat-top, 12px) 12px auto auto !important;
+        display: block !important;
+        box-sizing: border-box !important;
+        width: min(360px, calc(100vw - 24px)) !important;
+        height: var(--ytppl-live-chat-height, calc(100dvh - 96px)) !important;
+        min-width: 0 !important;
+        min-height: 0 !important;
+        max-height: 100dvh !important;
+        margin: 0 !important;
+        padding: 40px 0 0 !important;
+        border: 1px solid var(--yt-spec-10-percent-layer, #555) !important;
+        border-radius: 12px !important;
+        overflow: hidden !important;
+        background: var(--yt-spec-base-background, #0f0f0f) !important;
+        color: var(--yt-spec-text-primary, #f1f1f1) !important;
+        box-shadow: 0 8px 32px #0006 !important;
+        visibility: visible !important;
+      }
+      [${LIVE_CHAT_PANEL_ATTRIBUTE}="1"]:popover-open::backdrop { pointer-events: none !important; }
+      [${LIVE_CHAT_PANEL_ATTRIBUTE}="1"]:popover-open #show-hide-button { display: none !important; }
+      [${LIVE_CHAT_PANEL_ATTRIBUTE}="1"]:popover-open iframe#chatframe {
+        display: block !important;
+        width: 100% !important;
+        height: 100% !important;
+        border: 0 !important;
+      }
+      .ytppl-live-chat-header {
+        position: absolute !important;
+        inset: 0 0 auto !important;
+        height: 40px !important;
+        display: flex !important;
+        align-items: center !important;
+        justify-content: space-between !important;
+        padding: 0 8px 0 16px !important;
+        font: 500 14px/1.3 Roboto, Arial, sans-serif !important;
+      }
+      #${LIVE_CHAT_CLOSE_ID} {
+        display: inline-flex !important;
+        align-items: center !important;
+        justify-content: center !important;
+        width: 32px !important;
+        height: 32px !important;
+        border: 0 !important;
+        border-radius: 50% !important;
+        background: transparent !important;
+        color: inherit !important;
+        cursor: pointer !important;
+        font: 400 24px/1 Arial, sans-serif !important;
+      }
+      #${LIVE_CHAT_CLOSE_ID}:hover { background: var(--yt-spec-10-percent-layer, #ffffff1a) !important; }
+      #${LIVE_CHAT_CLOSE_ID}:focus-visible { outline: 2px solid currentColor !important; outline-offset: -2px !important; }
+    `;
   }
 
   function buildFullscreenQuickActionsCss() {
@@ -2597,6 +2808,7 @@
       buildWatchCleanupCss(),
       buildTitleHashtagCss(),
       buildWatchLayoutCss(),
+      buildLiveChatCss(),
       buildFullscreenQuickActionsCss(),
       buildFullscreenCommentsCss(),
       buildInfoCardCss(),
@@ -3088,6 +3300,487 @@
       event.target.closest("ytd-miniplayer, ytd-video-preview, ytd-reel-video-renderer")
     ) return;
     scheduleVideoMirrorSync();
+    scheduleLiveChatSync();
+  }
+
+  function setLiveChatVisibility() {
+    const root = document.documentElement;
+    const choice = liveChatValid ? liveChatOverride : null;
+    if (choice === null) {
+      if (root?.hasAttribute(LIVE_CHAT_VISIBILITY_ATTRIBUTE)) root.removeAttribute(LIVE_CHAT_VISIBILITY_ATTRIBUTE);
+    } else {
+      const value = choice ? "shown" : "hidden";
+      if (root?.getAttribute(LIVE_CHAT_VISIBILITY_ATTRIBUTE) !== value) root?.setAttribute(LIVE_CHAT_VISIBILITY_ATTRIBUTE, value);
+    }
+    // Watch Layout already observes native chat classes. Notify its empty-rail
+    // reconciliation without a broad page event or another resize polling loop.
+    if (liveChatFrame && liveChatFrame.classList.contains("ytppl-live-chat-hidden") !== (choice === false)) {
+      liveChatFrame.classList.toggle("ytppl-live-chat-hidden", choice === false);
+    }
+  }
+
+  function clearLiveChatOpening() {
+    if (liveChatOpenTimer) clearTimeout(liveChatOpenTimer);
+    liveChatOpenTimer = 0;
+    liveChatOpeningFrame = null;
+  }
+
+  function clearLiveChatPresentation() {
+    clearLiveChatGeometry();
+    // Never detach, replace or change the source of the native iframe. Even
+    // moving its existing parent can discard its browsing context and draft.
+    if (liveChatFrame?.getAttribute(LIVE_CHAT_PANEL_ATTRIBUTE) === "1") {
+      try { if (liveChatFrame.matches(":popover-open")) liveChatFrame.hidePopover(); } catch { /* Detached native surface. */ }
+      if (liveChatFrame.getAttribute("popover") === "manual") liveChatFrame.removeAttribute("popover");
+      liveChatFrame.removeAttribute(LIVE_CHAT_PANEL_ATTRIBUTE);
+    }
+    liveChatHeader?.remove();
+    liveChatHeader = null;
+    clearLiveChatAncestorReveal();
+  }
+
+  function clearLiveChatAncestorReveal() {
+    for (const [ancestor, previousAriaHidden] of liveChatRevealedAncestors) {
+      if (ancestor.getAttribute(LIVE_CHAT_ANCESTOR_ATTRIBUTE) === "1") ancestor.removeAttribute(LIVE_CHAT_ANCESTOR_ATTRIBUTE);
+      if (previousAriaHidden === "true" && ancestor.getAttribute("aria-hidden") === "false") {
+        ancestor.setAttribute("aria-hidden", previousAriaHidden);
+      }
+    }
+    liveChatRevealedAncestors.clear();
+    for (const sibling of liveChatHiddenSiblings) {
+      if (sibling.getAttribute(LIVE_CHAT_SIBLING_ATTRIBUTE) === "1") sibling.removeAttribute(LIVE_CHAT_SIBLING_ATTRIBUTE);
+    }
+    liveChatHiddenSiblings.clear();
+  }
+
+  function clearLiveChatElements() {
+    clearLiveChatOpening();
+    liveChatStateObserver?.disconnect();
+    liveChatStateObserver = null;
+    liveChatObservedBranch = [];
+    liveChatObservedIframe = null;
+    clearLiveChatPresentation();
+    liveChatFrame?.classList.remove("ytppl-live-chat-hidden");
+    liveChatButton?.remove();
+    liveChatButton = null;
+    liveChatValid = false;
+    liveChatFrame = liveChatOwner = liveChatPlayer = liveChatControls = null;
+  }
+
+  function resetLiveChat() {
+    if (liveChatSyncFrame) cancelAnimationFrame(liveChatSyncFrame);
+    liveChatSyncFrame = 0;
+    clearLiveChatElements();
+    liveChatVideoId = "";
+    liveChatOverride = null;
+    liveChatNeedsExpand = liveChatOpenFailed = false;
+    setLiveChatVisibility();
+  }
+
+  function getLiveChatTarget(videoId) {
+    const target = getVideoMirrorTarget(videoId);
+    if (!target) return null;
+    const owner = target.player.closest("ytd-watch-flexy") ||
+      document.querySelector("#ytsmp-player-placeholder")?.closest("ytd-watch-flexy");
+    if (!isRenderedWatchFlexy(owner) || owner.closest('[inert], [aria-hidden="true"]')) return null;
+    const frames = [...owner.querySelectorAll("ytd-live-chat-frame#chat")].filter(frame =>
+      frame.closest("ytd-watch-flexy") === owner &&
+      (frame.querySelector("iframe#chatframe") || frame.querySelector(LIVE_CHAT_COLLAPSE_BUTTON_SELECTOR)),
+    );
+    if (frames.length !== 1) return null;
+    const frame = frames[0];
+    if (frame.hasAttribute("popover") && frame.getAttribute(LIVE_CHAT_PANEL_ATTRIBUTE) !== "1") return null;
+    const source = frame.querySelector("iframe#chatframe")?.getAttribute("src");
+    let valid = true;
+    if (source && source !== "about:blank") {
+      try {
+        const url = new URL(source, location.href);
+        if (url.origin !== location.origin || !/^\/live_chat(?:_replay)?$/.test(url.pathname) ||
+            (url.searchParams.has("v") && url.searchParams.get("v") !== videoId)) valid = false;
+      } catch { valid = false; }
+    }
+    const controls = target.player.querySelector(".ytp-right-controls");
+    const branch = [];
+    for (let ancestor = frame.parentElement; ancestor; ancestor = ancestor.parentElement) {
+      branch.push(ancestor);
+      if (ancestor === owner) break;
+    }
+    return controls ? { frame, owner, player: target.player, controls, branch, iframe: frame.querySelector("iframe#chatframe"), valid } : null;
+  }
+
+  function canPresentLiveChat() {
+    const fullscreen = document.fullscreenElement;
+    return liveChatValid && typeof liveChatFrame?.showPopover === "function" &&
+      typeof liveChatFrame?.hidePopover === "function" &&
+      (!fullscreen || fullscreen.contains(liveChatFrame));
+  }
+
+  function isLiveChatShown() {
+    if (!liveChatFrame || isLiveChatCollapsed(liveChatFrame) || !canPresentLiveChat()) return false;
+    return liveChatFrame.matches(":popover-open") ||
+      (liveChatOverride !== false && !CONFIG.hideChat && isRenderedWatchFlexy(liveChatFrame));
+  }
+
+  function closeLiveChat(restoreFocus = false) {
+    liveChatOverride = false;
+    liveChatNeedsExpand = false;
+    clearLiveChatOpening();
+    clearLiveChatCollapseAttempts();
+    clearLiveChatPresentation();
+    setLiveChatVisibility();
+    updateLiveChatButton();
+    requestPlayerLayoutRefresh();
+    if (restoreFocus && liveChatButton?.isConnected) liveChatButton.focus({ preventScroll: true });
+  }
+
+  function revealLiveChatAncestors() {
+    // A top-layer popover still cannot render inside a display:none ancestor.
+    // Restore only this branch, hiding its siblings so queues and other panels
+    // are not accidentally exposed by native fullscreen/empty-rail CSS.
+    let branch = liveChatFrame;
+    for (let ancestor = branch.parentElement; ancestor && ancestor !== liveChatOwner;
+      branch = ancestor, ancestor = ancestor.parentElement) {
+      if (ancestor.inert) return false;
+      const style = getComputedStyle(ancestor);
+      if (!liveChatRevealedAncestors.has(ancestor) &&
+          (style.display === "none" || style.visibility === "hidden" || style.visibility === "collapse" ||
+           style.contentVisibility === "hidden" || ancestor.getAttribute("aria-hidden") === "true")) {
+        const previousAriaHidden = ancestor.getAttribute("aria-hidden");
+        liveChatRevealedAncestors.set(ancestor, previousAriaHidden);
+        ancestor.setAttribute(LIVE_CHAT_ANCESTOR_ATTRIBUTE, "1");
+        if (previousAriaHidden === "true") ancestor.setAttribute("aria-hidden", "false");
+      }
+      if (liveChatRevealedAncestors.has(ancestor)) {
+        for (const sibling of ancestor.children) {
+          if (sibling === branch || liveChatHiddenSiblings.has(sibling)) continue;
+          liveChatHiddenSiblings.add(sibling);
+          sibling.setAttribute(LIVE_CHAT_SIBLING_ATTRIBUTE, "1");
+        }
+      }
+    }
+    return branch === liveChatOwner || branch.parentElement === liveChatOwner;
+  }
+
+  function createLiveChatHeader() {
+    const header = document.createElement("div");
+    header.className = "ytppl-live-chat-header";
+    const label = document.createElement("span");
+    label.textContent = "Live chat";
+    const close = document.createElement("button");
+    close.id = LIVE_CHAT_CLOSE_ID;
+    close.type = "button";
+    close.textContent = "×";
+    close.setAttribute("aria-label", "Close live chat");
+    close.title = "Close live chat";
+    close.addEventListener("click", event => {
+      event.preventDefault();
+      event.stopPropagation();
+      closeLiveChat(true);
+    });
+    header.addEventListener("keydown", event => {
+      if (event.key !== "Escape" || event.isComposing || event.defaultPrevented) return;
+      event.preventDefault();
+      event.stopPropagation();
+      closeLiveChat(true);
+    });
+    header.append(label, close);
+    return header;
+  }
+
+  function clearLiveChatGeometry() {
+    if (liveChatGeometryFrame) cancelAnimationFrame(liveChatGeometryFrame);
+    liveChatGeometryFrame = 0;
+    liveChatGeometryObserver?.disconnect();
+    liveChatGeometryObserver = null;
+    liveChatGeometryPlayer = null;
+    liveChatGeometryViewport = null;
+    if (liveChatGeometryListening) {
+      document.removeEventListener("scroll", scheduleLiveChatGeometry, true);
+      window.removeEventListener("resize", scheduleLiveChatGeometry, true);
+      liveChatGeometryListening = false;
+    }
+    for (const property of ["--ytppl-live-chat-top", "--ytppl-live-chat-height"]) {
+      if (liveChatFrame?.style.getPropertyValue(property)) liveChatFrame.style.removeProperty(property);
+    }
+  }
+
+  function updateLiveChatGeometry() {
+    if (liveChatGeometryFrame) cancelAnimationFrame(liveChatGeometryFrame);
+    liveChatGeometryFrame = 0;
+    if (!liveChatPlayer?.isConnected || !liveChatFrame?.matches(":popover-open")) return;
+    const player = liveChatPlayer.getBoundingClientRect();
+    const viewportHeight = window.innerHeight;
+    if (!player.height || !viewportHeight) return;
+    const height = Math.min(player.height, viewportHeight);
+    const top = Math.max(0, Math.min(player.top, viewportHeight - height));
+    let bottom = top + height;
+    const panel = liveChatFrame.getBoundingClientRect();
+    const controls = liveChatPlayer.querySelector(".ytp-chrome-bottom") ||
+      liveChatPlayer.querySelector(".ytp-chrome-controls") || liveChatControls;
+    const bar = controls?.getBoundingClientRect();
+    if (bar?.width > 0 && bar.height > 0 && panel.left < bar.right && panel.right > bar.left &&
+        bar.top > top && bar.top < bottom) {
+      // In fullscreen the panel overlays the picture. Keep native seek/playback
+      // controls reachable rather than covering them with the chat composer.
+      bottom = Math.min(bottom, bar.top - 8);
+    }
+    for (const [property, value] of [
+      ["--ytppl-live-chat-top", top], ["--ytppl-live-chat-height", Math.max(0, bottom - top)],
+    ]) {
+      const pixels = `${Math.round(value * 100) / 100}px`;
+      if (liveChatFrame.style.getPropertyValue(property) !== pixels) liveChatFrame.style.setProperty(property, pixels);
+    }
+  }
+
+  function scheduleLiveChatGeometry(event) {
+    if (videoMirrorPageSuspended || !liveChatFrame?.matches(":popover-open")) return;
+    if (event?.type === "resize" && (event.isTrusted ||
+        liveChatGeometryViewport?.width !== window.innerWidth ||
+        liveChatGeometryViewport?.height !== window.innerHeight)) {
+      // Native media queries can hide or restore ancestors without a DOM
+      // mutation. Reassess only our masks atomically, keeping the iframe and
+      // header in place. Synthetic same-size layout hints need geometry only.
+      liveChatGeometryViewport = { width: window.innerWidth, height: window.innerHeight };
+      clearLiveChatAncestorReveal();
+      revealLiveChatAncestors();
+      scheduleLiveChatSync();
+      return;
+    }
+    if (liveChatGeometryFrame) return;
+    liveChatGeometryFrame = requestAnimationFrame(updateLiveChatGeometry);
+  }
+
+  function watchLiveChatGeometry() {
+    if (liveChatGeometryPlayer !== liveChatPlayer) {
+      liveChatGeometryObserver?.disconnect();
+      liveChatGeometryPlayer = liveChatPlayer;
+      if (typeof ResizeObserver === "function") {
+        liveChatGeometryObserver = new ResizeObserver(scheduleLiveChatGeometry);
+        liveChatGeometryObserver.observe(liveChatPlayer);
+      }
+    }
+    if (!liveChatGeometryListening) {
+      liveChatGeometryViewport = { width: window.innerWidth, height: window.innerHeight };
+      document.addEventListener("scroll", scheduleLiveChatGeometry, { capture: true, passive: true });
+      window.addEventListener("resize", scheduleLiveChatGeometry, { capture: true, passive: true });
+      liveChatGeometryListening = true;
+    }
+    updateLiveChatGeometry();
+  }
+
+  function showLiveChatPopover() {
+    if (!canPresentLiveChat()) return false;
+    if (!revealLiveChatAncestors()) return false;
+    if (liveChatFrame.getAttribute(LIVE_CHAT_PANEL_ATTRIBUTE) !== "1") liveChatFrame.setAttribute(LIVE_CHAT_PANEL_ATTRIBUTE, "1");
+    if (!liveChatFrame.hasAttribute("popover")) liveChatFrame.setAttribute("popover", "manual");
+    if (!liveChatHeader?.isConnected) {
+      liveChatHeader = createLiveChatHeader();
+      liveChatFrame.appendChild(liveChatHeader);
+    }
+    try {
+      if (!liveChatFrame.matches(":popover-open")) {
+        liveChatFrame.showPopover();
+        requestPlayerLayoutRefresh();
+      }
+      watchLiveChatGeometry();
+      return liveChatFrame.matches(":popover-open");
+    } catch { return false; }
+  }
+
+  function expandLiveChat() {
+    liveChatNeedsExpand = false;
+    const button = liveChatFrame.querySelector(LIVE_CHAT_COLLAPSE_BUTTON_SELECTOR);
+    if (!button || button.disabled || button.getAttribute("aria-disabled") === "true" || typeof button.click !== "function") return false;
+    liveChatOpeningFrame = liveChatFrame;
+    liveChatOpenTimer = setTimeout(() => {
+      liveChatOpenTimer = 0;
+      const pending = liveChatOpeningFrame;
+      liveChatOpeningFrame = null;
+      if (pending !== liveChatFrame) return;
+      if (isLiveChatCollapsed(pending)) {
+        liveChatOpenFailed = true;
+        closeLiveChat();
+      } else scheduleLiveChatSync();
+    }, LIVE_CHAT_COLLAPSE_PENDING_TIMEOUT_MS);
+    try { button.click(); } catch {
+      clearLiveChatOpening();
+      return false;
+    }
+    return true;
+  }
+
+  function handleLiveChatClick(event) {
+    event.preventDefault();
+    event.stopPropagation();
+    const target = getLiveChatTarget(getVideoMirrorRouteId());
+    if (event.currentTarget !== liveChatButton || !target?.valid || target.frame !== liveChatFrame ||
+        videoMirrorPageSuspended || liveChatNavigationPending || !canPresentLiveChat()) return;
+    liveChatOpenFailed = false;
+    if (isLiveChatShown() || liveChatOpeningFrame) {
+      closeLiveChat();
+      return;
+    }
+    liveChatOverride = true;
+    liveChatNeedsExpand = true;
+    clearLiveChatCollapseAttempts();
+    setLiveChatVisibility();
+    syncLiveChat();
+    if (event.detail === 0 && liveChatFrame?.matches(":popover-open")) {
+      document.getElementById(LIVE_CHAT_CLOSE_ID)?.focus({ preventScroll: true });
+    }
+  }
+
+  function createLiveChatButton() {
+    const button = document.createElement("button");
+    button.id = LIVE_CHAT_BUTTON_ID;
+    button.type = "button";
+    button.className = "ytp-button";
+    button.setAttribute("aria-controls", "chat");
+    const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+    svg.setAttribute("viewBox", "0 0 36 36");
+    svg.setAttribute("width", "36");
+    svg.setAttribute("height", "36");
+    svg.setAttribute("aria-hidden", "true");
+    svg.setAttribute("focusable", "false");
+    const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+    path.setAttribute("class", "ytp-svg-fill");
+    path.setAttribute("d", "M8 7h20a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H15l-7 5v-5a2 2 0 0 1-2-2V9a2 2 0 0 1 2-2zm0 2v14h2v3l4-3h14V9H8zm4 4h12v2H12zm0 5h9v2h-9z");
+    svg.appendChild(path);
+    button.appendChild(svg);
+    button.addEventListener("click", handleLiveChatClick);
+    return button;
+  }
+
+  function updateLiveChatButton() {
+    if (!liveChatButton) return;
+    const shown = isLiveChatShown();
+    const available = canPresentLiveChat();
+    const label = !available ? "Live chat is unavailable in this fullscreen mode or browser"
+      : liveChatOpenFailed ? "Live chat is still loading. Try again."
+      : liveChatOpeningFrame ? "Opening live chat…" : shown ? "Hide live chat" : "Show live chat";
+    for (const [name, value] of Object.entries({
+      "aria-label": label, "aria-pressed": String(shown), "aria-expanded": String(shown),
+      "aria-busy": String(Boolean(liveChatOpeningFrame)), title: label,
+    })) if (liveChatButton.getAttribute(name) !== value) liveChatButton.setAttribute(name, value);
+    liveChatButton.disabled = !available;
+  }
+
+  function observeLiveChatState() {
+    liveChatStateObserver?.disconnect();
+    liveChatStateObserver = new MutationObserver(scheduleLiveChatSync);
+    const registrations = [[liveChatFrame, {
+      attributes: true, attributeFilter: ["collapsed", "hidden", "class", "style", "aria-hidden"],
+      childList: true,
+    }]];
+    if (liveChatObservedIframe) registrations.push([liveChatObservedIframe, { attributes: true, attributeFilter: ["src"] }]);
+    for (let ancestor = liveChatFrame.parentElement; ancestor; ancestor = ancestor.parentElement) {
+      registrations.push([ancestor, {
+        attributes: true, attributeFilter: ["class", "style", "hidden", "aria-hidden", "inert", "data-ywlc-empty-secondary-rail"],
+        childList: true,
+      }]);
+      if (ancestor === liveChatOwner) break;
+    }
+    replaceObserverRegistrations(liveChatStateObserver, registrations);
+  }
+
+  function syncLiveChat() {
+    if (liveChatSyncFrame) cancelAnimationFrame(liveChatSyncFrame);
+    liveChatSyncFrame = 0;
+    const videoId = getVideoMirrorRouteId();
+    if (!CONFIG.enableLiveChatButton || videoMirrorPageSuspended || liveChatNavigationPending || !videoId) {
+      resetLiveChat();
+      return;
+    }
+    if (liveChatVideoId !== videoId) {
+      resetLiveChat();
+      liveChatVideoId = videoId;
+    }
+    const target = getLiveChatTarget(videoId);
+    if (!target) {
+      clearLiveChatElements();
+      setLiveChatVisibility();
+      return;
+    }
+    const branchChanged = target.branch.length !== liveChatObservedBranch.length ||
+      target.branch.some((ancestor, index) => ancestor !== liveChatObservedBranch[index]);
+    if (target.frame !== liveChatFrame || target.owner !== liveChatOwner || branchChanged) {
+      clearLiveChatElements();
+      liveChatFrame = target.frame;
+      liveChatOwner = target.owner;
+      liveChatObservedBranch = target.branch;
+      liveChatObservedIframe = target.iframe;
+      liveChatNeedsExpand = liveChatOverride === true;
+      observeLiveChatState();
+    } else if (target.iframe !== liveChatObservedIframe) {
+      liveChatObservedIframe = target.iframe;
+      observeLiveChatState();
+    }
+    liveChatPlayer = target.player;
+    liveChatControls = target.controls;
+    liveChatValid = target.valid;
+    if (!liveChatValid) {
+      // Keep passive src/structure observation so a same-node native handoff
+      // can recover, but never leave stale chat revealed by our override.
+      clearLiveChatOpening();
+      clearLiveChatPresentation();
+      liveChatButton?.remove();
+      liveChatButton = null;
+      setLiveChatVisibility();
+      return;
+    }
+    liveChatButton ||= createLiveChatButton();
+    const mirror = target.controls.querySelector(`#${VIDEO_MIRROR_BUTTON_ID}`);
+    const anchor = target.controls.querySelector(".ytp-size-button, .ytp-fullscreen-button");
+    const parent = mirror?.parentElement || anchor?.parentElement || target.controls;
+    const next = mirror ? mirror.nextSibling : anchor || null;
+    if (next !== liveChatButton && (liveChatButton.parentElement !== parent || liveChatButton.nextSibling !== next)) {
+      parent.insertBefore(liveChatButton, next);
+    }
+    setLiveChatVisibility();
+    if (liveChatOverride === true && canPresentLiveChat()) {
+      if (isLiveChatCollapsed(liveChatFrame)) {
+        if (!liveChatOpeningFrame) {
+          const requested = liveChatNeedsExpand;
+          if (!requested || !expandLiveChat()) {
+            liveChatOpenFailed = requested;
+            closeLiveChat();
+          }
+        }
+      } else {
+        clearLiveChatOpening();
+        liveChatNeedsExpand = false;
+        if (!showLiveChatPopover()) {
+          liveChatOpenFailed = true;
+          closeLiveChat();
+        }
+      }
+    } else clearLiveChatPresentation();
+    updateLiveChatButton();
+  }
+
+  function scheduleLiveChatSync() {
+    if (!CONFIG.enableLiveChatButton || videoMirrorPageSuspended || liveChatNavigationPending || liveChatSyncFrame) return;
+    liveChatSyncFrame = requestAnimationFrame(syncLiveChat);
+  }
+
+  function mutationAffectsLiveChat(mutation) {
+    if (!CONFIG.enableLiveChatButton || videoMirrorPageSuspended || liveChatNavigationPending ||
+        !isWatchPath() || mutation.type !== "childList") return false;
+    if (mutation.target?.closest?.("ytd-comments, .ytp-caption-window-container, .ytp-progress-bar-container")) return false;
+    const selector = `ytd-live-chat-frame#chat, iframe#chatframe, #movie_player, .ytp-right-controls, #ytsmp-player-placeholder, #${VIDEO_MIRROR_BUTTON_ID}, #ytms-player-settings-button, ${VIDEO_MIRROR_ANCHOR_SELECTOR}`;
+    return [...mutation.addedNodes, ...mutation.removedNodes].some(node => {
+      if (node.nodeType !== Node.ELEMENT_NODE) return false;
+      if (node.id === LIVE_CHAT_BUTTON_ID) return node === liveChatButton && !node.isConnected;
+      return node.matches(selector) || Boolean(node.querySelector(selector));
+    });
+  }
+
+  function handleLiveChatFullscreenChange() {
+    // Re-enter the top layer after the fullscreen element so chat remains above
+    // document-root fullscreen. Never move it into player-only fullscreen.
+    try { if (liveChatFrame?.matches(":popover-open")) liveChatFrame.hidePopover(); } catch { /* Native frame replaced. */ }
+    clearLiveChatAncestorReveal();
+    scheduleLiveChatSync();
   }
 
   function syncFullscreenComments() {
@@ -3230,7 +3923,7 @@
   }
 
   function collapseLiveChatIfExpanded() {
-    if (!CONFIG.hideChat || !isWatchPath()) {
+    if (!CONFIG.hideChat || !isWatchPath() || liveChatOverride !== null) {
       return;
     }
 
@@ -3278,7 +3971,7 @@
     liveChatCollapseAttemptTimers.forEach((timerId) => clearTimeout(timerId));
     liveChatCollapseAttemptTimers = [];
 
-    if (!CONFIG.hideChat || !isWatchPath()) {
+    if (!CONFIG.hideChat || !isWatchPath() || liveChatOverride !== null) {
       return;
     }
 
@@ -3817,6 +4510,7 @@
     if (rootIntersectsSurface(root, FEED_DYNAMIC_MUTATION_SURFACE_SELECTOR)) {
       const feedApplyRoot = getFeedApplyRoot(root);
       hideUpcomingStreams(feedApplyRoot);
+      hideLiveVideos(feedApplyRoot);
       hidePayToWatchCards(feedApplyRoot);
       hideWatchedVideos(feedApplyRoot);
     }
@@ -3851,6 +4545,7 @@
 
   function applyRoutePreferences() {
     scheduleVideoMirrorSync();
+    scheduleLiveChatSync();
     ensureStyles();
     syncFullscreenComments();
     convertCurrentShortsPage();
@@ -3864,6 +4559,7 @@
   }
 
   function handleNavigateFinish() {
+    liveChatNavigationPending = false;
     preferredQualityNavigationPending = false;
     theaterModeUserDisabled = false;
     theaterModeAttemptKey = "";
@@ -3873,6 +4569,8 @@
   }
 
   function handleNavigateStart() {
+    liveChatNavigationPending = true;
+    resetLiveChat();
     preferredQualityNavigationPending = true;
     clearPreferredQualityAttempts();
     resetVideoMirror();
@@ -3995,9 +4693,11 @@
     if (applyFrame) cancelAnimationFrame(applyFrame);
     if (playerLayoutRefreshFrame) cancelAnimationFrame(playerLayoutRefreshFrame);
     if (videoMirrorFrame) cancelAnimationFrame(videoMirrorFrame);
+    if (liveChatSyncFrame) cancelAnimationFrame(liveChatSyncFrame);
     applyFrame = 0;
     playerLayoutRefreshFrame = 0;
     videoMirrorFrame = 0;
+    liveChatSyncFrame = 0;
     pendingApplyRoots.clear();
   }
 
@@ -4185,15 +4885,144 @@
     watchDynamicMutationRoots = nextWatchRoots;
   }
 
+  // Scale the native preview as one unit: storyboard background offsets, rounded
+  // corners, timestamp and chapter labels keep their original geometry. Never
+  // resize the sprite sheet, replace media, or interfere with seeking events.
+  function installTimelinePreviewSizing() {
+    const mode = CONFIG.timelinePreviewSize;
+    if (!['auto', 'small', 'medium', 'large'].includes(mode)) return;
+    const trackSelector = '.ytp-progress-bar-container, .ytp-progress-bar';
+    const previewSelector = '.ytp-tooltip.ytp-preview';
+    let player = null, track = null, frame = 0, owned = null, resizeObserver = null;
+    let suspended = false;
+    const observer = new MutationObserver(records => {
+      if (records.some(record => record.target.closest?.(previewSelector) ||
+          [...record.addedNodes, ...record.removedNodes].some(node =>
+            node.matches?.(previewSelector) || node.querySelector?.(previewSelector)))) schedule();
+    });
+    function restore() {
+      if (!owned) return;
+      for (const [name, entry] of owned.values) {
+        const style = owned.node.style;
+        if (style.getPropertyValue(name) !== entry.written || style.getPropertyPriority(name) !== 'important') continue;
+        if (entry.before) style.setProperty(name, entry.before, entry.priority);
+        else style.removeProperty(name);
+      }
+      owned = null;
+    }
+    function stop() {
+      observer.disconnect(); resizeObserver?.disconnect(); resizeObserver = null;
+      if (frame) cancelAnimationFrame(frame);
+      frame = 0; restore(); player = null; track = null;
+      window.removeEventListener('resize', schedule);
+    }
+    function observe() {
+      if (!player) return;
+      observer.observe(player, { subtree: true, childList: true, attributes: true,
+        attributeFilter: ['style', 'class', 'hidden'] });
+      if (player.parentElement) observer.observe(player.parentElement, { childList: true });
+    }
+    function write(node, name, value) {
+      if (!owned) owned = { node, values: new Map() };
+      const entry = { before: node.style.getPropertyValue(name),
+        priority: node.style.getPropertyPriority(name), written: '' };
+      node.style.setProperty(name, value, 'important');
+      // CSSOM canonicalises zero translations and transform origins. Compare
+      // read-back values when restoring, not the unnormalised input string.
+      entry.written = node.style.getPropertyValue(name);
+      owned.values.set(name, entry);
+    }
+    function update() {
+      frame = 0;
+      observer.disconnect(); restore();
+      if (!player?.isConnected || !track?.isConnected || !player.contains(track) ||
+          document.hidden || !track.matches(':hover')) { stop(); return; }
+      try {
+        const previews = [...player.querySelectorAll(previewSelector)].filter(node =>
+          node.getClientRects().length && getComputedStyle(node).visibility !== 'hidden');
+        if (previews.length !== 1) return;
+        const node = previews[0], image = node.querySelector('.ytp-tooltip-bg');
+        if (!image || !image.offsetWidth || !node.offsetWidth || !node.offsetHeight) return;
+        const nativeStyle = getComputedStyle(node);
+        // Do not compete with a new native animation or another extension's
+        // transforms; unknown preview layouts retain YouTube's presentation.
+        if (nativeStyle.transform !== 'none' || nativeStyle.scale !== 'none' || nativeStyle.translate !== 'none') return;
+        const box = player.getBoundingClientRect(), native = node.getBoundingClientRect();
+        const trackBox = track.getBoundingClientRect();
+        const sx = box.width / player.offsetWidth, sy = box.height / player.offsetHeight;
+        if (!(sx > 0 && sy > 0) || !native.width || !native.height) return;
+        // Work in rendered CSS pixels, not screen.width or devicePixelRatio.
+        // This also accommodates the transformed scroll miniplayer.
+        const availableWidth = Math.min(box.right, innerWidth) - Math.max(box.left, 0) - 16;
+        const availableHeight = Math.min(trackBox.top, box.bottom, innerHeight) - Math.max(box.top, 0) - 16;
+        if (availableWidth < 120 || availableHeight < 80) return;
+        const floating = player.parentElement === document.body &&
+          document.body.classList.contains('ytsmp-scroll-miniplayer-active') &&
+          !document.fullscreenElement && !player.classList.contains('ytp-fullscreen');
+        const manualWidth = ({ small: 240, medium: 320, large: 480 })[mode];
+        // The Suite floats by resizing/reparenting the player, not by scaling
+        // its whole layout. Fixed desktop targets would dominate that picture.
+        // Keep the chosen relative size while floating; main/fullscreen targets
+        // and YouTube's native sizing option remain unchanged.
+        const desired = floating ? box.width * (mode === 'auto' ? .2 : manualWidth / 1200) :
+          mode === 'auto' ? Math.max(192, Math.min(480, box.width * .2)) : manualWidth;
+        const previewHeight = floating ? Math.min(availableHeight, box.height * .45) : availableHeight;
+        const scale = Math.min(desired / (image.offsetWidth * sx),
+          availableWidth / native.width, previewHeight / native.height);
+        if (!Number.isFinite(scale) || scale <= 0) return;
+        const left = native.left + native.width * (1 - scale) / 2;
+        const top = native.bottom - native.height * scale;
+        const minLeft = Math.max(box.left, 0) + 8;
+        const maxLeft = Math.min(box.right, innerWidth) - native.width * scale - 8;
+        const minTop = Math.max(box.top, 0) + 8;
+        const maxTop = Math.min(trackBox.top, box.bottom, innerHeight) - native.height * scale - 8;
+        const dx = (Math.max(minLeft, Math.min(left, maxLeft)) - left) / sx;
+        const dy = (Math.max(minTop, Math.min(top, maxTop)) - top) / sy;
+        write(node, 'transform-origin', '50% 100%');
+        write(node, 'scale', String(scale));
+        write(node, 'translate', `${dx}px ${dy}px`);
+      } finally { observe(); }
+    }
+    function schedule() {
+      if (player && !frame) frame = requestAnimationFrame(update);
+    }
+    document.addEventListener('pointerover', event => {
+      if (suspended || !isWatchPath()) return;
+      const hit = event.target.closest?.(trackSelector);
+      const nextPlayer = hit?.closest('#movie_player');
+      if (!nextPlayer || nextPlayer.closest('ytd-miniplayer, ytd-video-preview, ytd-reel-video-renderer')) return;
+      const nextTrack = hit.closest('.ytp-progress-bar-container') || hit;
+      if (track === nextTrack) return;
+      stop(); player = nextPlayer; track = nextTrack; observe();
+      if (typeof ResizeObserver === 'function') {
+        resizeObserver = new ResizeObserver(schedule); resizeObserver.observe(player);
+      }
+      window.addEventListener('resize', schedule, { passive: true }); schedule();
+    }, true);
+    document.addEventListener('pointerout', event => {
+      if (track && track.contains(event.target) && !track.contains(event.relatedTarget)) stop();
+    }, true);
+    document.addEventListener('visibilitychange', () => { if (document.hidden) stop(); });
+    document.addEventListener('fullscreenchange', schedule, true);
+    window.addEventListener('blur', stop);
+    window.addEventListener('yt-navigate-start', () => { suspended = true; stop(); }, true);
+    window.addEventListener('yt-navigate-finish', () => { suspended = false; }, true);
+    window.addEventListener('pagehide', () => { suspended = true; stop(); }, true);
+    window.addEventListener('pageshow', () => { suspended = false; }, true);
+  }
+
+  installTimelinePreviewSizing();
   applyRoutePreferences();
 
   const observer = new MutationObserver((mutations) => {
     const roots = new Set();
     let watchDynamicRootsChanged = false;
     let videoMirrorChanged = false;
+    let liveChatChanged = false;
 
     for (const mutation of mutations) {
       videoMirrorChanged ||= mutationAffectsVideoMirror(mutation);
+      liveChatChanged ||= mutationAffectsLiveChat(mutation);
       if (
         mutation.addedNodes &&
         mutation.addedNodes.length &&
@@ -4209,6 +5038,7 @@
 
     roots.forEach((root) => scheduleApply(root));
     if (videoMirrorChanged) scheduleVideoMirrorSync();
+    if (liveChatChanged) scheduleLiveChatSync();
     if (watchDynamicRootsChanged) {
       configureDynamicMutationObserver();
     }
@@ -4243,6 +5073,7 @@
   document.addEventListener("fullscreenchange", syncFullscreenComments, true);
   document.addEventListener("fullscreenchange", hideVideoMirrorTooltip, true);
   document.addEventListener("fullscreenchange", scheduleVideoMirrorSync, true);
+  if (CONFIG.enableLiveChatButton) document.addEventListener("fullscreenchange", handleLiveChatFullscreenChange, true);
   document.addEventListener("loadedmetadata", handleVideoMirrorMetadata, true);
   document.addEventListener("keydown", handleVideoMirrorKeyDown);
   document.addEventListener("mousedown", handleMouseDown, true);
@@ -4258,6 +5089,7 @@
     "yt-page-data-updated",
     () => {
       scheduleVideoMirrorSync();
+      scheduleLiveChatSync();
       schedulePreferredQualityAttempts();
       syncFullscreenComments();
       configureDynamicMutationObserver();
@@ -4271,6 +5103,7 @@
     "pagehide",
     () => {
       videoMirrorPageSuspended = true;
+      resetLiveChat();
       clearPreferredQualityAttempts();
       resetVideoMirror();
       document.documentElement?.removeAttribute(FULLSCREEN_COMMENTS_ATTRIBUTE);
@@ -4286,8 +5119,10 @@
     "pageshow",
     () => {
       videoMirrorPageSuspended = false;
+      liveChatNavigationPending = false;
       schedulePreferredQualityAttempts();
       scheduleVideoMirrorSync();
+      scheduleLiveChatSync();
       ensureStyles();
       syncFullscreenComments();
       configureDynamicMutationObserver();

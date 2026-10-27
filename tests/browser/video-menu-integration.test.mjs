@@ -6,7 +6,8 @@ import { launchFixtureBrowser, waitForSuiteHealth } from './fixture-browser.mjs'
 const SUITE = readFileSync(new URL('../../youtube-master-suite.user.js', import.meta.url), 'utf8');
 const MANIFEST = JSON.parse(readFileSync(new URL('../../release-manifest.json', import.meta.url), 'utf8'));
 const FIXTURE = readFileSync(new URL('./watch-page.html', import.meta.url), 'utf8')
-  .replace('<html lang="en" dark>', '<html lang="en-GB" dark>');
+  .replace('<html lang="en" dark>', '<html lang="en-GB" dark>')
+  .replace('</head>', '<style>tp-yt-iron-dropdown[hidden]{display:none!important}</style></head>');
 let browser;
 before(async () => { browser = await launchFixtureBrowser(); }, { timeout: 30000 });
 after(async () => { await browser?.close(); });
@@ -19,6 +20,7 @@ for (const sheet of [false, true]) {
       ? route.fulfill({ contentType: 'text/html', body: FIXTURE }) : route.abort());
     await context.addInitScript({ content: SUITE });
     const page = await context.newPage();
+    page.setDefaultTimeout(5000);
     const errors = [];
     page.on('pageerror', error => errors.push(error.message));
     t.after(async () => { try { assert.deepEqual(errors, []); } finally { await context.close(); } });
@@ -122,13 +124,18 @@ for (const sheet of [false, true]) {
     await page.getByRole('menuitem', { name: 'Channel tools', exact: true }).click();
     assert.equal(await page.getByRole('menuitem', { name: 'Report', exact: true }).isVisible(), true);
     assert.deepEqual(await page.evaluate(() => menuIntegration.calls), []);
-    await page.getByRole('menuitem', { name: 'Filter channel uploads…', exact: true }).click();
+    await page.getByRole('menuitem', { name: 'Filter channel uploads', exact: true }).click();
     await page.locator('#ytms-age-dialog').waitFor();
+    assert.equal(await page.locator('#ytms-settings-dialog').isVisible(), true);
+    assert.equal(await page.locator('#ytms-tab-channels').getAttribute('aria-selected'), 'true');
+    assert.equal(await page.locator('#ytms-age-dialog').evaluate(node => node.localName), 'section');
+    assert.equal(await page.locator('dialog[open]').count(), 1, 'Only the main settings modal is open');
     assert.equal(await page.getByLabel('Channel ID or channel URL', { exact: true }).inputValue(), 'UCabcdefghijklmnopqrstuv');
     assert.equal(await page.getByLabel('Channel name', { exact: true }).inputValue(), 'Daily news');
     assert.equal(await page.evaluate(() => localStorage.getItem('yt-master-suite.channel-age.v1')), null);
     assert.deepEqual(await page.evaluate(() => menuIntegration.calls), []);
     await page.locator('#ytms-age-cancel').click();
+    assert.equal(await page.locator('#ytms-settings-dialog').isVisible(), false, 'Context-menu Cancel dismisses its settings window');
     await page.locator('#integration-trigger').click();
     await page.locator('[data-ytms-video-menu="1"]').waitFor();
     assert.equal(await page.getByRole('menuitem', { name: 'Play next in queue', exact: true }).count(), 1);
@@ -147,13 +154,69 @@ for (const sheet of [false, true]) {
       await page.locator('#integration-trigger').click();
       await page.locator('[data-ytms-video-menu="1"]').waitFor();
       await page.getByRole('menuitem', { name: 'Channel tools', exact: true }).click();
-      await page.getByRole('menuitem', { name: 'Filter channel uploads…', exact: true }).click();
+      await page.getByRole('menuitem', { name: 'Filter channel uploads', exact: true }).click();
       await page.locator('#ytms-age-dialog').waitFor();
       assert.equal(await page.getByLabel('Channel ID or channel URL', { exact: true }).inputValue(), 'UCabcdefghijklmnopqrstuv', tag);
       await page.locator('#ytms-age-cancel').click();
       assert.deepEqual(await page.evaluate(() => menuIntegration.calls), ['Add to queue']);
       assert.equal(await page.evaluate(() => localStorage.getItem('yt-master-suite.channel-age.v1')), null);
     }
+    const unrelatedRule = { channelId: 'UCABCDEFGHIJKLMNOPQRSTUV', name: 'Other channel',
+      maxAge: 2, unit: 'months', enabled: true, blocked: false };
+    await page.evaluate(rule => {
+      document.dispatchEvent(new CustomEvent('yt-navigate-start', { bubbles: true }));
+      history.pushState({}, '', '/');
+      const browse = document.createElement('ytd-browse');
+      const grid = document.createElement('ytd-rich-grid-renderer');
+      const contents = document.createElement('div'); contents.id = 'contents'; contents.className = 'ytd-rich-grid-renderer';
+      grid.append(contents); browse.append(grid); document.body.append(browse);
+      const previous = document.getElementById('integration-card');
+      const card = document.createElement('yt-lockup-view-model');
+      card.id = previous.id; card.style.cssText = previous.style.cssText;
+      card.componentProps = previous.componentProps;
+      card.append(...previous.childNodes);
+      const date = document.createElement('div'); date.textContent = '2 weeks ago'; card.append(date);
+      const thumbnail = document.createElement('img'); thumbnail.alt = 'Native thumbnail'; card.prepend(thumbnail);
+      previous.remove(); contents.append(card);
+      menuIntegration.originalCardNodes = [...card.childNodes];
+      menuIntegration.originalVideo = document.querySelector('#movie_player video');
+      localStorage.setItem('yt-master-suite.channel-age.v1', JSON.stringify({ version: 1, rules: [rule] }));
+      window.dispatchEvent(new CustomEvent('yt-master-channel-age-changed'));
+      document.dispatchEvent(new CustomEvent('yt-navigate-finish', { bubbles: true }));
+    }, unrelatedRule);
+    await page.locator('#integration-trigger').click();
+    await page.locator('[data-ytms-video-menu="1"]').waitFor();
+    await page.getByRole('menuitem', { name: 'Channel tools', exact: true }).click();
+    assert.deepEqual(await page.getByRole('menuitem').allTextContents(),
+      ['Back', 'Filter channel uploads', 'Don’t recommend channel', 'Report']);
+    await page.getByRole('menuitem', { name: 'Filter channel uploads', exact: true }).click();
+    await page.locator('#ytms-age-dialog').waitFor();
+    await page.locator('.ytms-age-fields:visible').getByLabel('Maximum age', { exact: true }).fill('0');
+    await page.locator('#ytms-age-save').click();
+    assert.equal(await page.locator('#ytms-settings-dialog').isVisible(), true, 'Validation failure keeps the contextual editor open');
+    assert.equal(await page.locator('.ytms-age-fields:visible').getByLabel('Maximum age', { exact: true }).inputValue(), '0');
+    assert.deepEqual(await page.evaluate(() => JSON.parse(localStorage.getItem('yt-master-suite.channel-age.v1')).rules), [unrelatedRule]);
+    await page.locator('.ytms-age-fields:visible').getByLabel('Maximum age', { exact: true }).fill('1');
+    await page.locator('#ytms-age-save').click();
+    await page.locator('#ytms-age-dialog').waitFor({ state: 'hidden' });
+    assert.equal(await page.locator('#ytms-settings-dialog').isVisible(), false, 'Successful contextual Save closes the main settings window');
+    const confirmation = page.locator('#integration-card > .ytms-channel-filter-confirmation');
+    await confirmation.waitFor();
+    assert.match(await confirmation.textContent(), /Hide uploads older than 1 week\./);
+    assert.deepEqual(await page.evaluate(() => menuIntegration.calls), ['Add to queue']);
+    assert.equal(await page.evaluate(() => menuIntegration.originalCardNodes.every(node =>
+      node.parentElement === document.getElementById('integration-card')) &&
+      document.querySelector('#movie_player video') === menuIntegration.originalVideo), true);
+    assert.equal(await page.locator('#integration-card img').isVisible(), false);
+    await confirmation.getByRole('button', { name: 'Undo', exact: true }).click();
+    await confirmation.waitFor({ state: 'detached' });
+    await page.locator('#integration-trigger').waitFor({ state: 'visible' });
+    assert.deepEqual(await page.evaluate(() => JSON.parse(localStorage.getItem('yt-master-suite.channel-age.v1')).rules), [unrelatedRule]);
+    assert.equal(await page.evaluate(() => menuIntegration.originalCardNodes.every(node =>
+      node.parentElement === document.getElementById('integration-card')) &&
+      document.querySelector('#movie_player video') === menuIntegration.originalVideo), true);
+    assert.equal(await page.locator('#integration-card').getAttribute('data-ytms-channel-filter-confirmation'), null);
+    assert.deepEqual(await page.evaluate(() => menuIntegration.calls), ['Add to queue']);
     assert.equal(await page.locator('html').getAttribute('data-yt-master-runtime-errors'), null);
   });
  }

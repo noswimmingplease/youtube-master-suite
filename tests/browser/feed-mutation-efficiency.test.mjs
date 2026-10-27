@@ -126,7 +126,7 @@ test("stable hidden-card metadata changes make no redundant filter attribute wri
   assert.equal(await page.evaluate(() => window.feedAudit.scans), 0);
 });
 
-for (const [attribute, reason] of [["data-ytppl-watched-hidden", "Watched"], ["data-ytppl-upcoming-hidden", "Upcoming"], ["data-ytppl-pay-to-watch-hidden", "Pay to watch"]]) {
+for (const [attribute, reason] of [["data-ytppl-watched-hidden", "Watched"], ["data-ytppl-live-hidden", "Live"], ["data-ytppl-upcoming-hidden", "Upcoming"], ["data-ytppl-pay-to-watch-hidden", "Pay to watch"]]) {
   test(`external ${attribute} changes invalidate the filtered summary`, async t => {
     const page = await open(t);
     await page.evaluate(attribute => document.getElementById("card-0").setAttribute(attribute, "1"), attribute);

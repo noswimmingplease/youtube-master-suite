@@ -8,8 +8,8 @@
     },
     "feedUiCleaner": {
       "path": "sources/modules/youtube-feed-ui-cleaner.user.js",
-      "version": "2.13",
-      "sha256": "68e5c0699cd3ca8f9d4b5d17b3d9e32dd767f473b93abaca2396cb964cb856cc"
+      "version": "2.16",
+      "sha256": "e45ef58c9897bf5c266e10bc36e4de744b321cb91c02376b865abba12f070bf0"
     },
     "miniplayerButtonRestorer": {
       "path": "sources/modules/youtube-miniplayer-button-restorer.user.js",
@@ -23,8 +23,8 @@
     },
     "playerPreferencesLite": {
       "path": "sources/modules/youtube-player-preferences-lite.user.js",
-      "version": "1.76",
-      "sha256": "4bb93ee68438326a02beeb3d00604b79c4af5bc816b92f01700c1cc818aaa86b"
+      "version": "1.91",
+      "sha256": "d91a91a3e9f0415686ed9418bb664ab048fbedca9a5c5b95d5ce156ce538f201"
     },
     "scrollMiniplayer": {
       "path": "sources/modules/youtube-scroll-miniplayer.user.js",
@@ -33,13 +33,13 @@
     },
     "suiteSettings": {
       "path": "sources/modules/youtube-suite-settings.user.js",
-      "version": "1.31",
-      "sha256": "feb829c93886ce1669cb1fbc3bd8eeab083545c2a1d78d60353171a64fe5247e"
+      "version": "1.41",
+      "sha256": "3e013643d09c74fec06f63cce8043ef0f9c92f4868ceb17d9075f2415843bedd"
     },
     "watchLayoutCleaner": {
       "path": "sources/modules/youtube-watch-layout-cleaner.user.js",
-      "version": "1.46",
-      "sha256": "15be57f79a0cf58a7147d0d1ba6aa10ac957ce5f9d8ee998f23fd84776b7fbde"
+      "version": "1.61",
+      "sha256": "25d2e3b16d43aca52ec22077d082d7dcdd42b4ec9ff62db858fbb5654e51155c"
     }
   }
 }

@@ -12,6 +12,20 @@ function fixture(seed = {}) {
   return { storage, data, settings: createSuiteSettings(() => storage, () => true) };
 }
 
+test('timeline preview defaults to automatic and validates, saves and maps bounded choices', () => {
+  const { settings, storage } = fixture();
+  assert.equal(settings.initial.timelinePreviewSize, 'auto');
+  for (const size of ['auto', 'small', 'medium', 'large', 'native']) {
+    assert.equal(settings.validate({ timelinePreviewSize: size }).timelinePreviewSize, size);
+    assert.equal(settings.save({ ...settings.defaults, timelinePreviewSize: size }).ok, true);
+    const reloaded = createSuiteSettings(() => storage, () => true);
+    assert.equal(reloaded.overrides('playerPreferencesLite', { feedFilterProfiles: {} }).timelinePreviewSize, size);
+  }
+  for (const size of ['9999', 480, null, {}, 'scale(999)', 'url(javascript:bad)']) {
+    assert.equal(settings.validate({ timelinePreviewSize: size }).timelinePreviewSize, 'auto');
+  }
+});
+
 test("settings preserve current defaults and ignore unrecognised or unsafe values", () => {
   const { settings } = fixture();
   assert.equal(settings.initial.viewerColour, "#82A3E6");
@@ -34,6 +48,37 @@ test("malformed, oversized and unsupported storage records safely fall back", ()
   const unavailable = createSuiteSettings(() => { throw Error("denied"); }, () => false);
   assert.deepEqual(unavailable.initial, unavailable.defaults);
   assert.equal(unavailable.save(unavailable.defaults).ok, false);
+});
+
+test('live-card controls preserve older defaults and reject non-boolean settings', () => {
+  const { settings } = fixture({ 'yt-master-suite.settings.v1': JSON.stringify({ version: 1,
+    values: { hideWatchedVideos: false, hideChat: false } }) });
+  assert.equal(settings.defaults.hideLiveVideos, false);
+  assert.equal(settings.defaults.hideUpcomingStreams, true);
+  assert.equal(settings.initial.hideLiveVideos, false);
+  assert.equal(settings.initial.hideUpcomingStreams, true);
+  assert.equal(settings.initial.hideWatchedVideos, false);
+  assert.equal(settings.initial.hideChat, false);
+  for (const value of ['true', 'false', 0, 1, null, [], {}]) {
+    assert.equal(settings.validate({ hideLiveVideos: value }).hideLiveVideos, false);
+    assert.equal(settings.validate({ hideUpcomingStreams: value }).hideUpcomingStreams, true);
+  }
+});
+
+test('live and upcoming card controls save and map independently after reload', () => {
+  const { settings, storage } = fixture();
+  const config = { feedFilterProfiles: { home: { watchedVideos: true, upcomingStreams: true } } };
+  assert.equal(settings.save({ ...settings.defaults, hideLiveVideos: true, hideUpcomingStreams: false }).ok, true);
+  assert.equal(settings.initial.hideLiveVideos, false);
+  assert.equal(settings.initial.hideUpcomingStreams, true);
+  const reloaded = createSuiteSettings(() => storage, () => true);
+  assert.equal(reloaded.read().hideLiveVideos, true);
+  assert.equal(reloaded.read().hideUpcomingStreams, false);
+  const mapped = reloaded.overrides('playerPreferencesLite', config);
+  assert.equal(mapped.hideLiveVideos, true);
+  assert.equal(mapped.hideUpcomingStreams, false);
+  assert.equal(mapped.feedFilterProfiles.home.upcomingStreams, true, 'Route profiles stay independent of the global switches');
+  assert.deepEqual(config, { feedFilterProfiles: { home: { watchedVideos: true, upcomingStreams: true } } });
 });
 
 test("button preferences migrate older records and validate icon choices without losing existing settings", () => {
@@ -88,6 +133,21 @@ test("menu order is a bounded whitelist without duplicate, unknown or executable
   const validated = settings.validate({});
   validated.menuItemOrder.reverse();
   assert.deepEqual(settings.initial.menuItemOrder, settings.defaults.menuItemOrder);
+});
+
+test("previous default menu order adopts filter-first channel tools without changing customised orders", () => {
+  const previous = ['playNext', 'addToQueue', 'watchLater', 'savePlaylist', 'download', 'share',
+    'notInterested', 'dontRecommend', 'report', 'channelAge', 'channelTools'];
+  const key = 'yt-master-suite.settings.v1';
+  const { settings } = fixture({ [key]: JSON.stringify({ version: 1, values: {
+    menuItemOrder: previous, watchedThreshold: '95', menuShowDownload: true,
+  } }) });
+  assert.deepEqual(settings.initial.menuItemOrder.slice(-4), ['channelAge', 'dontRecommend', 'report', 'channelTools']);
+  assert.equal(settings.initial.watchedThreshold, '95');
+  assert.equal(settings.initial.menuShowDownload, true);
+  const customised = ['share', ...previous.filter(id => id !== 'share')];
+  assert.deepEqual(settings.validate({ menuItemOrder: customised }).menuItemOrder, customised);
+  assert.deepEqual(previous.slice(-4), ['dontRecommend', 'report', 'channelAge', 'channelTools']);
 });
 
 test("menu visibility and order persist for reload without modifying active preferences or module overrides", () => {
@@ -215,6 +275,46 @@ test("both settings buttons cannot be saved as Off, and a manually hidden pair r
   assert.equal(settings.read().playerSettingsIcon, 'off');
 });
 
+test('live chat button defaults on in older records and accepts only boolean choices', () => {
+  const { settings } = fixture({ 'yt-master-suite.settings.v1': JSON.stringify({ version: 1, values: {
+    hideChat: false, mirrorButton: false, preferredVideoQuality: 'hd1080',
+  } }) });
+  assert.equal(settings.defaults.liveChatButton, true);
+  assert.equal(settings.initial.liveChatButton, true);
+  assert.equal(settings.initial.hideChat, false);
+  assert.equal(settings.initial.mirrorButton, false);
+  assert.equal(settings.initial.preferredVideoQuality, 'hd1080');
+  for (const value of ['true', 'false', 0, 1, null, [], {}]) {
+    assert.equal(settings.validate({ liveChatButton: value }).liveChatButton, true);
+  }
+  assert.equal(settings.validate({ liveChatButton: false }).liveChatButton, false);
+  assert.equal(settings.validate({ liveChatButton: true }).liveChatButton, true);
+});
+
+test('live chat button preference persists independently of chat visibility and the running snapshot', () => {
+  const { settings, storage, data } = fixture();
+  const config = { feedFilterProfiles: {} };
+  const original = settings.overrides('playerPreferencesLite', config);
+  assert.equal(original.enableLiveChatButton, true);
+  assert.equal(original.hideChat, true);
+  assert.equal(settings.save({ ...settings.defaults, liveChatButton: false, hideChat: false }).ok, true);
+  assert.equal(settings.read().liveChatButton, false);
+  assert.equal(JSON.parse(data.get(settings.key)).values.liveChatButton, false);
+  assert.deepEqual(settings.overrides('playerPreferencesLite', config), original);
+  const next = createSuiteSettings(() => storage, () => true);
+  assert.deepEqual(next.overrides('playerPreferencesLite', config), {
+    ...original, enableLiveChatButton: false, hideChat: false,
+  });
+  assert.deepEqual(next.overrides('watchLayoutCleaner', { relatedVideosHideBreakpointPx: 1400 }), {
+    relatedVideosHideBreakpointPx: 1400, showDeArrowQueueButton: true,
+  });
+  assert.deepEqual(next.overrides('pageCoherence', {}), {});
+  assert.equal(next.save({ ...next.read(), liveChatButton: next.defaults.liveChatButton }).ok, true);
+  const restored = createSuiteSettings(() => storage, () => true);
+  assert.equal(restored.initial.liveChatButton, true);
+  assert.equal(restored.initial.hideChat, false);
+});
+
 test('fullscreen action-strip hiding defaults off and migrates older records without changing existing choices', () => {
   const { settings } = fixture({ 'yt-master-suite.settings.v1': JSON.stringify({ version: 1, values: {
     hideChat: false, showRydTooltipBar: true, preferredVideoQuality: 'hd1080',
@@ -326,6 +426,26 @@ test("corner preferences use the existing synchronised corner, including later a
   assert.equal(settings.read().corner, "top-left");
 });
 
+test('failed settings or corner writes preserve concurrent settings saves and clears', () => {
+  for (const existing of [null, JSON.stringify({ version:1, values:{ hideChat:false } })]) {
+    for (const stage of ['settings', 'corner']) {
+      for (const concurrent of [null, JSON.stringify({ version:1, values:{ hideRelated:false } })]) {
+        const key='yt-master-suite.settings.v1';
+        const {settings,storage,data}=fixture(existing===null?{}:{[key]:existing});
+        storage.setItem=(target,value)=>{
+          if ((stage==='settings' && target===key) || (stage==='corner' && target===settings.cornerKey)) {
+            if (concurrent===null) data.delete(key); else data.set(key,concurrent);
+            throw Error('quota');
+          }
+          data.set(target,value);
+        };
+        assert.equal(settings.save({...settings.defaults,corner:'bottom-left'}).ok,false);
+        assert.equal(data.get(key)??null,concurrent,`${stage} rollback must preserve a newer save or clear`);
+      }
+    }
+  }
+});
+
 test("a failed corner write rolls back the settings record and reports failure", () => {
   const { settings, storage, data } = fixture();
   storage.setItem = (key, value) => {
@@ -374,7 +494,7 @@ test("every exposed feature toggle maps to existing configuration without touchi
   settings.save({ ...disabled, watchedThreshold: "95", wheelStep: "2" });
   const next = createSuiteSettings(() => storage, () => true);
   const player = next.overrides("playerPreferencesLite", { feedFilterProfiles: { home: { watchedVideos: true }, history: { watchedVideos: false } } });
-  for (const key of ["hideShorts", "hideWatchedVideos", "useReadableYellowCaptions", "enableVideoMirrorButton", "enableTheaterMode", "enablePlayerWheelVolume", "hideRelatedVideos", "hideChat", "hideInfoCards", "hideEndScreenRecommendationGrid", "enableFullscreenComments"]) {
+  for (const key of ["hideShorts", "hideWatchedVideos", "hideLiveVideos", "hideUpcomingStreams", "useReadableYellowCaptions", "enableVideoMirrorButton", "enableLiveChatButton", "enableTheaterMode", "enablePlayerWheelVolume", "hideRelatedVideos", "hideChat", "hideInfoCards", "hideEndScreenRecommendationGrid", "enableFullscreenComments"]) {
     assert.equal(player[key], false, key);
   }
   assert.equal(player.watchedVideoThresholdPercent, 95);

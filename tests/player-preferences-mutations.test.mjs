@@ -293,6 +293,7 @@ function createDynamicApplyHarness() {
     "clearLegacyHiddenWatchActionButtons",
     "rewriteShortsLinks",
     "hideUpcomingStreams",
+    "hideLiveVideos",
     "hidePayToWatchCards",
     "hideWatchedVideos",
     "normaliseReturnYoutubeLikeButtons",
@@ -378,6 +379,7 @@ test("feed-card mutations do not run watch-page handlers", () => {
 
   assert.deepEqual(harness.calls, [
     "hideUpcomingStreams",
+    "hideLiveVideos",
     "hidePayToWatchCards",
     "hideWatchedVideos",
   ]);
@@ -442,6 +444,7 @@ test("a full document reconciliation retains every dynamic preference", () => {
     "clearLegacyHiddenWatchActionButtons",
     "rewriteShortsLinks",
     "hideUpcomingStreams",
+    "hideLiveVideos",
     "hidePayToWatchCards",
     "hideWatchedVideos",
     "normaliseReturnYoutubeLikeButtons",

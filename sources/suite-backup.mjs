@@ -2,14 +2,18 @@
 // no account, browsing history, network, file or clipboard access.
 export function createSuiteBackup(getStorage, settings, channelAge) {
   const format = "youtube-master-suite-backup";
+  const channelFormat = "youtube-master-suite-channel-filters";
   const limit = 128 * 1024;
   const keys = [settings.key, settings.cornerKey, channelAge.key];
   const settingNames = Object.keys(settings.defaults);
-  // Version 1 backups from before this opt-in setting remain importable.
-  // Keep every pre-existing field required, and still validate the new field if present.
-  const requiredSettingNames = settingNames.filter(name => name !== "hideFullscreenQuickActions");
+  // Older version 1 backups gain defaults for these newer preferences only.
+  // Keep every pre-existing field required and validate optional fields if present.
+  const requiredSettingNames = settingNames.filter(name =>
+    name !== "hideFullscreenQuickActions" && name !== "liveChatButton" &&
+    name !== "hideLiveVideos" && name !== "hideUpcomingStreams" && name !== "timelinePreviewSize");
   const ruleNames = ["channelId", "name", "maxAge", "unit", "enabled", "blocked"];
   const previews = new WeakMap();
+  const channelPreviews = new WeakMap();
   const warning = "Restoring replaces all saved Suite settings and channel upload filters. Channel names and IDs are included; history and account data are not.";
   const same = (left, right) => JSON.stringify(left) === JSON.stringify(right);
   const clone = value => JSON.parse(JSON.stringify(value));
@@ -29,6 +33,9 @@ export function createSuiteBackup(getStorage, settings, channelAge) {
     checkObject(input, settingNames, complete ? requiredSettingNames : []);
     const values = settings.validate(input);
     for (const name of Object.keys(input)) {
+      // This exact earlier default is a supported preference migration, not a
+      // malformed custom order. Keep all other normalisation failures rejected.
+      if (name === "menuItemOrder" && settings.isPreviousDefaultMenuOrder(input[name])) continue;
       if (!same(input[name], values[name])) fail(`The backup contains an invalid setting: ${name}.`);
     }
     return values;
@@ -51,6 +58,15 @@ export function createSuiteBackup(getStorage, settings, channelAge) {
     return keys.map(key => storage.getItem(key));
   }
 
+  function currentChannelRules(raw) {
+    if (raw === null) return [];
+    if (typeof raw !== "string" || raw.length > 65536) fail("Saved channel filters are too large to back up safely.");
+    const record = JSON.parse(raw);
+    checkObject(record, ["version", "rules"]);
+    if (record.version !== 1) fail("Saved channel filters use an unsupported version.");
+    return checkedRules(record.rules, false);
+  }
+
   function currentData(raw) {
     let values = settings.validate({});
     let rules = [];
@@ -62,13 +78,7 @@ export function createSuiteBackup(getStorage, settings, channelAge) {
       values = checkedSettings(record.values, false);
     }
     if (raw[1] !== null) values = checkedSettings({ ...values, corner: raw[1] });
-    if (raw[2] !== null) {
-      if (raw[2].length > 65536) fail("Saved channel filters are too large to back up safely.");
-      const record = JSON.parse(raw[2]);
-      checkObject(record, ["version", "rules"]);
-      if (record.version !== 1) fail("Saved channel filters use an unsupported version.");
-      rules = checkedRules(record.rules, false);
-    }
+    rules = currentChannelRules(raw[2]);
     return { values, rules };
   }
 
@@ -181,5 +191,110 @@ export function createSuiteBackup(getStorage, settings, channelAge) {
     return { ok: true, values: clone(staged.next.values), rules: clone(staged.next.rules), summary: staged.summary };
   }
 
-  return Object.freeze({ exportData, preview, restore });
+  function exportChannels() {
+    try {
+      const storage = getStorage();
+      const raw = storage.getItem(channelAge.key);
+      const rules = currentChannelRules(raw);
+      if (storage.getItem(channelAge.key) !== raw) fail("Saved channel filters changed while preparing the export. Please try again.");
+      const text = JSON.stringify({ format: channelFormat, version: 1, language: "en-GB", channelFilters: rules }, null, 2);
+      return { ok: true, text, count: rules.length };
+    } catch (error) {
+      return { ok: false, error: error?.message || "Channel filters could not be exported. Browser storage is unavailable." };
+    }
+  }
+
+  function previewChannels(text, mode = "merge") {
+    try {
+      if (mode !== "merge" && mode !== "replace") fail("Choose Merge or Replace for the channel import.");
+      if (typeof text !== "string" || text.length > limit || !text.trim() || new TextEncoder().encode(text).length > limit) {
+        fail("Choose a channel export no larger than 128 KiB.");
+      }
+      const record = JSON.parse(text);
+      checkObject(record, ["format", "version", "language", "channelFilters"]);
+      if (record.format !== channelFormat || record.version !== 1 || record.language !== "en-GB") {
+        fail("This is not a supported YouTube Master Suite channel export. Use Support for full settings backups.");
+      }
+      const imported = checkedRules(record.channelFilters);
+      const storage = getStorage();
+      const raw = storage.getItem(channelAge.key);
+      const previous = currentChannelRules(raw);
+      const importedById = new Map(imported.map(rule => [rule.channelId, rule]));
+      const before = new Map(previous.map(rule => [rule.channelId, rule]));
+      const next = mode === "replace" ? imported : [
+        ...previous.map(rule => importedById.get(rule.channelId) || rule),
+        ...imported.filter(rule => !before.has(rule.channelId)),
+      ];
+      if (next.length > 100) fail("Merging would exceed 100 channel filters. Remove some channels or choose Replace.");
+      if (storage.getItem(channelAge.key) !== raw) fail("Saved channel filters changed while preparing the import preview. Please try again.");
+      const after = new Set(next.map(rule => rule.channelId));
+      const summary = frozen({ mode, orderChanged: !same(previous.map(rule => rule.channelId), next.map(rule => rule.channelId)), filters: {
+        added: next.filter(rule => !before.has(rule.channelId)).length,
+        changed: next.filter(rule => before.has(rule.channelId) && !same(before.get(rule.channelId), rule)).length,
+        removed: previous.filter(rule => !after.has(rule.channelId)).length,
+        unchanged: next.filter(rule => before.has(rule.channelId) && same(before.get(rule.channelId), rule)).length,
+        total: next.length,
+      }, warning: mode === "merge"
+        ? "Import updates matching channel IDs and adds new channels. Other saved channels and all Suite preferences are kept."
+        : "Import replaces the complete saved channel-filter list. Channels not in this file are removed; all Suite preferences are kept." });
+      const token = Object.freeze({});
+      channelPreviews.set(token, { rules: frozen(clone(next)), raw, summary });
+      return { ok: true, preview: token, summary };
+    } catch (error) {
+      return { ok: false, error: error?.message || "The channel export could not be read. No saved data was changed." };
+    }
+  }
+
+  function restoreChannels(token) {
+    const staged = token && typeof token === "object" ? channelPreviews.get(token) : null;
+    if (!staged) return { ok: false, error: "The channel import preview has expired. Select the file again." };
+    channelPreviews.delete(token);
+    let storage;
+    try {
+      storage = getStorage();
+      if (storage.getItem(channelAge.key) !== staged.raw) {
+        channelAge.read();
+        return { ok: false, conflict: true, error: "Saved channel filters changed after this preview. Preview the import again; no changes were made." };
+      }
+    } catch {
+      channelAge.read();
+      return { ok: false, error: "Browser storage is unavailable. No channel filters were changed." };
+    }
+    const desired = JSON.stringify({ version: 1, rules: staged.rules });
+    let attempted = false;
+    try {
+      // The second preflight closes the work-between-reads window without
+      // treating independent preference changes as channel-import conflicts.
+      if (storage.getItem(channelAge.key) !== staged.raw) {
+        channelAge.read();
+        return { ok: false, conflict: true, error: "Saved channel filters changed before import. Preview the file again; no changes were made." };
+      }
+      if (desired !== staged.raw) {
+        attempted = true;
+        storage.setItem(channelAge.key, desired);
+      }
+      if (storage.getItem(channelAge.key) !== desired) fail("Browser storage did not retain the channel import.");
+    } catch {
+      if (attempted) {
+        try {
+          // A third-party value is not ours to overwrite during recovery.
+          if (storage.getItem(channelAge.key) === desired) {
+            if (staged.raw === null) storage.removeItem(channelAge.key);
+            else storage.setItem(channelAge.key, staged.raw);
+          }
+        } catch { /* Exact readback below determines whether recovery succeeded. */ }
+      }
+      let rollbackComplete = false;
+      try { rollbackComplete = storage.getItem(channelAge.key) === staged.raw; } catch { /* Storage remains unavailable. */ }
+      channelAge.read();
+      return { ok: false, rollbackComplete, reloadRequired: !rollbackComplete,
+        error: rollbackComplete
+          ? "The channel import failed. Previous saved channel filters have been restored; other settings were unchanged."
+          : "The channel import failed and previous filters could not be fully restored. Reload and review your channel filters; other settings were unchanged." };
+    }
+    channelAge.read();
+    return { ok: true, rules: clone(staged.rules), summary: staged.summary };
+  }
+
+  return Object.freeze({ exportData, preview, restore, exportChannels, previewChannels, restoreChannels });
 }

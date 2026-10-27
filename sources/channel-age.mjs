@@ -68,6 +68,7 @@ export function createChannelAgeService(getStorage, now = () => Date.now()) {
     if (!Array.isArray(input) || input.length > 100 || rules.length !== input.length) {
       return { ok: false, error: "Use up to 100 unique channel IDs, each with a whole-number age from 1 to 1000 and a valid unit." };
     }
+    const desired = JSON.stringify({ version: 1, rules });
     let storage, previous;
     try {
       storage = getStorage();
@@ -80,14 +81,17 @@ export function createChannelAgeService(getStorage, now = () => Date.now()) {
           return { ok: false, error: 'Channel filters changed in another window. Your draft has been kept. Cancel and reopen before saving.' };
         }
       }
-      storage.setItem(key, JSON.stringify({ version: 1, rules }));
+      storage.setItem(key, desired);
       setCurrent(rules);
       return { ok: true, rules: snapshot(rules) };
     } catch {
       // The live snapshot changes only after a successful complete write.
+      // Preserve concurrent edits/clears rather than rolling back their values.
       try {
-        if (previous === null) storage?.removeItem(key);
-        else if (previous !== undefined) storage?.setItem(key, previous);
+        if (previous !== undefined && storage?.getItem(key) === desired) {
+          if (previous === null) storage.removeItem(key);
+          else storage.setItem(key, previous);
+        }
       } catch { /* Storage is unavailable; preserve the current in-memory rules. */ }
       return { ok: false, error: "Channel filters could not be saved. Browser storage is unavailable or full." };
     }
@@ -181,6 +185,27 @@ export function createChannelAgeService(getStorage, now = () => Date.now()) {
     return card?.querySelectorAll ? channelFromRecords(card, records(card)) : null;
   }
 
+  function videoIdFromCard(card) {
+    if (!card?.querySelectorAll) return null;
+    const ids = new Set();
+    for (const anchor of Array.from(card.querySelectorAll('a[href]')).slice(0, 40)) {
+      try {
+        const url = new URL(anchor.getAttribute('href'), 'https://www.youtube.com');
+        if (url.origin !== 'https://www.youtube.com') continue;
+        const id = url.pathname === '/watch' ? url.searchParams.get('v') : /^\/shorts\/([\w-]{11})\/?$/.exec(url.pathname)?.[1];
+        if (typeof id === 'string' && /^[\w-]{11}$/.test(id)) ids.add(id);
+      } catch { /* Malformed links cannot identify a confirmation target. */ }
+    }
+    if (ids.size !== 1) return null;
+    const [id] = ids;
+    for (const record of records(card)) {
+      if (record.videoId && record.videoId !== id) return null;
+      if (record.contentType && record.contentType !== 'LOCKUP_CONTENT_TYPE_VIDEO') return null;
+      if (record.contentType === 'LOCKUP_CONTENT_TYPE_VIDEO' && record.contentId && record.contentId !== id) return null;
+    }
+    return id;
+  }
+
   function liveOrUpcoming(card, data) {
     if (card.matches?.('[data-ytppl-upcoming-hidden="1"]') || card.querySelector('[overlay-style="LIVE"], [overlay-style="UPCOMING"], [data-ytppl-upcoming-hidden="1"]')) return true;
     for (const element of Array.from(card.querySelectorAll("ytd-badge-supported-renderer, ytd-thumbnail-overlay-time-status-renderer, .yt-badge-shape__text, .ytBadgeShapeBadgeText")).slice(0, 20)) {
@@ -206,15 +231,26 @@ export function createChannelAgeService(getStorage, now = () => Date.now()) {
     return timestamp - rule.maxAge * (rule.unit === "weeks" ? 7 : 1) * day;
   }
 
+  function compareAgeLimits(left, right, timestamp = Number(now())) {
+    if (left.blocked !== right.blocked) return left.blocked ? -1 : 1;
+    if (left.blocked || !Number.isFinite(timestamp)) return 0;
+    // Use the filter's calendar-aware cutoffs, not approximate month/year lengths.
+    return cutoff(right, timestamp) - cutoff(left, timestamp);
+  }
+
   function latestPublication(value, timestamp) {
     const source = String(value || "").replace(/\s+/g, " ").trim();
-    const relative = /^(?:(?:streamed|premiered)\s+)?(\d{1,4})\s+(second|minute|hour|day|week|month|year)s?\s+ago$/i.exec(source);
+    const relative = /^(?:(?:streamed|premiered)\s+)?(\d{1,4})\s+(second|sec|minute|min|hour|hr|day|week|wk|month|mo|year|yr)s?\.?\s+ago$/i.exec(source);
     if (relative) {
       const number = Number(relative[1]);
       if (!number || number > 1000) return null;
       // YouTube rounds relative labels. Use the youngest possible date, never
       // a midpoint. Months use 28 days so short calendar months remain safe.
-      const minimumMs = { second: 1000, minute: 60000, hour: 3600000, day, week: 7 * day, month: 28 * day, year: 365 * day }[relative[2].toLowerCase()];
+      // Compact English labels use the same conservative bounds as full units.
+      // Do not guess single-letter forms such as "m", which could mean minutes
+      // or months, or accept a date fragment embedded in unrelated card text.
+      const minimumMs = { second: 1000, sec: 1000, minute: 60000, min: 60000, hour: 3600000, hr: 3600000,
+        day, week: 7 * day, wk: 7 * day, month: 28 * day, mo: 28 * day, year: 365 * day, yr: 365 * day }[relative[2].toLowerCase()];
       return timestamp - number * minimumMs;
     }
     if (/^(?:today|yesterday|just now)$/i.test(source)) return timestamp;
@@ -277,5 +313,5 @@ export function createChannelAgeService(getStorage, now = () => Date.now()) {
   }
 
   read();
-  return { key, normaliseChannelId, validateRules, read, save, getRules, hasEnabledRules, channelFromCard, cardFilterReason, isCardTooOld };
+  return { key, normaliseChannelId, validateRules, read, save, getRules, hasEnabledRules, channelFromCard, videoIdFromCard, compareAgeLimits, cardFilterReason, isCardTooOld };
 }

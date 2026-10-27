@@ -1232,6 +1232,9 @@ assert.match(
 for (const cardOwnershipRequirement of [
   'const FILTER_REVEAL_ATTRIBUTE = "data-yt-master-show-filtered"',
   "const CARD_HIDE_ATTRIBUTES = Object.freeze({",
+  'ytpplLiveHidden: "data-ytppl-live-hidden"',
+  'hideLiveVideos: false',
+  'function hideLiveVideos(root = document)',
   "const closestMarkedCard = rootElement?.closest?.(markerSelector);",
   'feedFilterProfiles: {',
 ]) {
@@ -1269,8 +1272,8 @@ for (const layoutRefreshRequirement of [
 }
 assert.match(
   playerPreferencesSource,
-  /function handleNavigateStart\(\) \{\s+preferredQualityNavigationPending = true;\s+clearPreferredQualityAttempts\(\);\s+resetVideoMirror\(\);\s+document\.documentElement\?\.removeAttribute\(FULLSCREEN_COMMENTS_ATTRIBUTE\);\s+clearLiveChatCollapseAttempts\(\);\s+clearPlayerLayoutRefreshAttempts\(\);/,
-  "Navigation start must clear quality attempts, mirroring, fullscreen-comment styling and pending player-layout retries",
+  /function handleNavigateStart\(\) \{\s+liveChatNavigationPending = true;\s+resetLiveChat\(\);\s+preferredQualityNavigationPending = true;\s+clearPreferredQualityAttempts\(\);\s+resetVideoMirror\(\);\s+document\.documentElement\?\.removeAttribute\(FULLSCREEN_COMMENTS_ATTRIBUTE\);\s+clearLiveChatCollapseAttempts\(\);\s+clearPlayerLayoutRefreshAttempts\(\);/,
+  "Navigation start must clear live chat, quality attempts, mirroring, fullscreen-comment styling and pending player-layout retries",
 );
 for (const mutationAttribute of [
   "aria-label",
@@ -1321,8 +1324,8 @@ assert.match(
 );
 assert.match(
   playerPreferencesSource,
-  /"yt-page-data-updated",\s+\(\) => \{\s+scheduleVideoMirrorSync\(\);\s+schedulePreferredQualityAttempts\(\);\s+syncFullscreenComments\(\);\s+configureDynamicMutationObserver\(\);\s+scheduleApply\(document\);/,
-  "Player Preferences page-data fallback must reconcile mirroring, refresh observation roots and apply the full page",
+  /"yt-page-data-updated",\s+\(\) => \{\s+scheduleVideoMirrorSync\(\);\s+scheduleLiveChatSync\(\);\s+schedulePreferredQualityAttempts\(\);\s+syncFullscreenComments\(\);\s+configureDynamicMutationObserver\(\);\s+scheduleApply\(document\);/,
+  "Player Preferences page-data fallback must reconcile mirroring and live chat, refresh observation roots and apply the full page",
 );
 assert.match(
   playerPreferencesSource,
@@ -1361,7 +1364,7 @@ assert.match(
 );
 assert.match(
   playerPreferencesSource,
-  /function getFeedApplyRoot\(root\) \{[\s\S]+?closestElement\(applyRoot, UPCOMING_STREAM_SCAN_SELECTOR\)[\s\S]+?function applyDynamicPreferences[\s\S]+?const feedApplyRoot = getFeedApplyRoot\(root\);[\s\S]+?hideUpcomingStreams\(feedApplyRoot\);[\s\S]+?hidePayToWatchCards\(feedApplyRoot\);[\s\S]+?hideWatchedVideos\(feedApplyRoot\);/,
+  /function getFeedApplyRoot\(root\) \{[\s\S]+?closestElement\(applyRoot, UPCOMING_STREAM_SCAN_SELECTOR\)[\s\S]+?function applyDynamicPreferences[\s\S]+?const feedApplyRoot = getFeedApplyRoot\(root\);[\s\S]+?hideUpcomingStreams\(feedApplyRoot\);[\s\S]+?hideLiveVideos\(feedApplyRoot\);[\s\S]+?hidePayToWatchCards\(feedApplyRoot\);[\s\S]+?hideWatchedVideos\(feedApplyRoot\);/,
   "Player Preferences feed filters must reconcile the enclosing card surface",
 );
 assert.match(

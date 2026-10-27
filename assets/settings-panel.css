@@ -154,14 +154,33 @@
 #ytms-settings-dialog #ytms-video-menu-settings { margin: 20px 0 0; border: 1px solid var(--line); border-radius: 8px; padding: 0 12px; }
 #ytms-settings-dialog #ytms-video-menu-settings > summary { cursor: pointer; font-size: 16px; font-weight: 600; padding: 12px 0; }
 #ytms-settings-dialog #ytms-video-menu-settings > .menu-order { margin-bottom: 16px; }
-#ytms-settings-dialog .channel-filter-card { padding: 16px 0; border-bottom: 1px solid var(--line); }
-#ytms-settings-dialog .channel-filter-card h3 { font-size: 14px; font-weight: 600; margin: 0 0 6px; overflow-wrap: anywhere; }
-#ytms-settings-dialog .channel-filter-card p { margin: 4px 0; font-size: 12px; overflow-wrap: anywhere; }
-#ytms-settings-dialog .channel-filter-id { font-family: ui-monospace, monospace; color: var(--muted); }
-#ytms-settings-dialog .channel-filter-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
-#ytms-settings-dialog .channel-filter-help { display: inline-block; margin: 8px 0; font-size: 12px; color: var(--link); text-decoration: none; overflow-wrap: anywhere; }
-#ytms-settings-dialog .channel-filter-help:hover { text-decoration: underline; }
-#ytms-settings-dialog .channel-filter-help:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+:is(#ytms-settings-dialog, #ytms-age-dialog) .channel-filter-columns,
+:is(#ytms-settings-dialog, #ytms-age-dialog) .channel-filter-card { display: grid; grid-template-columns: minmax(0, 1.6fr) minmax(0, 1fr) minmax(0, .65fr) 84px; column-gap: 14px; }
+:is(#ytms-settings-dialog, #ytms-age-dialog) .channel-filter-columns { padding: 12px 0 8px; border-bottom: 1px solid var(--line); color: var(--muted); font-size: 12px; font-weight: 600; }
+:is(#ytms-settings-dialog, #ytms-age-dialog) .channel-filter-columns > span { min-width: 0; overflow-wrap: anywhere; }
+:is(#ytms-settings-dialog, #ytms-age-dialog) .channel-filter-columns > span:last-child { text-align: center; }
+:is(#ytms-settings-dialog, #ytms-age-dialog) .channel-filter-card { padding: 12px 0; row-gap: 8px; align-items: start; border-bottom: 1px solid var(--line); }
+:is(#ytms-settings-dialog, #ytms-age-dialog) .channel-filter-card:nth-child(even) { background: var(--field); background: color-mix(in srgb, var(--hover) 32%, var(--surface)); }
+:is(#ytms-settings-dialog, #ytms-age-dialog) .channel-filter-card > * { min-width: 0; }
+:is(#ytms-settings-dialog, #ytms-age-dialog) .channel-filter-card h3 { font-size: 14px; font-weight: 600; margin: 0 0 4px; overflow-wrap: anywhere; }
+:is(#ytms-settings-dialog, #ytms-age-dialog) .channel-filter-card p { margin: 0; font-size: 12px; overflow-wrap: anywhere; }
+:is(#ytms-settings-dialog, #ytms-age-dialog) .channel-filter-id { font-family: ui-monospace, monospace; color: var(--muted); }
+:is(#ytms-settings-dialog, #ytms-age-dialog) .channel-filter-field-label { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; border: 0; }
+:is(#ytms-settings-dialog, #ytms-age-dialog) .channel-filter-actions { display: flex; flex-direction: column; gap: 4px; }
+:is(#ytms-settings-dialog, #ytms-age-dialog) .channel-filter-actions .text-button,
+:is(#ytms-settings-dialog, #ytms-age-dialog) .channel-filter-actions .ytms-age-button { width: 100%; min-height: 32px; padding: 5px 10px; border-radius: 6px; font-size: 12px; font-weight: 500; }
+@media (max-width: 520px) {
+  :is(#ytms-settings-dialog, #ytms-age-dialog) .channel-filter-columns { display: none; }
+  :is(#ytms-settings-dialog, #ytms-age-dialog) .channel-filter-card { grid-template-columns: minmax(0, 1fr) 84px; column-gap: 12px; }
+  :is(#ytms-settings-dialog, #ytms-age-dialog) .channel-filter-identity { grid-column: 1; grid-row: 1; }
+  :is(#ytms-settings-dialog, #ytms-age-dialog) .channel-filter-age { grid-column: 1; grid-row: 2; }
+  :is(#ytms-settings-dialog, #ytms-age-dialog) .channel-filter-status { grid-column: 1; grid-row: 3; }
+  :is(#ytms-settings-dialog, #ytms-age-dialog) .channel-filter-actions { grid-column: 2; grid-row: 1 / 4; }
+  :is(#ytms-settings-dialog, #ytms-age-dialog) .channel-filter-field-label { display: block; position: static; width: auto; height: auto; margin: 0 0 2px; overflow: visible; clip-path: none; white-space: normal; color: var(--muted); }
+}
+:is(#ytms-settings-dialog, #ytms-age-dialog) .channel-filter-help { display: inline-block; margin: 8px 0; font-size: 12px; color: var(--link); text-decoration: none; overflow-wrap: anywhere; }
+:is(#ytms-settings-dialog, #ytms-age-dialog) .channel-filter-help:hover { text-decoration: underline; }
+:is(#ytms-settings-dialog, #ytms-age-dialog) .channel-filter-help:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
 #ytms-settings-dialog .menu-order h3 { font-size: 16px; margin: 0; }
 #ytms-settings-dialog .menu-order .section-note { margin: 6px 0 12px; }
 #ytms-settings-dialog #ytms-menu-order { padding: 0; margin: 0; list-style: none; }
@@ -184,33 +203,71 @@
 #ytms-age-dialog .ytms-age-close:hover, #ytms-age-dialog .ytms-age-button:hover { background: var(--hover); }
 #ytms-age-dialog .ytms-age-content { min-height: 0; overflow: auto; flex: 1; padding: 0 24px 20px; scrollbar-gutter: stable; }
 #ytms-age-dialog .ytms-age-note { color: var(--muted); font-size: 12px; margin: 10px 0 14px; }
-#ytms-age-dialog .ytms-age-rule { display: flex; flex-direction: column; gap: 12px; padding: 16px 0; border-bottom: 1px solid var(--line); }
-#ytms-age-dialog .ytms-age-rule h3 { margin: 0; font-size: 14px; overflow-wrap: anywhere; }
-#ytms-age-dialog .ytms-age-summary p { margin: 4px 0; font-size: 12px; overflow-wrap: anywhere; }
 #ytms-age-dialog .ytms-age-channel-id { color: var(--muted); font-family: ui-monospace, monospace; }
-#ytms-age-dialog .ytms-age-fields { display: flex; flex-direction: column; gap: 12px; }
-#ytms-age-dialog #ytms-age-add { margin-top: 16px; }
+#ytms-age-dialog .ytms-age-fields { grid-column: 1 / -1; display: flex; flex-direction: column; gap: 12px; padding: 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--field); }
+#ytms-age-dialog #ytms-age-add { margin: 0; }
 #ytms-age-dialog .ytms-age-field { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
 #ytms-age-dialog .ytms-age-field > span { color: var(--muted); font-size: 12px; }
 #ytms-age-dialog .ytms-age-field input, #ytms-age-dialog .ytms-age-field select { min-width: 0; width: 100%; background: var(--field); color: var(--text); border: 1px solid var(--line); border-radius: 6px; padding: 7px 9px; }
 #ytms-age-dialog .ytms-age-wide input { font-family: ui-monospace, monospace; font-size: 12px; }
 #ytms-age-dialog .ytms-age-limit { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 16px; }
-#ytms-age-dialog .ytms-age-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
-#ytms-age-dialog .ytms-age-actions label { display: flex; gap: 6px; align-items: center; }
+#ytms-age-dialog .ytms-age-edit-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+#ytms-age-dialog .ytms-age-edit-actions label { display: flex; gap: 6px; align-items: center; }
 #ytms-age-dialog .ytms-age-blocked { display: flex; gap: 6px; align-items: flex-start; font-size: 12px; }
 #ytms-age-dialog input[type="checkbox"] { accent-color: var(--accent); }
-#ytms-age-dialog .ytms-age-button { padding: 8px 14px; border-radius: 20px; font-weight: 600; white-space: nowrap; }
-#ytms-age-dialog .ytms-age-outlined, #ytms-age-dialog .ytms-age-danger { border: 1px solid var(--line); background: var(--field); }
-#ytms-age-dialog .ytms-age-danger { border-color: var(--error); color: var(--error); }
-#ytms-age-dialog .ytms-age-primary, #ytms-age-dialog .ytms-age-primary:hover { background: var(--button-accent); color: var(--accent-text); }
+:is(#ytms-age-dialog, #ytms-channel-footer) .ytms-age-button { padding: 8px 14px; border-radius: 20px; font: inherit; font-weight: 600; white-space: nowrap; cursor: pointer; }
+:is(#ytms-age-dialog, #ytms-channel-footer) .ytms-age-outlined, :is(#ytms-age-dialog, #ytms-channel-footer) .ytms-age-danger { border: 1px solid var(--line); border-radius: 6px; background: var(--field); }
+:is(#ytms-age-dialog, #ytms-channel-footer) .ytms-age-danger { border-color: var(--error); color: var(--error); }
+:is(#ytms-age-dialog, #ytms-channel-footer) .ytms-age-primary, :is(#ytms-age-dialog, #ytms-channel-footer) .ytms-age-primary:hover { background: var(--button-accent); color: var(--accent-text); }
 #ytms-age-dialog .ytms-age-primary:hover { filter: brightness(.92); }
 #ytms-age-dialog footer { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; border-top: 1px solid var(--line); padding: 12px 16px; flex-shrink: 0; }
 #ytms-age-dialog .ytms-age-status { width: 100%; margin: 0; font-size: 12px; color: var(--muted); overflow-wrap: anywhere; }
 #ytms-age-dialog .ytms-age-status.ytms-age-error { color: var(--error); }
-#ytms-age-dialog .ytms-age-spacer { flex: 1; }
+:is(#ytms-age-dialog, #ytms-channel-footer) .ytms-age-spacer { flex: 1; }
 @media (max-width: 480px) {
   #ytms-age-dialog header { padding-left: 16px; }
   #ytms-age-dialog .ytms-age-content { padding-left: 16px; padding-right: 16px; }
   #ytms-age-dialog h2 { font-size: 18px; }
 }
 
+
+#ytms-age-dialog.ytms-age-embedded { width: 100%; height: auto; max-height: none; margin: 0; border: 0; border-radius: 0; background: transparent; box-shadow: none; font: inherit; }
+#ytms-age-dialog.ytms-age-embedded .ytms-age-panel { display: block; height: auto; }
+#ytms-age-dialog.ytms-age-embedded .ytms-age-content { overflow: visible; padding: 0; scrollbar-gutter: auto; }
+#ytms-age-dialog.ytms-age-embedded .ytms-age-footer { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 12px 0 0; border-top: 1px solid var(--line); }
+#ytms-age-dialog .ytms-age-toolbar { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 12px; margin: 12px 0 8px; }
+#ytms-age-dialog .ytms-age-toolbar-field { display: flex; flex-direction: column; gap: 4px; min-width: 0; flex: 1 1 180px; }
+#ytms-age-dialog .ytms-age-toolbar-field > span { color: var(--muted); font-size: 12px; }
+#ytms-age-dialog .ytms-age-toolbar-field input,
+#ytms-age-dialog .ytms-age-toolbar-field select { box-sizing: border-box; min-width: 0; max-width: none; width: 100%; padding: 7px 9px; border: 1px solid var(--line); border-radius: 6px; background: var(--field); color: var(--text); font: inherit; }
+#ytms-age-dialog .ytms-age-sort-field { flex: 0 1 210px; }
+#ytms-age-dialog .ytms-age-results { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 8px; }
+#ytms-age-dialog .ytms-age-results .ytms-age-note { margin: 0; }
+#ytms-age-dialog .ytms-age-edit-actions .ytms-age-button { border-radius: 6px; }
+#ytms-age-dialog .ytms-channel-transfer { margin: 10px 0 14px; padding: 0 12px; border: 1px solid var(--line); border-radius: 8px; }
+#ytms-age-dialog .ytms-channel-transfer > summary { padding: 10px 0; cursor: pointer; font-size: 13px; font-weight: 600; }
+#ytms-age-dialog .ytms-channel-transfer .ytms-age-toolbar-field { margin: 12px 0; }
+#ytms-age-dialog .ytms-channel-transfer-actions { display: flex; flex-wrap: wrap; gap: 8px; margin: 10px 0; }
+#ytms-age-dialog .ytms-channel-transfer-actions .ytms-age-button { white-space: normal; overflow-wrap: anywhere; }
+#ytms-age-dialog .ytms-channel-import-preview { padding: 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--field); }
+#ytms-age-dialog .ytms-channel-import-preview h3 { margin: 0; font-size: 14px; }
+#ytms-age-dialog .ytms-channel-import-preview p { margin: 8px 0; font-size: 12px; overflow-wrap: anywhere; }
+#ytms-age-dialog .ytms-channel-import-confirm { display: flex; gap: 6px; align-items: flex-start; font-size: 12px; overflow-wrap: anywhere; }
+#ytms-age-dialog .ytms-channel-import-preview .ytms-age-primary:disabled { background: var(--line); color: var(--muted); opacity: 1; }
+#ytms-age-dialog .ytms-transfer-error { color: var(--error); }
+#ytms-settings-dialog footer.ytms-channels-active > :not(#ytms-channel-footer) { display: none !important; }
+#ytms-settings-dialog #ytms-channel-footer { flex: 1; min-width: 0; width: 100%; }
+#ytms-settings-dialog #ytms-channel-footer .ytms-age-footer { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; width: 100%; border: 0; padding: 0; }
+#ytms-settings-dialog #ytms-channel-footer .ytms-age-button { min-height: 38px; padding: 8px 14px; border: 0; border-radius: 20px; background: transparent; color: inherit; font: inherit; font-weight: 600; white-space: nowrap; cursor: pointer; }
+#ytms-settings-dialog #ytms-channel-footer .ytms-age-button:hover:not(:disabled) { background: var(--hover); }
+#ytms-settings-dialog #ytms-channel-footer .ytms-age-primary { background: var(--button-accent); color: var(--accent-text); }
+#ytms-settings-dialog #ytms-channel-footer .ytms-age-primary:hover:not(:disabled) { background: var(--button-accent); filter: brightness(.92); }
+#ytms-settings-dialog #ytms-channel-footer .ytms-age-status { flex: 0 0 100%; min-width: 0; max-width: 100%; margin: 0; font-size: 12px; color: var(--muted); overflow-wrap: anywhere; }
+#ytms-settings-dialog #ytms-channel-footer .ytms-age-status.ytms-age-error { color: var(--error); }
+#ytms-settings-dialog #ytms-channel-footer .ytms-age-button:disabled { opacity: .5; cursor: default; }
+#ytms-settings-dialog #ytms-channel-footer .ytms-age-primary:disabled { background: var(--line); color: var(--muted); opacity: 1; }
+#ytms-settings-dialog #ytms-channel-footer .ytms-age-button:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+@media (max-width: 520px) {
+  #ytms-age-dialog .ytms-age-toolbar-field, #ytms-age-dialog .ytms-age-sort-field { flex-basis: 100%; }
+  #ytms-age-dialog .ytms-age-toolbar > #ytms-age-add { align-self: flex-start; }
+}

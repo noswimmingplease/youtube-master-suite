@@ -13,6 +13,8 @@ const OTHER = "UCbbbbbbbbbbbbbbbbbbbbbb";
 const THIRD = "UCcccccccccccccccccccccc";
 const rule = (channelId = ID, values = {}) => ({ channelId, name: "Fixture channel", maxAge: 1, unit: "weeks", enabled: true, blocked: false, ...values });
 const rawRules = rules => JSON.stringify({ version: 1, rules });
+const PREVIOUS_DEFAULT_MENU_ORDER = ['playNext', 'addToQueue', 'watchLater', 'savePlaylist', 'download', 'share',
+  'notInterested', 'dontRecommend', 'report', 'channelAge', 'channelTools'];
 
 function fixture(seed = {}) {
   const data = new Map(Object.entries(seed));
@@ -95,6 +97,35 @@ test("valid legacy saved records gain missing defaults and filter flags without 
   assert.deepEqual(f.writes, []);
 });
 
+test('export migrates an exact former default menu order from valid saved records without writing storage', () => {
+  const f = fixture({ [SETTINGS]: JSON.stringify({ version: 1, values: {
+    menuItemOrder: PREVIOUS_DEFAULT_MENU_ORDER, hideChat: false, watchedThreshold: '95',
+  } }) });
+  const exported = f.backup.exportData();
+  assert.equal(exported.ok, true, exported.error);
+  const values = JSON.parse(exported.text).settings;
+  assert.deepEqual(values.menuItemOrder, f.settings.defaults.menuItemOrder);
+  assert.equal(values.hideChat, false);
+  assert.equal(values.watchedThreshold, '95');
+  assert.deepEqual(f.writes, []);
+});
+
+test('older backups with the exact former default menu order can be previewed and restored', () => {
+  const f = fixture();
+  const older = documentFor(f, { menuItemOrder: PREVIOUS_DEFAULT_MENU_ORDER, hideChat: false });
+  const preview = f.backup.preview(JSON.stringify(older));
+  assert.equal(preview.ok, true, preview.error);
+  assert.deepEqual(preview.summary.settingChanges, [{ name: 'hideChat', before: true, after: false }]);
+  assert.equal(f.backup.restore(preview.preview).ok, true);
+  assert.deepEqual(f.settings.read().menuItemOrder, f.settings.defaults.menuItemOrder);
+  assert.equal(f.settings.read().hideChat, false);
+  for (const invalid of [PREVIOUS_DEFAULT_MENU_ORDER.slice(1),
+    [...PREVIOUS_DEFAULT_MENU_ORDER, 'unknown'], PREVIOUS_DEFAULT_MENU_ORDER.map(() => 'share')]) {
+    assert.equal(f.backup.preview(JSON.stringify(documentFor(f, { menuItemOrder: invalid }))).ok, false,
+      'Only the exact known default migration is accepted');
+  }
+});
+
 test('fullscreen action-strip preference round-trips through exported backups without changing the running snapshot', () => {
   const f = fixture();
   assert.equal(f.settings.save({ ...f.settings.defaults, hideFullscreenQuickActions: true }).ok, true);
@@ -108,6 +139,106 @@ test('fullscreen action-strip preference round-trips through exported backups wi
   assert.equal(f.backup.restore(preview.preview).ok, true);
   assert.equal(f.settings.read().hideFullscreenQuickActions, true);
   assert.equal(f.settings.initial.hideFullscreenQuickActions, false);
+});
+
+test('live chat button preference round-trips independently of the saved chat visibility default', () => {
+  const f = fixture();
+  assert.equal(f.settings.save({ ...f.settings.defaults, liveChatButton: false, hideChat: false }).ok, true);
+  const exported = f.backup.exportData();
+  assert.equal(exported.ok, true, exported.error);
+  assert.equal(JSON.parse(exported.text).settings.liveChatButton, false);
+  assert.equal(JSON.parse(exported.text).settings.hideChat, false);
+  assert.equal(f.settings.save(f.settings.defaults).ok, true);
+  const preview = f.backup.preview(exported.text);
+  assert.equal(preview.ok, true, preview.error);
+  assert.deepEqual(preview.summary.settingChanges, [
+    { name: 'liveChatButton', before: true, after: false },
+    { name: 'hideChat', before: true, after: false },
+  ]);
+  assert.equal(f.backup.restore(preview.preview).ok, true);
+  assert.equal(f.settings.read().liveChatButton, false);
+  assert.equal(f.settings.read().hideChat, false);
+  assert.equal(f.settings.initial.liveChatButton, true);
+  assert.equal(f.settings.initial.hideChat, true);
+});
+
+test('live and upcoming card preferences round-trip independently without changing the running snapshot', () => {
+  const f = fixture();
+  assert.equal(f.settings.save({ ...f.settings.defaults, hideLiveVideos: true, hideUpcomingStreams: false }).ok, true);
+  const exported = f.backup.exportData();
+  assert.equal(exported.ok, true, exported.error);
+  assert.equal(JSON.parse(exported.text).settings.hideLiveVideos, true);
+  assert.equal(JSON.parse(exported.text).settings.hideUpcomingStreams, false);
+  assert.equal(f.settings.save(f.settings.defaults).ok, true);
+  const preview = f.backup.preview(exported.text);
+  assert.equal(preview.ok, true, preview.error);
+  assert.deepEqual(preview.summary.settingChanges, [
+    { name: 'hideLiveVideos', before: false, after: true },
+    { name: 'hideUpcomingStreams', before: true, after: false },
+  ]);
+  assert.equal(f.backup.restore(preview.preview).ok, true);
+  assert.equal(f.settings.read().hideLiveVideos, true);
+  assert.equal(f.settings.read().hideUpcomingStreams, false);
+  assert.equal(f.settings.initial.hideLiveVideos, false);
+  assert.equal(f.settings.initial.hideUpcomingStreams, true);
+});
+
+test('older backups gain only missing live-card defaults and retain strict validation', () => {
+  const f = fixture({ [SETTINGS]: JSON.stringify({ version: 1, values: {
+    hideLiveVideos: true, hideUpcomingStreams: false, hideChat: false,
+  } }) });
+  const legacy = documentFor(f, { hideChat: false });
+  delete legacy.settings.hideLiveVideos;
+  delete legacy.settings.hideUpcomingStreams;
+  const preview = f.backup.preview(JSON.stringify(legacy));
+  assert.equal(preview.ok, true, preview.error);
+  assert.deepEqual(preview.summary.settingChanges, [
+    { name: 'hideLiveVideos', before: true, after: false },
+    { name: 'hideUpcomingStreams', before: false, after: true },
+  ]);
+  assert.equal(f.backup.restore(preview.preview).ok, true);
+  assert.equal(f.settings.read().hideLiveVideos, false);
+  assert.equal(f.settings.read().hideUpcomingStreams, true);
+  assert.equal(f.settings.read().hideChat, false);
+  for (const key of ['hideLiveVideos', 'hideUpcomingStreams']) {
+    for (const value of ['true', 'false', 0, 1, null, [], {}]) {
+      assert.equal(f.backup.preview(JSON.stringify(documentFor(f, { [key]: value }))).ok, false, key);
+    }
+  }
+  delete legacy.settings.hideShorts;
+  assert.equal(f.backup.preview(JSON.stringify(legacy)).ok, false, 'Pre-existing required fields remain required');
+});
+
+test('older backups gain the live chat button default without relaxing existing required fields or validation', () => {
+  const f = fixture({ [SETTINGS]: JSON.stringify({ version: 1, values: {
+    liveChatButton: false, hideFullscreenQuickActions: true, hideChat: false,
+  } }) });
+  const legacy = documentFor(f, { hideChat: false, hideFullscreenQuickActions: true });
+  delete legacy.settings.liveChatButton;
+  const recentPreview = f.backup.preview(JSON.stringify(legacy));
+  assert.equal(recentPreview.ok, true, recentPreview.error);
+  assert.deepEqual(recentPreview.summary.settingChanges, [
+    { name: 'liveChatButton', before: false, after: true },
+  ], 'A v1.2.19 backup retains its existing fullscreen-strip preference');
+  delete legacy.settings.hideFullscreenQuickActions;
+  const preview = f.backup.preview(JSON.stringify(legacy));
+  assert.equal(preview.ok, true, preview.error);
+  assert.deepEqual(preview.summary.settingChanges, [
+    { name: 'liveChatButton', before: false, after: true },
+    { name: 'hideFullscreenQuickActions', before: true, after: false },
+  ]);
+  assert.equal(f.backup.restore(preview.preview).ok, true);
+  assert.equal(f.settings.read().liveChatButton, true);
+  assert.equal(f.settings.read().hideFullscreenQuickActions, false);
+  assert.equal(f.settings.read().hideChat, false);
+  for (const value of ['true', 'false', 0, 1, null, [], {}]) {
+    assert.equal(f.backup.preview(JSON.stringify(documentFor(f, { liveChatButton: value }))).ok, false);
+  }
+  delete legacy.settings.hideChat;
+  assert.equal(f.backup.preview(JSON.stringify(legacy)).ok, false, 'Pre-existing chat visibility remains required');
+  legacy.settings.hideChat = false;
+  legacy.settings.unknownChatOption = true;
+  assert.equal(f.backup.preview(JSON.stringify(legacy)).ok, false, 'Unknown fields remain rejected');
 });
 
 test('preference-less v1.2.18 backups default the fullscreen action strip to visible without relaxing other required fields', () => {
@@ -124,6 +255,26 @@ test('preference-less v1.2.18 backups default the fullscreen action strip to vis
   }
   delete legacy.settings.hideChat;
   assert.equal(f.backup.preview(JSON.stringify(legacy)).ok, false, 'All pre-existing settings remain required');
+});
+
+test('pre-timeline backups restore the automatic preview default while preserving legacy settings and channel filters', () => {
+  const f = fixture({ [SETTINGS]: JSON.stringify({ version: 1, values: { timelinePreviewSize: 'large', hideChat: false } }),
+    [FILTERS]: rawRules([rule()]) });
+  const legacy = documentFor(f, { hideChat: false }, [rule()]);
+  for (const name of ['timelinePreviewSize', 'liveChatButton', 'hideLiveVideos', 'hideUpcomingStreams']) delete legacy.settings[name];
+  const preview = f.backup.preview(JSON.stringify(legacy));
+  assert.equal(preview.ok, true, preview.error);
+  assert.deepEqual(preview.summary.settingChanges, [{ name: 'timelinePreviewSize', before: 'large', after: 'auto' }]);
+  assert.deepEqual(f.writes, [], 'Preview must remain read-only');
+  assert.equal(f.backup.restore(preview.preview).ok, true);
+  assert.equal(f.settings.read().timelinePreviewSize, 'auto');
+  assert.equal(f.settings.read().hideChat, false);
+  assert.deepEqual(f.channelAge.getRules(), [rule()]);
+  for (const value of ['huge', '480', 480, null, false, [], {}]) {
+    assert.equal(f.backup.preview(JSON.stringify(documentFor(f, { timelinePreviewSize: value }))).ok, false);
+  }
+  delete legacy.settings.hideChat;
+  assert.equal(f.backup.preview(JSON.stringify(legacy)).ok, false, 'Existing required settings remain required');
 });
 
 test("preview summarises setting differences and filter additions, changes and removals without writing", () => {
@@ -454,4 +605,317 @@ test("prototype keys and executable-looking payloads cannot enter a restore", ()
   ]) assert.equal(f.backup.preview(payload).ok, false);
   assert.equal({}.polluted, undefined);
   assert.deepEqual(f.writes, []);
+});
+
+const channelDocument = rules => ({ format: 'youtube-master-suite-channel-filters', version: 1,
+  language: 'en-GB', channelFilters: rules });
+function stagedChannels(f, rules = [rule()], mode = 'merge') {
+  const result = f.backup.previewChannels(JSON.stringify(channelDocument(rules)), mode);
+  assert.equal(result.ok, true, result.error);
+  return result;
+}
+
+test('channel-only export contains saved names, limits and flags without reading preferences', () => {
+  const saved = [rule(ID, { name: 'Daily news', maxAge: 2, unit: 'days' }),
+    rule(OTHER, { name: 'Archive', maxAge: 3, unit: 'years', enabled: false, blocked: true })];
+  const f = fixture({ [FILTERS]: rawRules(saved), [SETTINGS]: 'corrupt unrelated settings', [CORNER]: 'private', unrelated: 'private' });
+  f.hooks.get = (key, value) => { assert.equal(key, FILTERS, 'Channel exports do not read preferences'); return value; };
+  const exported = f.backup.exportChannels();
+  assert.equal(exported.ok, true, exported.error);
+  assert.equal(exported.count, 2);
+  assert.deepEqual(JSON.parse(exported.text), channelDocument(saved));
+  assert.doesNotMatch(exported.text, /corrupt|unrelated|private|settings/);
+  assert.deepEqual(f.writes, []);
+  assert.equal(f.refreshes(), 0);
+});
+
+test('empty and legacy saved channel exports gain safe defaults without writing storage', () => {
+  const empty = fixture();
+  assert.deepEqual(JSON.parse(empty.backup.exportChannels().text), channelDocument([]));
+  const f = fixture({ [FILTERS]: rawRules([{ channelId: ID, maxAge: 3, unit: 'months' }]) });
+  assert.deepEqual(JSON.parse(f.backup.exportChannels().text).channelFilters,
+    [rule(ID, { name: '', maxAge: 3, unit: 'months' })]);
+  assert.deepEqual(f.writes, []);
+});
+
+test('channel import defaults to merge and preserves unlisted channels and saved order', () => {
+  const f = fixture({ [FILTERS]: rawRules([rule(ID), rule(OTHER)]) });
+  const changed = rule(OTHER, { name: 'Updated', maxAge: 7, unit: 'days', blocked: true });
+  const imported = [rule(THIRD), changed];
+  const result = stagedChannels(f, imported);
+  assert.equal(result.summary.mode, 'merge');
+  assert.deepEqual(result.summary.filters, { added: 1, changed: 1, removed: 0, unchanged: 1, total: 3 });
+  assert.match(result.summary.warning, /Other saved channels and all Suite preferences are kept/);
+  assert.deepEqual(f.writes, []);
+  assert.equal(f.refreshes(), 0);
+  const restored = f.backup.restoreChannels(result.preview);
+  assert.equal(restored.ok, true, restored.error);
+  assert.deepEqual(restored.rules, [rule(ID), changed, rule(THIRD)]);
+  assert.deepEqual(f.channelAge.getRules(), restored.rules);
+  assert.deepEqual(f.writes.map(entry => entry.slice(0, 2)), [['set', FILTERS]]);
+  assert.equal(f.refreshes(), 1);
+});
+
+test('replace mode explicitly removes unlisted channels and can restore an empty list', () => {
+  const f = fixture({ [FILTERS]: rawRules([rule(ID), rule(OTHER)]) });
+  const preview = stagedChannels(f, [rule(OTHER)], 'replace');
+  assert.deepEqual(preview.summary.filters, { added: 0, changed: 0, removed: 1, unchanged: 1, total: 1 });
+  assert.match(preview.summary.warning, /replaces the complete saved channel-filter list/);
+  assert.equal(f.backup.restoreChannels(preview.preview).ok, true);
+  const empty = stagedChannels(f, [], 'replace');
+  assert.equal(empty.summary.filters.removed, 1);
+  assert.equal(f.backup.restoreChannels(empty.preview).ok, true);
+  assert.deepEqual(f.channelAge.getRules(), []);
+  assert.equal(f.data.has(SETTINGS), false);
+  assert.equal(f.data.has(CORNER), false);
+});
+
+test('replace can restore saved channel order without changing any rule fields', () => {
+  const original = [rule(ID), rule(OTHER)];
+  const f = fixture({ [FILTERS]: rawRules(original) });
+  const imported = [original[1], original[0]];
+  const preview = stagedChannels(f, imported, 'replace');
+  assert.equal(preview.summary.orderChanged, true);
+  assert.deepEqual(preview.summary.filters, { added: 0, changed: 0, removed: 0, unchanged: 2, total: 2 });
+  assert.deepEqual(f.writes, []);
+  const restored = f.backup.restoreChannels(preview.preview);
+  assert.equal(restored.ok, true, restored.error);
+  assert.deepEqual(restored.rules, imported);
+  assert.deepEqual(JSON.parse(f.data.get(FILTERS)).rules, imported);
+  assert.deepEqual(f.channelAge.getRules(), imported);
+});
+
+test('merging the same rules in a different order keeps the existing saved order', () => {
+  const original = [rule(ID), rule(OTHER)];
+  const f = fixture({ [FILTERS]: rawRules(original) });
+  const preview = stagedChannels(f, [original[1], original[0]]);
+  assert.equal(preview.summary.orderChanged, false);
+  assert.deepEqual(preview.summary.filters, { added: 0, changed: 0, removed: 0, unchanged: 2, total: 2 });
+  const restored = f.backup.restoreChannels(preview.preview);
+  assert.equal(restored.ok, true, restored.error);
+  assert.deepEqual(restored.rules, original);
+  assert.deepEqual(f.writes, []);
+});
+
+test('merge of an empty channel export leaves existing channels unchanged', () => {
+  const f = fixture({ [FILTERS]: rawRules([rule()]) });
+  const result = stagedChannels(f, []);
+  assert.deepEqual(result.summary.filters, { added: 0, changed: 0, removed: 0, unchanged: 1, total: 1 });
+  assert.equal(f.backup.restoreChannels(result.preview).ok, true);
+  assert.deepEqual(f.writes, []);
+  assert.deepEqual(f.channelAge.getRules(), [rule()]);
+});
+
+test('channel preview tokens are immutable, single use and isolated from full-backup tokens', () => {
+  const f = fixture();
+  const channels = stagedChannels(f);
+  const full = staged(f);
+  assert.ok(Object.isFrozen(channels.preview));
+  assert.ok(Object.isFrozen(channels.summary));
+  assert.ok(Object.isFrozen(channels.summary.filters));
+  assert.throws(() => { channels.summary.filters.total = 99; }, TypeError);
+  for (const token of [null, {}, { ...channels.preview }, full.preview]) assert.equal(f.backup.restoreChannels(token).ok, false);
+  assert.equal(f.backup.restore(channels.preview).ok, false);
+  const restored = f.backup.restoreChannels(channels.preview);
+  assert.equal(restored.ok, true, restored.error);
+  assert.equal(f.backup.restoreChannels(channels.preview).ok, false);
+  restored.rules[0].maxAge = 999;
+  assert.equal(f.channelAge.getRules()[0].maxAge, 1);
+});
+
+test('channel-only imports validate envelope, language, version, mode and byte limits strictly', () => {
+  const f = fixture();
+  for (const text of [null, {}, '', '{', 'null', '[]', ' '.repeat(131073),
+    JSON.stringify(channelDocument([])) + '\u2003'.repeat(50000), JSON.stringify(documentFor(f))]) {
+    assert.equal(f.backup.previewChannels(text).ok, false);
+  }
+  for (const mode of ['', 'MERGE', 'append', null, {}, []]) assert.equal(f.backup.previewChannels(JSON.stringify(channelDocument([])), mode).ok, false);
+  for (const change of [
+    record => { record.format = 'other'; }, record => { record.version = 2; }, record => { record.version = '1'; },
+    record => { record.language = 'en-US'; }, record => { delete record.language; },
+    record => { record.settings = {}; }, record => { delete record.channelFilters; },
+  ]) {
+    const record = channelDocument([]); change(record);
+    assert.equal(f.backup.previewChannels(JSON.stringify(record)).ok, false);
+  }
+  assert.deepEqual(f.writes, []);
+  assert.equal(f.refreshes(), 0);
+});
+
+test('channel-only imports reject invalid, duplicate and normalised rule payloads', () => {
+  const f = fixture();
+  for (const rules of [null, {}, [rule(), rule()], Array(101).fill(rule()),
+    [rule(ID, { maxAge: 0 })], [rule(ID, { maxAge: 1.5 })], [rule(ID, { unit: 'fortnights' })],
+    [rule('@fixture')], [rule(ID, { enabled: 'false' })], [rule(ID, { blocked: null })],
+    [rule(ID, { name: '<script>alert(1)</script>' })], [rule(ID, { name: 'Too long '.repeat(20) })],
+    [rule(ID, { extra: true })], [{ channelId: ID, maxAge: 1, unit: 'days' }]]) {
+    assert.equal(f.backup.previewChannels(JSON.stringify(channelDocument(rules))).ok, false);
+  }
+  const text = JSON.stringify(channelDocument([rule()]));
+  for (const payload of [
+    text.replace('"channelFilters":[{', '"channelFilters":[{"__proto__":{"polluted":true},'),
+    text.replace('"channelFilters":[{', '"channelFilters":[{"constructor":{"prototype":{"polluted":true}},'),
+    text.replace('"language":"en-GB"', '"language":"<img src=x onerror=alert(1)>"'),
+  ]) assert.equal(f.backup.previewChannels(payload).ok, false);
+  assert.equal({}.polluted, undefined);
+  assert.deepEqual(f.writes, []);
+});
+
+test('channel merge respects the maximum combined list and replace remains available', () => {
+  const rules = Array.from({ length: 100 }, (_, index) => rule(`UC${String(index).padStart(22, '0')}`));
+  const f = fixture({ [FILTERS]: rawRules(rules) });
+  const text = JSON.stringify(channelDocument([rule()]));
+  const merge = f.backup.previewChannels(text);
+  assert.equal(merge.ok, false);
+  assert.match(merge.error, /exceed 100/);
+  assert.equal(f.backup.previewChannels(text, 'replace').ok, true);
+  assert.deepEqual(f.writes, []);
+});
+
+test('malformed saved channels cannot silently become empty during export or import preview', () => {
+  for (const raw of ['{', JSON.stringify({ version: 2, rules: [] }), rawRules([rule(), rule()]),
+    JSON.stringify({ version: 1, rules: [], extra: true }), ' '.repeat(65537)]) {
+    const f = fixture({ [FILTERS]: raw });
+    assert.equal(f.backup.exportChannels().ok, false);
+    assert.equal(f.backup.previewChannels(JSON.stringify(channelDocument([])), 'replace').ok, false);
+    assert.deepEqual(f.writes, []);
+  }
+});
+
+test('channel changes during export or preview are detected without writes', () => {
+  for (const operation of ['exportChannels', 'previewChannels']) {
+    const f = fixture();
+    let once = true;
+    f.hooks.get = (key, value) => {
+      if (key === FILTERS && once) { once = false; f.data.set(FILTERS, rawRules([rule(OTHER)])); }
+      return value;
+    };
+    const result = f.backup[operation](JSON.stringify(channelDocument([rule()])));
+    assert.equal(result.ok, false);
+    assert.match(result.error, /changed while preparing/);
+    assert.deepEqual(f.writes, []);
+  }
+});
+
+test('channel import rejects a stale raw preview and refreshes current filter cache', () => {
+  const f = fixture({ [FILTERS]: rawRules([rule()]) });
+  const result = stagedChannels(f, [rule(OTHER)]);
+  const changed = rawRules([rule(THIRD)]);
+  f.data.set(FILTERS, changed);
+  const restored = f.backup.restoreChannels(result.preview);
+  assert.equal(restored.ok, false);
+  assert.equal(restored.conflict, true);
+  assert.equal(f.data.get(FILTERS), changed);
+  assert.deepEqual(f.writes, []);
+  assert.deepEqual(f.channelAge.getRules(), [rule(THIRD)]);
+});
+
+test('channel changes between preflight reads prevent any import write', () => {
+  const f = fixture();
+  const result = stagedChannels(f);
+  let reads = 0;
+  f.hooks.get = (key, value) => {
+    if (key === FILTERS && ++reads === 2) { f.data.set(FILTERS, rawRules([rule(THIRD)])); return f.data.get(FILTERS); }
+    return value;
+  };
+  const restored = f.backup.restoreChannels(result.preview);
+  assert.equal(restored.conflict, true);
+  assert.deepEqual(f.writes, []);
+  assert.deepEqual(f.channelAge.getRules(), [rule(THIRD)]);
+});
+
+test('independent preference changes neither invalidate nor get overwritten by channel imports', () => {
+  const f = fixture({ [SETTINGS]: 'original preferences', [CORNER]: 'top-left', unrelated: 'keep' });
+  const result = stagedChannels(f);
+  f.data.set(SETTINGS, 'new preferences'); f.data.set(CORNER, 'bottom-right');
+  f.hooks.get = (key, value) => { assert.equal(key, FILTERS); return value; };
+  const restored = f.backup.restoreChannels(result.preview);
+  assert.equal(restored.ok, true, restored.error);
+  assert.equal(f.data.get(SETTINGS), 'new preferences');
+  assert.equal(f.data.get(CORNER), 'bottom-right');
+  assert.equal(f.data.get('unrelated'), 'keep');
+  assert.deepEqual(f.writes.map(entry => entry.slice(0, 2)), [['set', FILTERS]]);
+});
+
+for (const existing of [false, true]) {
+  for (const failure of ['quota', 'dropped', 'write-then-throw']) test(`channel ${failure} failure preserves ${existing ? 'existing filters' : 'absent filters'}`, () => {
+    const f = fixture(existing ? { [FILTERS]: rawRules([rule(OTHER)]) } : {});
+    const before = new Map(f.data);
+    const result = stagedChannels(f, [rule()], 'replace');
+    let once = true;
+    if (failure === 'quota') f.hooks.beforeSet = () => { throw new Error('quota'); };
+    if (failure === 'dropped') f.hooks.beforeSet = () => false;
+    if (failure === 'write-then-throw') f.hooks.afterSet = () => { if (once) { once = false; throw new Error('commit interrupted'); } };
+    const restored = f.backup.restoreChannels(result.preview);
+    assert.equal(restored.ok, false);
+    assert.equal(restored.rollbackComplete, true);
+    assert.equal(restored.reloadRequired, false);
+    assert.deepEqual(f.data, before);
+    assert.deepEqual(f.channelAge.getRules(), existing ? [rule(OTHER)] : []);
+    assert.ok(f.writes.every(entry => entry[1] === FILTERS));
+  });
+}
+
+test('a one-off channel readback mismatch rolls back the owned value', () => {
+  const f = fixture({ [FILTERS]: rawRules([rule(OTHER)]) });
+  const before = f.data.get(FILTERS), result = stagedChannels(f, [rule()], 'replace');
+  let mismatch = false, once = true;
+  f.hooks.afterSet = () => { if (once) { once = false; mismatch = true; } };
+  f.hooks.get = (key, value) => { if (key === FILTERS && mismatch) { mismatch = false; return 'mismatch'; } return value; };
+  const restored = f.backup.restoreChannels(result.preview);
+  assert.equal(restored.ok, false);
+  assert.equal(restored.rollbackComplete, true);
+  assert.equal(restored.reloadRequired, false);
+  assert.equal(f.data.get(FILTERS), before);
+  assert.ok(f.writes.every(entry => entry[1] === FILTERS));
+});
+
+test('channel imports retain a concurrent third-party write rather than rolling over it', () => {
+  const f = fixture({ [FILTERS]: rawRules([rule(OTHER)]) });
+  const result = stagedChannels(f, [rule()], 'replace');
+  f.hooks.afterSet = () => f.data.set(FILTERS, rawRules([rule(THIRD)]));
+  const restored = f.backup.restoreChannels(result.preview);
+  assert.equal(restored.ok, false);
+  assert.equal(restored.rollbackComplete, false);
+  assert.equal(restored.reloadRequired, true);
+  assert.deepEqual(f.channelAge.getRules(), [rule(THIRD)]);
+  assert.deepEqual(f.writes.map(entry => entry.slice(0, 2)), [['set', FILTERS]]);
+});
+
+test('channel rollback failures are explicit and cannot claim recovery succeeded', () => {
+  for (const existing of [false, true]) {
+    const f = fixture(existing ? { [FILTERS]: rawRules([rule(OTHER)]) } : {});
+    const result = stagedChannels(f, [rule()], 'replace');
+    let written = false;
+    f.hooks.beforeSet = () => { if (written) throw new Error('rollback unavailable'); };
+    f.hooks.afterSet = () => { written = true; throw new Error('write completion failed'); };
+    f.hooks.beforeRemove = () => { throw new Error('rollback unavailable'); };
+    const restored = f.backup.restoreChannels(result.preview);
+    assert.equal(restored.ok, false);
+    assert.equal(restored.rollbackComplete, false);
+    assert.equal(restored.reloadRequired, true);
+    assert.match(restored.error, /could not be fully restored/);
+    assert.deepEqual(f.channelAge.getRules(), [rule()]);
+  }
+});
+
+test('unavailable channel storage prevents export, preview and commit without writes', () => {
+  const f = fixture();
+  const result = stagedChannels(f);
+  f.hooks.get = () => { throw new Error('denied'); };
+  assert.equal(f.backup.exportChannels().ok, false);
+  assert.equal(f.backup.previewChannels(JSON.stringify(channelDocument([]))).ok, false);
+  assert.equal(f.backup.restoreChannels(result.preview).ok, false);
+  assert.deepEqual(f.writes, []);
+});
+
+test('already-identical channel imports avoid writes and still refresh the live cache', () => {
+  const f = fixture();
+  f.data.set(FILTERS, rawRules([rule()]));
+  const result = stagedChannels(f);
+  assert.equal(result.summary.filters.unchanged, 1);
+  assert.equal(f.backup.restoreChannels(result.preview).ok, true);
+  assert.deepEqual(f.writes, []);
+  assert.deepEqual(f.channelAge.getRules(), [rule()]);
+  assert.equal(f.refreshes(), 1);
 });

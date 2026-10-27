@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         YouTube Feed UI Cleaner
 // @namespace    Citizen.youtube.feed-ui-cleaner
-// @version      2.13
+// @version      2.16
 // @description  Removes unwanted YouTube UI and filtered feed cards, reconciles recycled renderers, and offers a temporary non-ad reveal control.
 // @author       Citizen
 // @homepageURL  https://github.com/noswimmingplease/youtube-feed-ui-cleaner
@@ -131,8 +131,11 @@
   const PERMANENT_HIDDEN_FLAG = 'data-clean-up-youtube-permanent-hidden';
   const FILTER_REVEAL_ATTRIBUTE = 'data-yt-master-show-filtered';
   const FILTER_TOGGLE_ID = 'yt-master-filter-toggle';
+  const CONFIRMATION_ATTRIBUTE = 'data-ytms-channel-filter-confirmation';
+  const confirmations = new Map();
   const FILTERED_CARD_SELECTOR = [
     `[${HIDDEN_FLAG}="1"]`,
+    '[data-ytppl-live-hidden="1"]',
     '[data-ytppl-upcoming-hidden="1"]',
     '[data-ytppl-pay-to-watch-hidden="1"]',
     '[data-ytppl-watched-hidden="1"]',
@@ -267,6 +270,45 @@
 
   function buildFilteredCardCss() {
     return `
+    [${CONFIRMATION_ATTRIBUTE}="1"] > :not(.ytms-channel-filter-confirmation) {
+      display: none !important;
+    }
+
+    .ytms-channel-filter-confirmation {
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      gap: 12px;
+      grid-column: 1 / -1;
+      width: 100%;
+      min-height: var(--ytms-channel-filter-height, 220px);
+      box-sizing: border-box;
+      padding: 20px 16px;
+      border: 1px solid var(--yt-spec-10-percent-layer, #777);
+      border-radius: 12px;
+      background: var(--yt-spec-base-background, #0f0f0f);
+      color: var(--yt-spec-text-primary, #fff);
+      text-align: center;
+      font: 400 14px/20px Roboto, Arial, sans-serif;
+    }
+    .ytms-channel-filter-confirmation p { margin: 0; }
+    .ytms-channel-filter-confirmation strong { font-weight: 500; }
+    .ytms-channel-filter-confirmation button {
+      width: 100%;
+      min-height: 36px;
+      padding: 8px 16px;
+      border: 1px solid var(--yt-spec-10-percent-layer, #777);
+      border-radius: 20px;
+      background: var(--yt-spec-badge-chip-background, #333);
+      color: var(--yt-spec-text-primary, #fff);
+      font: 500 14px/20px Roboto, Arial, sans-serif;
+      cursor: pointer;
+    }
+    .ytms-channel-filter-confirmation button:focus-visible {
+      outline: 2px solid #ff0033;
+      outline-offset: 2px;
+    }
+
     [${PERMANENT_HIDDEN_FLAG}="1"] {
       display: none !important;
     }
@@ -313,6 +355,116 @@
     );
   }
 
+  function removeConfirmation(card) {
+    const record = confirmations.get(card);
+    if (!record) return;
+    record.panel.remove();
+    card.removeAttribute(CONFIRMATION_ATTRIBUTE);
+    confirmations.delete(card);
+  }
+
+  function clearConfirmations() {
+    for (const card of confirmations.keys()) removeConfirmation(card);
+  }
+
+  function confirmationMatches(record) {
+    const { card, channelId, videoId } = record;
+    return card.isConnected && isChannelAgeFeedRoute() && card.closest(FEED_SURFACE_SELECTOR) &&
+      !isInsideExcludedSurface(card) && channelAge.videoIdFromCard(card) === videoId &&
+      channelAge.channelFromCard(card)?.channelId === channelId;
+  }
+
+  function reconcileConfirmations(root = document) {
+    if (!confirmations.size) return;
+    const rules = new Map(channelAge.getRules().map(rule => [rule.channelId, rule]));
+    for (const [card, record] of confirmations) {
+      if (!card.isConnected || record.panel.parentElement !== card || card.getAttribute(CONFIRMATION_ATTRIBUTE) !== '1' || !isChannelAgeFeedRoute()) {
+        removeConfirmation(card);
+        continue;
+      }
+      if (root !== document && root !== card && !root.contains?.(card) && !card.contains(root)) continue;
+      if (JSON.stringify(rules.get(record.channelId)) !== record.savedRule || !confirmationMatches(record)) removeConfirmation(card);
+    }
+  }
+
+  function showChannelFilterConfirmation({ origin, previousRules, rules } = {}) {
+    if (!origin?.card || !origin.channelId || !origin.videoId || !channelAge) return;
+    const card = getCardContainer(origin.card);
+    if (!card) return;
+    const rule = rules?.find(value => value.channelId === origin.channelId);
+    const record = { card, videoId: origin.videoId, channelId: origin.channelId };
+    if (!rule?.enabled || !confirmationMatches(record)) {
+      removeConfirmation(card);
+      return;
+    }
+    const previousRule = previousRules?.find(value => value.channelId === origin.channelId);
+    if (JSON.stringify(previousRule) === JSON.stringify(rule)) return;
+    const height = Math.max(180, Math.min(600, Math.round(card.getBoundingClientRect().height)));
+    removeConfirmation(card);
+    if (confirmations.size >= 100) removeConfirmation(confirmations.keys().next().value);
+    const panel = document.createElement('div');
+    panel.className = 'ytms-channel-filter-confirmation';
+    panel.lang = 'en-GB';
+    panel.setAttribute('role', 'group');
+    panel.setAttribute('aria-label', 'Channel upload filter saved');
+    panel.style.setProperty('--ytms-channel-filter-height', `${height}px`);
+    panel.addEventListener('click', event => event.stopPropagation());
+    panel.addEventListener('keydown', event => event.stopPropagation());
+    const heading = document.createElement('strong');
+    heading.textContent = 'Channel upload filter saved';
+    const description = document.createElement('p');
+    description.textContent = rule.blocked ? 'Hide all uploads from this channel.' :
+      `Hide uploads older than ${rule.maxAge} ${rule.maxAge === 1 ? rule.unit.slice(0, -1) : rule.unit}.`;
+    const status = document.createElement('p');
+    status.setAttribute('role', 'status');
+    status.hidden = true;
+    const undo = document.createElement('button');
+    undo.type = 'button';
+    undo.textContent = 'Undo';
+    const edit = document.createElement('button');
+    edit.type = 'button';
+    edit.textContent = 'Edit filter';
+    Object.assign(record, { panel, savedRule: JSON.stringify(rule) });
+    undo.addEventListener('click', event => {
+      event.preventDefault(); event.stopPropagation();
+      if (!confirmationMatches(record)) { removeConfirmation(card); scheduleCleanUp(card); return; }
+      const latest = channelAge.read();
+      const currentRule = latest.find(value => value.channelId === record.channelId);
+      let result;
+      if (JSON.stringify(currentRule) !== record.savedRule) {
+        result = { error: 'This channel’s filter has changed. Use Edit filter to review it.' };
+      } else {
+        const next = previousRule ? latest.map(value => value.channelId === record.channelId ? previousRule : value) :
+          latest.filter(value => value.channelId !== record.channelId);
+        result = channelAge.save(next, latest);
+      }
+      if (!result?.ok) {
+        status.textContent = result?.error || 'Could not undo this filter. Your saved filters are unchanged.';
+        status.hidden = false;
+        return;
+      }
+      removeConfirmation(card);
+      window.dispatchEvent(new CustomEvent('yt-master-channel-age-changed'));
+    });
+    edit.addEventListener('click', event => {
+      event.preventDefault(); event.stopPropagation();
+      if (!confirmationMatches(record)) { removeConfirmation(card); scheduleCleanUp(card); return; }
+      suite.openChannelAgeSettings?.({ channelId: record.channelId, name: rule.name }, { card, videoId: record.videoId });
+    });
+    panel.append(heading, description, undo, edit, status);
+    confirmations.set(card, record);
+    card.setAttribute(CONFIRMATION_ATTRIBUTE, '1');
+    card.append(panel);
+    queueMicrotask(() => {
+      if (confirmations.get(card) === record && panel.isConnected && !document.querySelector('dialog[open]')) {
+        undo.focus({ preventScroll: true });
+      }
+    });
+    scheduleCleanUp(card);
+  }
+
+  if (typeof suite !== 'undefined') suite.showChannelFilterConfirmation = showChannelFilterConfirmation;
+
   function collectMatchingElements(root, selector) {
     const elements = new Set();
     if (!root || !root.querySelectorAll) return elements;
@@ -326,10 +478,13 @@
 
   function addContainerMatch(matchesByContainer, el, filter) {
     if (isInsideExcludedSurface(el)) return;
+    const container = getCardContainer(el);
+    // Only the originating card's channel-age reason is replaced by feedback.
+    // Ad, membership, watched and other independent restrictions still win.
+    if (filter.key === 'channelAge' && confirmations.has(container)) return;
     const match = filter.matches(el);
     if (!match) return;
 
-    const container = getCardContainer(el);
     if (!container || isInsideExcludedSurface(container)) return;
 
     const current = matchesByContainer.get(container) || {
@@ -355,6 +510,7 @@
   }
 
   function reconcileFilteredCards(root = document) {
+    reconcileConfirmations(root);
     const matchesByContainer = new Map();
     const containers = new Set();
     let changed = false;
@@ -381,6 +537,7 @@
 
     containers.forEach((container) => {
       const match = matchesByContainer.get(container);
+      if (match) removeConfirmation(container);
       const values = [
         [HIDDEN_FLAG, match && !match.permanent ? '1' : null],
         [HIDDEN_REASON_ATTRIBUTE, match ? [...match.reasons].sort().join(', ') : null],
@@ -431,6 +588,7 @@
   function getFilteredReasonSummary(containers) {
     const counts = new Map();
     const markerReasons = [
+      ['data-ytppl-live-hidden', 'Live'],
       ['data-ytppl-upcoming-hidden', 'Upcoming'],
       ['data-ytppl-pay-to-watch-hidden', 'Pay to watch'],
       ['data-ytppl-watched-hidden', 'Watched'],
@@ -584,6 +742,8 @@
   }
 
   function mutationCanAffectFiltering(mutation) {
+    const target = mutation.target?.nodeType === Node.ELEMENT_NODE ? mutation.target : mutation.target?.parentElement;
+    if (target?.closest?.('.ytms-channel-filter-confirmation')) return false;
     // Playback animation/caption changes are not feed metadata. Keep outer
     // renderer changes and genuine thumbnail resume-progress updates visible.
     if (isPreviewPlaybackMutation(mutation)) return false;
@@ -649,6 +809,7 @@
       'href',
       'datetime',
       'overlay-style',
+      'data-ytppl-live-hidden',
       'data-ytppl-upcoming-hidden',
       'data-ytppl-pay-to-watch-hidden',
       'data-ytppl-watched-hidden',
@@ -687,6 +848,7 @@
   }
 
   function reconcileRoute() {
+    reconcileConfirmations(document);
     resetTemporaryReveal();
     if (syncMutationObservation()) cleanUp(document);
   }
@@ -694,6 +856,7 @@
   syncMutationObservation();
 
   window.addEventListener('yt-navigate-start', () => {
+    clearConfirmations();
     resetTemporaryReveal();
     stopMutationObservation();
     resetScheduledWork();
@@ -705,6 +868,7 @@
     if (isRuntimeFeedRoute()) scheduleCleanUp(document);
   });
   window.addEventListener('pagehide', () => {
+    clearConfirmations();
     stopMutationObservation();
     resetScheduledWork();
   }, true);
